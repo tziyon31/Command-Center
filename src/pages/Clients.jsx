@@ -162,7 +162,7 @@ export default function Clients() {
                   לקוח חדש
                 </Button>
               </DialogTrigger>
-            <DialogContent className="max-w-2xl">
+              <DialogContent className="max-w-2xl">
               <DialogHeader>
                 <DialogTitle>הוספת לקוח חדש</DialogTitle>
               </DialogHeader>
@@ -244,8 +244,9 @@ export default function Clients() {
                   </Button>
                 </div>
               </form>
-            </DialogContent>
-          </Dialog>
+              </DialogContent>
+            </Dialog>
+          </div>
         </div>
 
         {/* Search */}
