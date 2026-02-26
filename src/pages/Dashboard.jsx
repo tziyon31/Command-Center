@@ -1,24 +1,24 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { base44 } from '@/api/base44Client';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
-import StatsCard from '../components/StatsCard.jsx';
-import StatusBadge from '../components/StatusBadge.jsx';
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import BusinessHealthCard from '../components/dashboard/BusinessHealthCard.jsx';
+import ActionCard from '../components/dashboard/ActionCard.jsx';
+import ActivityFeed from '../components/dashboard/ActivityFeed.jsx';
 import { Button } from "@/components/ui/button";
 import { 
-  FileText, 
-  Mail, 
-  CheckCircle, 
-  DollarSign, 
-  Clock,
+  DollarSign,
   TrendingUp,
+  Target,
   AlertCircle,
+  Clock,
+  Flame,
   Calendar,
-  Plus
+  Plus,
+  BarChart3
 } from 'lucide-react';
-import { format } from 'date-fns';
+import { format, subDays, startOfYear } from 'date-fns';
 import { he } from 'date-fns/locale';
 
 export default function Dashboard() {
@@ -42,11 +42,9 @@ export default function Dashboard() {
   const { data: tasks = [] } = useQuery({
     queryKey: ['tasks'],
     queryFn: () => {
-      // אם זה מבצע משימות - רק משימות שמוקצות אליו
       if (currentUser?.role === 'task_worker') {
         return base44.entities.Task.filter({ assigned_to: currentUser.email });
       }
-      // אם זה עובד פרויקטים - משימות של הפרויקטים שלו
       if (currentUser?.role === 'project_worker') {
         return base44.entities.Task.filter({ assigned_to: currentUser.email });
       }
@@ -61,18 +59,141 @@ export default function Dashboard() {
     enabled: currentUser?.role === 'admin' || currentUser?.role === 'office_manager' || currentUser?.role === 'project_worker',
   });
 
-  // חישוב סטטיסטיקות
-  const draftQuotes = quotes.filter(q => q.status === 'draft');
-  const sentQuotes = quotes.filter(q => ['sent', 'pending', 'negotiation'].includes(q.status));
-  const unpaidInvoices = invoices.filter(i => i.status !== 'paid');
-  const totalOutstanding = unpaidInvoices.reduce((sum, inv) => sum + (inv.amount - inv.paid_amount), 0);
-  const todayTasks = tasks.filter(t => t.status !== 'completed' && t.due_date === new Date().toISOString().split('T')[0]);
-
   const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'office_manager';
-  const isProjectWorker = currentUser?.role === 'project_worker';
   const isTaskWorker = currentUser?.role === 'task_worker';
 
-  // תצוגה מותאמת למבצע משימות
+  // חישובי בריאות עסקית
+  const businessHealth = useMemo(() => {
+    const yearStart = startOfYear(new Date());
+    const thisYearProjects = projects.filter(p => new Date(p.created_date) >= yearStart);
+    
+    // סך הכנסות שנה
+    const yearlyRevenue = thisYearProjects.reduce((sum, p) => sum + (p.collected_amount || 0), 0);
+    
+    // רווחיות ממוצעת
+    const completedProjects = projects.filter(p => p.status === 'completed' || p.status === 'collection_completed');
+    const avgProfit = completedProjects.length > 0 
+      ? completedProjects.reduce((sum, p) => sum + (p.total_amount || 0), 0) / completedProjects.length 
+      : 0;
+    
+    // אחוז סגירת הצעות
+    const signedQuotes = quotes.filter(q => q.status === 'signed').length;
+    const totalQuotes = quotes.filter(q => q.status !== 'draft').length;
+    const closeRate = totalQuotes > 0 ? Math.round((signedQuotes / totalQuotes) * 100) : 0;
+    
+    // גבייה פתוחה
+    const unpaidInvoices = invoices.filter(i => i.status !== 'paid');
+    const totalOutstanding = unpaidInvoices.reduce((sum, inv) => sum + (inv.amount - inv.paid_amount), 0);
+    
+    return {
+      yearlyRevenue,
+      avgProfit,
+      closeRate,
+      totalOutstanding,
+      unpaidInvoicesCount: unpaidInvoices.length
+    };
+  }, [projects, quotes, invoices]);
+
+  // דורש טיפול
+  const needsAttention = useMemo(() => {
+    const now = new Date();
+    const sevenDaysAgo = subDays(now, 7);
+    const fourteenDaysAgo = subDays(now, 14);
+    const today = now.toISOString().split('T')[0];
+    
+    // הצעות פתוחות מעל 7 ימים
+    const oldQuotes = quotes
+      .filter(q => ['sent', 'pending', 'negotiation'].includes(q.status) && new Date(q.date) < sevenDaysAgo)
+      .map(q => ({
+        title: `הצעת מחיר ${q.quote_number}`,
+        subtitle: `פתוחה ${Math.floor((now - new Date(q.date)) / (1000 * 60 * 60 * 24))} ימים`,
+        data: q
+      }));
+    
+    // גבייה באיחור
+    const overdueInvoices = invoices
+      .filter(i => i.status !== 'paid' && i.due_date && new Date(i.due_date) < now)
+      .map(i => ({
+        title: `חשבונית ${i.invoice_number}`,
+        subtitle: `איחור ${Math.floor((now - new Date(i.due_date)) / (1000 * 60 * 60 * 24))} ימים - ₪${(i.amount - i.paid_amount).toLocaleString()}`,
+        data: i
+      }));
+    
+    // פרויקטים בלי פעילות 14 יום
+    const inactiveProjects = projects
+      .filter(p => !['completed', 'collection_completed'].includes(p.status) && new Date(p.updated_date) < fourteenDaysAgo)
+      .map(p => ({
+        title: p.name,
+        subtitle: `ללא פעילות ${Math.floor((now - new Date(p.updated_date)) / (1000 * 60 * 60 * 24))} ימים`,
+        data: p
+      }));
+    
+    // משימות להיום
+    const todayTasks = tasks
+      .filter(t => t.status !== 'completed' && t.due_date === today)
+      .map(t => ({
+        title: t.title,
+        subtitle: t.description || 'משימה דחופה',
+        data: t
+      }));
+    
+    return {
+      oldQuotes,
+      overdueInvoices,
+      inactiveProjects,
+      todayTasks
+    };
+  }, [quotes, invoices, projects, tasks]);
+
+  // תנועה עסקית
+  const recentActivity = useMemo(() => {
+    const activities = [];
+    const sevenDaysAgo = subDays(new Date(), 7);
+    
+    // לידים חדשים (פרויקטים בסטטוס lead)
+    projects
+      .filter(p => p.status === 'lead' && new Date(p.created_date) >= sevenDaysAgo)
+      .forEach(p => activities.push({
+        type: 'lead',
+        title: 'ליד חדש',
+        description: p.name,
+        date: p.created_date
+      }));
+    
+    // הצעות שנשלחו
+    quotes
+      .filter(q => ['sent', 'pending'].includes(q.status) && new Date(q.date) >= sevenDaysAgo)
+      .forEach(q => activities.push({
+        type: 'quote',
+        title: 'הצעת מחיר נשלחה',
+        description: `הצעה ${q.quote_number}`,
+        date: q.date
+      }));
+    
+    // הצעות שנחתמו
+    quotes
+      .filter(q => q.status === 'signed' && new Date(q.updated_date) >= sevenDaysAgo)
+      .forEach(q => activities.push({
+        type: 'signed',
+        title: 'הצעה נחתמה! 🎉',
+        description: `הצעה ${q.quote_number}`,
+        date: q.updated_date
+      }));
+    
+    // פרויקטים שהושלמו
+    projects
+      .filter(p => p.status === 'completed' && new Date(p.updated_date) >= sevenDaysAgo)
+      .forEach(p => activities.push({
+        type: 'completed',
+        title: 'פרויקט הושלם',
+        description: p.name,
+        date: p.updated_date
+      }));
+    
+    return activities.sort((a, b) => new Date(b.date) - new Date(a.date));
+  }, [projects, quotes]);
+
+  // תצוגה למבצע משימות
   if (isTaskWorker) {
     return (
       <div className="min-h-screen bg-background p-6">
@@ -83,55 +204,12 @@ export default function Dashboard() {
               {format(new Date(), 'EEEE, dd MMMM yyyy', { locale: he })}
             </p>
           </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <StatsCard
-              title="משימות להיום"
-              value={todayTasks.length}
-              icon={CheckCircle}
-              color="purple"
-            />
-            <StatsCard
-              title="סה״כ משימות פעילות"
-              value={tasks.filter(t => t.status !== 'completed').length}
-              icon={Clock}
-              color="blue"
-            />
-          </div>
-
-          <Card>
-            <CardHeader className="border-b bg-purple-50">
-              <CardTitle className="flex items-center gap-2 text-purple-900">
-                <Calendar className="w-5 h-5" />
-                המשימות שלי
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-4 space-y-3">
-              {tasks.length === 0 ? (
-                <p className="text-muted-foreground text-center py-8">אין משימות</p>
-              ) : (
-                tasks.map(task => (
-                  <div key={task.id} className="flex items-center justify-between p-4 bg-background rounded-lg border">
-                    <div className="flex-1">
-                      <p className="font-medium">{task.title}</p>
-                      {task.description && (
-                        <p className="text-sm text-muted-foreground mt-1">{task.description}</p>
-                      )}
-                      {task.due_date && (
-                        <p className="text-xs text-muted-foreground mt-2">
-                          תאריך יעד: {format(new Date(task.due_date), 'dd/MM/yyyy')}
-                        </p>
-                      )}
-                    </div>
-                    <div className="flex flex-col gap-2 items-end">
-                      <StatusBadge status={task.status} />
-                      <StatusBadge status={task.priority} />
-                    </div>
-                  </div>
-                ))
-              )}
-            </CardContent>
-          </Card>
+          <ActionCard
+            title="משימות להיום"
+            items={needsAttention.todayTasks}
+            icon={Calendar}
+            color="purple"
+          />
         </div>
       </div>
     );
@@ -139,225 +217,100 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-background p-6">
-      <div className="max-w-[1400px] mx-auto space-y-6">
+      <div className="max-w-[1600px] mx-auto space-y-8">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold">דשבורד בוקר</h1>
-            <p className="text-muted-foreground mt-1">
+            <h1 className="text-4xl font-bold">חדר המצב</h1>
+            <p className="text-muted-foreground mt-1 text-lg">
               {format(new Date(), 'EEEE, dd MMMM yyyy', { locale: he })}
             </p>
           </div>
           <Link to={createPageUrl('Projects')}>
-            <Button size="lg">
+            <Button size="lg" className="text-lg px-6">
               <Plus className="w-5 h-5 ml-2" />
               פרויקט חדש
             </Button>
           </Link>
         </div>
 
-        {/* Stats Overview */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {isAdmin && (
-            <>
-              <StatsCard
-                title="הצעות מחיר בטיוטה"
-                value={draftQuotes.length}
-                icon={FileText}
-                color="amber"
-              />
-              <StatsCard
-                title="ממתין לתגובת לקוח"
-                value={sentQuotes.length}
-                icon={Mail}
-                color="blue"
-              />
-            </>
-          )}
-          <StatsCard
-            title="משימות להיום"
-            value={todayTasks.length}
-            icon={CheckCircle}
-            color="purple"
-          />
-          {isAdmin && (
-            <StatsCard
-              title="גבייה פתוחה"
-              value={`₪${totalOutstanding.toLocaleString()}`}
+        {/* 🔵 אזור 1 - בריאות עסקית */}
+        <div>
+          <div className="flex items-center gap-2 mb-4">
+            <BarChart3 className="w-6 h-6 text-primary" />
+            <h2 className="text-2xl font-bold">בריאות עסקית</h2>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <BusinessHealthCard
+              title="הכנסות השנה"
+              value={`₪${businessHealth.yearlyRevenue.toLocaleString()}`}
+              subtitle="סך כל הגבייה בשנה זו"
               icon={DollarSign}
+              color="green"
+              trend={12}
+            />
+            <BusinessHealthCard
+              title="רווחיות ממוצעת"
+              value={`₪${Math.round(businessHealth.avgProfit).toLocaleString()}`}
+              subtitle="לפרויקט מושלם"
+              icon={TrendingUp}
+              color="blue"
+            />
+            <BusinessHealthCard
+              title="אחוז סגירת הצעות"
+              value={`${businessHealth.closeRate}%`}
+              subtitle={`${quotes.filter(q => q.status === 'signed').length} מתוך ${quotes.filter(q => q.status !== 'draft').length} הצעות`}
+              icon={Target}
+              color="primary"
+            />
+            <BusinessHealthCard
+              title="גבייה פתוחה"
+              value={`₪${businessHealth.totalOutstanding.toLocaleString()}`}
+              subtitle={`${businessHealth.unpaidInvoicesCount} חשבוניות`}
+              icon={AlertCircle}
+              color={businessHealth.unpaidInvoicesCount > 5 ? "red" : "amber"}
+            />
+          </div>
+        </div>
+
+        {/* 🟡 אזור 2 - דורש טיפול */}
+        <div>
+          <div className="flex items-center gap-2 mb-4">
+            <Flame className="w-6 h-6 text-amber-600" />
+            <h2 className="text-2xl font-bold">דורש טיפול</h2>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <ActionCard
+              title="הצעות ממתינות לתגובה"
+              items={needsAttention.oldQuotes}
+              icon={Clock}
+              color="amber"
+            />
+            <ActionCard
+              title="גבייה באיחור"
+              items={needsAttention.overdueInvoices}
+              icon={AlertCircle}
               color="red"
             />
-          )}
+            <ActionCard
+              title="פרויקטים ללא פעילות"
+              items={needsAttention.inactiveProjects}
+              icon={Flame}
+              color="blue"
+            />
+            <ActionCard
+              title="משימות להיום"
+              items={needsAttention.todayTasks}
+              icon={Calendar}
+              color="purple"
+            />
+          </div>
         </div>
 
-        {/* Main Content Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* מחכה לתגובה ממני */}
-          {isAdmin && (
-            <Card>
-            <CardHeader className="border-b bg-amber-50">
-              <CardTitle className="flex items-center gap-2 text-amber-900">
-                <AlertCircle className="w-5 h-5" />
-                מחכה לתגובה ממני
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-4 space-y-3">
-              {draftQuotes.length === 0 ? (
-                <p className="text-muted-foreground text-center py-4">אין הצעות מחיר בטיוטה</p>
-              ) : (
-                draftQuotes.slice(0, 5).map(quote => (
-                  <div key={quote.id} className="flex items-center justify-between p-3 bg-background rounded-lg border">
-                    <div>
-                      <p className="font-medium">הצעת מחיר {quote.quote_number}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {format(new Date(quote.date), 'dd/MM/yyyy')}
-                      </p>
-                    </div>
-                    <StatusBadge status={quote.status} />
-                  </div>
-                ))
-              )}
-            </CardContent>
-            </Card>
-          )}
-
-          {/* מחכה לתגובה מהלקוח */}
-          {isAdmin && (
-            <Card>
-            <CardHeader className="border-b bg-blue-50">
-              <CardTitle className="flex items-center gap-2 text-blue-900">
-                <Clock className="w-5 h-5" />
-                מחכה לתגובה מהלקוח
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-4 space-y-3">
-              {sentQuotes.length === 0 ? (
-                <p className="text-muted-foreground text-center py-4">אין הצעות ממתינות</p>
-              ) : (
-                sentQuotes.slice(0, 5).map(quote => (
-                  <div key={quote.id} className="flex items-center justify-between p-3 bg-background rounded-lg border">
-                    <div>
-                      <p className="font-medium">הצעת מחיר {quote.quote_number}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {format(new Date(quote.date), 'dd/MM/yyyy')}
-                      </p>
-                    </div>
-                    <StatusBadge status={quote.status} />
-                  </div>
-                ))
-              )}
-            </CardContent>
-            </Card>
-          )}
-
-          {/* משימות להיום */}
-          <Card>
-            <CardHeader className="border-b bg-purple-50">
-              <CardTitle className="flex items-center gap-2 text-purple-900">
-                <Calendar className="w-5 h-5" />
-                משימות להיום
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-4 space-y-3">
-              {todayTasks.length === 0 ? (
-                <p className="text-muted-foreground text-center py-4">אין משימות להיום</p>
-              ) : (
-                todayTasks.slice(0, 5).map(task => (
-                  <div key={task.id} className="flex items-center justify-between p-3 bg-background rounded-lg border">
-                    <div className="flex-1">
-                      <p className="font-medium">{task.title}</p>
-                      {task.description && (
-                        <p className="text-sm text-muted-foreground line-clamp-1">{task.description}</p>
-                      )}
-                    </div>
-                    <StatusBadge status={task.priority} />
-                  </div>
-                ))
-              )}
-            </CardContent>
-          </Card>
-
-          {/* גבייה פתוחה */}
-          {isAdmin && (
-            <Card>
-            <CardHeader className="border-b bg-red-50">
-              <CardTitle className="flex items-center gap-2 text-red-900">
-                <DollarSign className="w-5 h-5" />
-                גבייה פתוחה
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-4 space-y-3">
-              {unpaidInvoices.length === 0 ? (
-                <p className="text-muted-foreground text-center py-4">אין חשבוניות פתוחות</p>
-              ) : (
-                <>
-                  <div className="p-4 bg-red-100 rounded-lg border border-red-200">
-                    <p className="text-sm text-red-700">סה"כ לגבייה</p>
-                    <p className="text-2xl font-bold text-red-900">₪{totalOutstanding.toLocaleString()}</p>
-                  </div>
-                  {unpaidInvoices.slice(0, 4).map(invoice => (
-                    <div key={invoice.id} className="flex items-center justify-between p-3 bg-background rounded-lg border">
-                      <div>
-                        <p className="font-medium">חשבונית {invoice.invoice_number}</p>
-                        <p className="text-sm text-muted-foreground">
-                          ₪{(invoice.amount - invoice.paid_amount).toLocaleString()}
-                        </p>
-                      </div>
-                      <StatusBadge status={invoice.status} />
-                    </div>
-                  ))}
-                </>
-              )}
-            </CardContent>
-            </Card>
-          )}
+        {/* 🟢 אזור 3 - תנועה עסקית */}
+        <div>
+          <ActivityFeed activities={recentActivity} />
         </div>
-
-        {/* פרויקטים פעילים */}
-        <Card>
-          <CardHeader className="border-b">
-            <div className="flex items-center justify-between">
-              <CardTitle className="flex items-center gap-2">
-                <TrendingUp className="w-5 h-5" />
-                פרויקטים פעילים
-              </CardTitle>
-              <Link to={createPageUrl('Projects')}>
-                <Button variant="outline" size="sm">
-                  צפה בהכל
-                </Button>
-              </Link>
-            </div>
-          </CardHeader>
-          <CardContent className="p-4">
-            {projects.length === 0 ? (
-              <p className="text-muted-foreground text-center py-8">אין פרויקטים פעילים</p>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {projects.filter(p => !['completed', 'collection_completed'].includes(p.status)).slice(0, 6).map(project => (
-                  <Link key={project.id} to={createPageUrl(`ProjectDetails?id=${project.id}`)}>
-                    <div className="p-4 bg-background rounded-lg border hover:border-primary transition-colors">
-                      <div className="flex items-start justify-between mb-2">
-                        <h3 className="font-semibold">{project.name}</h3>
-                        <StatusBadge status={project.status} />
-                      </div>
-                      {project.description && (
-                        <p className="text-sm text-muted-foreground line-clamp-2 mb-3">{project.description}</p>
-                      )}
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-muted-foreground">סה"כ</span>
-                        <span className="font-semibold">₪{project.total_amount?.toLocaleString() || 0}</span>
-                      </div>
-                      <div className="flex items-center justify-between text-sm mt-1">
-                        <span className="text-muted-foreground">נגבה</span>
-                        <span className="font-semibold text-green-600">₪{project.collected_amount?.toLocaleString() || 0}</span>
-                      </div>
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
       </div>
     </div>
   );
