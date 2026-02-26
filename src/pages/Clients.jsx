@@ -11,11 +11,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, Search, Building2, Phone, Mail, MapPin } from 'lucide-react';
+import { Plus, Search, Building2, Phone, Mail, MapPin, Upload } from 'lucide-react';
 
 export default function Clients() {
   const [searchTerm, setSearchTerm] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -53,19 +55,113 @@ export default function Clients() {
     createMutation.mutate(formData);
   };
 
+  const handleFileUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    setImporting(true);
+
+    try {
+      // Upload the file
+      const { file_url } = await base44.integrations.Core.UploadFile({ file });
+
+      // Extract data from the file
+      const result = await base44.integrations.Core.ExtractDataFromUploadedFile({
+        file_url,
+        json_schema: {
+          type: "object",
+          properties: {
+            clients: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  company: { type: "string" },
+                  name: { type: "string" },
+                  email: { type: "string" },
+                  phone: { type: "string" },
+                  business_number: { type: "string" },
+                  address: { type: "string" },
+                  document_count: { type: "number" }
+                }
+              }
+            }
+          }
+        }
+      });
+
+      if (result.status === 'success' && result.output?.clients) {
+        // Map the data to match Client entity structure
+        const clientsData = result.output.clients.map(item => ({
+          name: item.name || '',
+          company: item.company || '',
+          email: item.email || '',
+          phone: item.phone || '',
+          business_number: item.business_number || '',
+          address: item.address || '',
+          document_count: item.document_count || 0,
+          rating: 'B'
+        })).filter(client => client.name); // Only import clients with a name
+
+        // Bulk create clients
+        await base44.entities.Client.bulkCreate(clientsData);
+
+        queryClient.invalidateQueries(['clients']);
+        setImportDialogOpen(false);
+        alert(`יובאו בהצלחה ${clientsData.length} לקוחות!`);
+      } else {
+        alert('שגיאה בעיבוד הקובץ: ' + (result.details || 'נסה שוב'));
+      }
+    } catch (error) {
+      alert('שגיאה בייבוא הקובץ: ' + error.message);
+    } finally {
+      setImporting(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background p-6">
       <div className="max-w-[1400px] mx-auto space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
           <h1 className="text-3xl font-bold">לקוחות</h1>
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger asChild>
-              <Button size="lg">
-                <Plus className="w-5 h-5 ml-2" />
-                לקוח חדש
-              </Button>
-            </DialogTrigger>
+          <div className="flex gap-3">
+            <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
+              <DialogTrigger asChild>
+                <Button size="lg" variant="outline">
+                  <Upload className="w-5 h-5 ml-2" />
+                  ייבוא מקובץ
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>ייבוא לקוחות מקובץ</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-4">
+                  <p className="text-sm text-muted-foreground">
+                    העלה קובץ Excel או CSV המכיל את העמודות הבאות:
+                    <br />
+                    שם העסק, שם איש הקשר, דואל, נייד, מספר עסק, כתובת, כמות מסמכים
+                  </p>
+                  <Input
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    onChange={handleFileUpload}
+                    disabled={importing}
+                  />
+                  {importing && (
+                    <p className="text-sm text-muted-foreground">מייבא נתונים...</p>
+                  )}
+                </div>
+              </DialogContent>
+            </Dialog>
+            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+              <DialogTrigger asChild>
+                <Button size="lg">
+                  <Plus className="w-5 h-5 ml-2" />
+                  לקוח חדש
+                </Button>
+              </DialogTrigger>
             <DialogContent className="max-w-2xl">
               <DialogHeader>
                 <DialogTitle>הוספת לקוח חדש</DialogTitle>
