@@ -194,7 +194,7 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* מחכה לתגובה ממני */}
           {isAdmin && (
-          <Card>
+            <Card>
             <CardHeader className="border-b bg-amber-50">
               <CardTitle className="flex items-center gap-2 text-amber-900">
                 <AlertCircle className="w-5 h-5" />
@@ -218,12 +218,12 @@ export default function Dashboard() {
                 ))
               )}
             </CardContent>
-          </Card>
+            </Card>
           )}
 
           {/* מחכה לתגובה מהלקוח */}
           {isAdmin && (
-          <Card>
+            <Card>
             <CardHeader className="border-b bg-blue-50">
               <CardTitle className="flex items-center gap-2 text-blue-900">
                 <Clock className="w-5 h-5" />
@@ -247,7 +247,7 @@ export default function Dashboard() {
                 ))
               )}
             </CardContent>
-          </Card>
+            </Card>
           )}
 
           {/* משימות להיום */}
@@ -279,7 +279,7 @@ export default function Dashboard() {
 
           {/* גבייה פתוחה */}
           {isAdmin && (
-          <Card>
+            <Card>
             <CardHeader className="border-b bg-red-50">
               <CardTitle className="flex items-center gap-2 text-red-900">
                 <DollarSign className="w-5 h-5" />
@@ -309,7 +309,7 @@ export default function Dashboard() {
                 </>
               )}
             </CardContent>
-          </Card>
+            </Card>
           )}
         </div>
 
