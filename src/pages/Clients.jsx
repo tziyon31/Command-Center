@@ -69,39 +69,56 @@ export default function Clients() {
       const result = await base44.integrations.Core.ExtractDataFromUploadedFile({
         file_url,
         json_schema: {
-          type: "object",
-          properties: {
-            clients: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  company: { type: "string" },
-                  name: { type: "string" },
-                  email: { type: "string" },
-                  phone: { type: "string" },
-                  business_number: { type: "string" },
-                  address: { type: "string" },
-                  document_count: { type: "number" }
-                }
-              }
-            }
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              "שם העסק": { type: "string" },
+              "שם איש הקשר": { type: "string" },
+              "דואל": { type: "string" },
+              "נייד": { type: "string" },
+              "מספר עסק": { type: "string" },
+              "כתובת": { type: "string" },
+              "כמות מסמכים": { type: "number" }
+            },
+            additionalProperties: true
           }
         }
       });
 
-      if (result.status === 'success' && result.output?.clients) {
-        // Map the data to match Client entity structure
-        const clientsData = result.output.clients.map(item => ({
-          name: item.name || '',
-          company: item.company || '',
-          email: item.email || '',
-          phone: item.phone || '',
-          business_number: item.business_number || '',
-          address: item.address || '',
-          document_count: item.document_count || 0,
-          rating: 'B'
-        })).filter(client => client.name); // Only import clients with a name
+      if (result.status === 'success' && Array.isArray(result.output)) {
+        // Map the data to match Client entity structure and handle extra fields in notes
+        const clientsData = result.output.map(item => {
+          const client = {
+            name: item["שם איש הקשר"] || '',
+            company: item["שם העסק"] || '',
+            email: item["דואל"] || '',
+            phone: item["נייד"] || '',
+            business_number: item["מספר עסק"] || '',
+            address: item["כתובת"] || '',
+            document_count: item["כמות מסמכים"] || 0,
+            rating: 'B',
+            notes: ''
+          };
+
+          // Add extra fields to notes
+          const knownFields = new Set([
+            "שם העסק", "שם איש הקשר", "דואל", "נייד", "מספר עסק", "כתובת", "כמות מסמכים"
+          ]);
+
+          const extraNotes = [];
+          for (const key in item) {
+            if (item.hasOwnProperty(key) && !knownFields.has(key) && item[key]) {
+              extraNotes.push(`${key}: ${item[key]}`);
+            }
+          }
+
+          if (extraNotes.length > 0) {
+            client.notes = extraNotes.join('\n');
+          }
+
+          return client;
+        }).filter(client => client.name); // Only import clients with a name
 
         // Bulk create clients
         await base44.entities.Client.bulkCreate(clientsData);
