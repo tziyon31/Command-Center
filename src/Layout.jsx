@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { 
   LayoutDashboard, 
   Users, 
-  FolderKanban, 
+  FolderKanban,
+  Sparkles,
   LogOut 
 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
@@ -15,6 +16,7 @@ export default function Layout({ children, currentPageName }) {
     { name: 'Dashboard', label: 'דשבורד', icon: LayoutDashboard },
     { name: 'Clients', label: 'לקוחות', icon: Users },
     { name: 'Projects', label: 'פרויקטים', icon: FolderKanban },
+    { name: 'Assistant', label: 'עוזר AI', icon: Sparkles },
   ];
 
   const handleLogout = () => {
