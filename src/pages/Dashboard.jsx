@@ -196,11 +196,11 @@ export default function Dashboard() {
   // תצוגה למבצע משימות
   if (isTaskWorker) {
     return (
-      <div className="min-h-screen bg-background p-6">
-        <div className="max-w-[1400px] mx-auto space-y-6">
-          <div>
-            <h1 className="text-3xl font-bold">המשימות שלי</h1>
-            <p className="text-muted-foreground mt-1">
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50">
+        <div className="max-w-[1400px] mx-auto px-8 py-12 space-y-8">
+          <div className="space-y-4">
+            <h1 className="text-5xl font-bold tracking-tight">המשימות שלי</h1>
+            <p className="text-muted-foreground text-lg">
               {format(new Date(), 'EEEE, dd MMMM yyyy', { locale: he })}
             </p>
           </div>
@@ -216,18 +216,21 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-background p-6">
-      <div className="max-w-[1600px] mx-auto space-y-8">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50">
+      <div className="max-w-[1600px] mx-auto px-8 py-12 space-y-16">
         {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-4xl font-bold">חדר המצב</h1>
-            <p className="text-muted-foreground mt-1 text-lg">
+        <div className="flex items-end justify-between">
+          <div className="space-y-4">
+            <h1 className="text-6xl font-bold tracking-tight">חדר המצב</h1>
+            <p className="text-xl text-muted-foreground">
+              מבט מקיף על בריאות העסק שלך
+            </p>
+            <p className="text-sm text-muted-foreground/70">
               {format(new Date(), 'EEEE, dd MMMM yyyy', { locale: he })}
             </p>
           </div>
           <Link to={createPageUrl('Projects')}>
-            <Button size="lg" className="text-lg px-6">
+            <Button size="lg" className="text-base px-8 py-6 rounded-lg shadow-sm">
               <Plus className="w-5 h-5 ml-2" />
               פרויקט חדש
             </Button>
@@ -235,12 +238,12 @@ export default function Dashboard() {
         </div>
 
         {/* 🔵 אזור 1 - בריאות עסקית */}
-        <div>
-          <div className="flex items-center gap-2 mb-4">
-            <BarChart3 className="w-6 h-6 text-primary" />
-            <h2 className="text-2xl font-bold">בריאות עסקית</h2>
+        <div className="space-y-8">
+          <div>
+            <h2 className="text-3xl font-bold tracking-tight mb-2">בריאות עסקית</h2>
+            <p className="text-muted-foreground">המדדים המרכזיים של העסק</p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             <BusinessHealthCard
               title="הכנסות השנה"
               value={`₪${businessHealth.yearlyRevenue.toLocaleString()}`}
@@ -274,12 +277,12 @@ export default function Dashboard() {
         </div>
 
         {/* 🟡 אזור 2 - דורש טיפול */}
-        <div>
-          <div className="flex items-center gap-2 mb-4">
-            <Flame className="w-6 h-6 text-amber-600" />
-            <h2 className="text-2xl font-bold">דורש טיפול</h2>
+        <div className="space-y-8">
+          <div>
+            <h2 className="text-3xl font-bold tracking-tight mb-2">דורש טיפול</h2>
+            <p className="text-muted-foreground">פעולות שדורשות תשומת לב מיידית</p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <ActionCard
               title="הצעות ממתינות לתגובה"
               items={needsAttention.oldQuotes}
