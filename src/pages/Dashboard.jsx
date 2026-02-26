@@ -3,8 +3,8 @@ import { base44 } from '@/api/base44Client';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
-import StatsCard from '../components/StatsCard';
-import StatusBadge from '../components/StatusBadge';
+import StatsCard from '../components/StatsCard.jsx';
+import StatusBadge from '../components/StatusBadge.jsx';
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { 
