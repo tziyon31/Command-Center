@@ -22,24 +22,43 @@ import { format } from 'date-fns';
 import { he } from 'date-fns/locale';
 
 export default function Dashboard() {
+  const { data: currentUser } = useQuery({
+    queryKey: ['currentUser'],
+    queryFn: () => base44.auth.me(),
+  });
+
   const { data: quotes = [] } = useQuery({
     queryKey: ['quotes'],
     queryFn: () => base44.entities.Quote.list(),
+    enabled: currentUser?.role === 'admin' || currentUser?.role === 'office_manager',
   });
 
   const { data: invoices = [] } = useQuery({
     queryKey: ['invoices'],
     queryFn: () => base44.entities.Invoice.list(),
+    enabled: currentUser?.role === 'admin' || currentUser?.role === 'office_manager',
   });
 
   const { data: tasks = [] } = useQuery({
     queryKey: ['tasks'],
-    queryFn: () => base44.entities.Task.list(),
+    queryFn: () => {
+      // אם זה מבצע משימות - רק משימות שמוקצות אליו
+      if (currentUser?.role === 'task_worker') {
+        return base44.entities.Task.filter({ assigned_to: currentUser.email });
+      }
+      // אם זה עובד פרויקטים - משימות של הפרויקטים שלו
+      if (currentUser?.role === 'project_worker') {
+        return base44.entities.Task.filter({ assigned_to: currentUser.email });
+      }
+      return base44.entities.Task.list();
+    },
+    enabled: !!currentUser,
   });
 
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
     queryFn: () => base44.entities.Project.list(),
+    enabled: currentUser?.role === 'admin' || currentUser?.role === 'office_manager' || currentUser?.role === 'project_worker',
   });
 
   // חישוב סטטיסטיקות
@@ -48,6 +67,75 @@ export default function Dashboard() {
   const unpaidInvoices = invoices.filter(i => i.status !== 'paid');
   const totalOutstanding = unpaidInvoices.reduce((sum, inv) => sum + (inv.amount - inv.paid_amount), 0);
   const todayTasks = tasks.filter(t => t.status !== 'completed' && t.due_date === new Date().toISOString().split('T')[0]);
+
+  const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'office_manager';
+  const isProjectWorker = currentUser?.role === 'project_worker';
+  const isTaskWorker = currentUser?.role === 'task_worker';
+
+  // תצוגה מותאמת למבצע משימות
+  if (isTaskWorker) {
+    return (
+      <div className="min-h-screen bg-background p-6">
+        <div className="max-w-[1400px] mx-auto space-y-6">
+          <div>
+            <h1 className="text-3xl font-bold">המשימות שלי</h1>
+            <p className="text-muted-foreground mt-1">
+              {format(new Date(), 'EEEE, dd MMMM yyyy', { locale: he })}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <StatsCard
+              title="משימות להיום"
+              value={todayTasks.length}
+              icon={CheckCircle}
+              color="purple"
+            />
+            <StatsCard
+              title="סה״כ משימות פעילות"
+              value={tasks.filter(t => t.status !== 'completed').length}
+              icon={Clock}
+              color="blue"
+            />
+          </div>
+
+          <Card>
+            <CardHeader className="border-b bg-purple-50">
+              <CardTitle className="flex items-center gap-2 text-purple-900">
+                <Calendar className="w-5 h-5" />
+                המשימות שלי
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-4 space-y-3">
+              {tasks.length === 0 ? (
+                <p className="text-muted-foreground text-center py-8">אין משימות</p>
+              ) : (
+                tasks.map(task => (
+                  <div key={task.id} className="flex items-center justify-between p-4 bg-background rounded-lg border">
+                    <div className="flex-1">
+                      <p className="font-medium">{task.title}</p>
+                      {task.description && (
+                        <p className="text-sm text-muted-foreground mt-1">{task.description}</p>
+                      )}
+                      {task.due_date && (
+                        <p className="text-xs text-muted-foreground mt-2">
+                          תאריך יעד: {format(new Date(task.due_date), 'dd/MM/yyyy')}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex flex-col gap-2 items-end">
+                      <StatusBadge status={task.status} />
+                      <StatusBadge status={task.priority} />
+                    </div>
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background p-6">
@@ -70,35 +158,42 @@ export default function Dashboard() {
 
         {/* Stats Overview */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatsCard
-            title="הצעות מחיר בטיוטה"
-            value={draftQuotes.length}
-            icon={FileText}
-            color="amber"
-          />
-          <StatsCard
-            title="ממתין לתגובת לקוח"
-            value={sentQuotes.length}
-            icon={Mail}
-            color="blue"
-          />
+          {isAdmin && (
+            <>
+              <StatsCard
+                title="הצעות מחיר בטיוטה"
+                value={draftQuotes.length}
+                icon={FileText}
+                color="amber"
+              />
+              <StatsCard
+                title="ממתין לתגובת לקוח"
+                value={sentQuotes.length}
+                icon={Mail}
+                color="blue"
+              />
+            </>
+          )}
           <StatsCard
             title="משימות להיום"
             value={todayTasks.length}
             icon={CheckCircle}
             color="purple"
           />
-          <StatsCard
-            title="גבייה פתוחה"
-            value={`₪${totalOutstanding.toLocaleString()}`}
-            icon={DollarSign}
-            color="red"
-          />
+          {isAdmin && (
+            <StatsCard
+              title="גבייה פתוחה"
+              value={`₪${totalOutstanding.toLocaleString()}`}
+              icon={DollarSign}
+              color="red"
+            />
+          )}
         </div>
 
         {/* Main Content Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* מחכה לתגובה ממני */}
+          {isAdmin && (
           <Card>
             <CardHeader className="border-b bg-amber-50">
               <CardTitle className="flex items-center gap-2 text-amber-900">
@@ -124,8 +219,10 @@ export default function Dashboard() {
               )}
             </CardContent>
           </Card>
+          )}
 
           {/* מחכה לתגובה מהלקוח */}
+          {isAdmin && (
           <Card>
             <CardHeader className="border-b bg-blue-50">
               <CardTitle className="flex items-center gap-2 text-blue-900">
@@ -151,6 +248,7 @@ export default function Dashboard() {
               )}
             </CardContent>
           </Card>
+          )}
 
           {/* משימות להיום */}
           <Card>
@@ -180,6 +278,7 @@ export default function Dashboard() {
           </Card>
 
           {/* גבייה פתוחה */}
+          {isAdmin && (
           <Card>
             <CardHeader className="border-b bg-red-50">
               <CardTitle className="flex items-center gap-2 text-red-900">

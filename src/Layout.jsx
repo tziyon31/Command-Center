@@ -7,17 +7,33 @@ import {
   Users, 
   FolderKanban,
   Sparkles,
+  UserCog,
   LogOut 
 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
+import { useQuery } from '@tanstack/react-query';
 
 export default function Layout({ children, currentPageName }) {
-  const navItems = [
-    { name: 'Dashboard', label: 'דשבורד', icon: LayoutDashboard },
-    { name: 'Clients', label: 'לקוחות', icon: Users },
-    { name: 'Projects', label: 'פרויקטים', icon: FolderKanban },
-    { name: 'Assistant', label: 'עוזר AI', icon: Sparkles },
+  const { data: currentUser } = useQuery({
+    queryKey: ['currentUser'],
+    queryFn: () => base44.auth.me(),
+  });
+
+  const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'office_manager';
+  const isProjectWorker = currentUser?.role === 'project_worker';
+  const isTaskWorker = currentUser?.role === 'task_worker';
+
+  const allNavItems = [
+    { name: 'Dashboard', label: 'דשבורד', icon: LayoutDashboard, roles: ['admin', 'office_manager', 'project_worker'] },
+    { name: 'Clients', label: 'לקוחות', icon: Users, roles: ['admin', 'office_manager'] },
+    { name: 'Projects', label: 'פרויקטים', icon: FolderKanban, roles: ['admin', 'office_manager', 'project_worker'] },
+    { name: 'Assistant', label: 'עוזר AI', icon: Sparkles, roles: ['admin', 'office_manager'] },
+    { name: 'Users', label: 'משתמשים', icon: UserCog, roles: ['admin', 'office_manager'] },
   ];
+
+  const navItems = allNavItems.filter(item => 
+    !item.roles || item.roles.includes(currentUser?.role)
+  );
 
   const handleLogout = () => {
     base44.auth.logout();
@@ -30,9 +46,21 @@ export default function Layout({ children, currentPageName }) {
         <div className="max-w-[1400px] mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-8">
-              <Link to={createPageUrl('Dashboard')} className="text-xl font-bold">
-                ENG Aharon D
-              </Link>
+              <div>
+                <Link to={createPageUrl('Dashboard')} className="text-xl font-bold">
+                  ENG Aharon D
+                </Link>
+                {currentUser && (
+                  <p className="text-xs text-muted-foreground">
+                    {currentUser.full_name} - {
+                      currentUser.role === 'admin' ? 'מנהל' :
+                      currentUser.role === 'office_manager' ? 'מנהלת משרד' :
+                      currentUser.role === 'project_worker' ? 'עובד פרויקטים' :
+                      'מבצע משימות'
+                    }
+                  </p>
+                )}
+              </div>
               <div className="flex items-center gap-2">
                 {navItems.map(item => {
                   const Icon = item.icon;
