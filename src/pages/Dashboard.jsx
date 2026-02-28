@@ -302,6 +302,25 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {/* 🔵 פילוח הצעות */}
+        <div className="space-y-8">
+          <div>
+            <h2 className="text-3xl font-bold tracking-tight mb-2">פילוח הצעות</h2>
+            <p className="text-muted-foreground">ניתוח תוצאות הצעות מחיר לפי התקופה שנבחרה</p>
+          </div>
+          <QuoteBreakdownCard
+            quotes={quotes.filter(q => {
+              const now = new Date();
+              const periodStart = quotePeriod === 'month' ? startOfMonth(now)
+                : quotePeriod === 'quarter' ? startOfQuarter(now)
+                : quotePeriod === 'year' ? startOfYear(now)
+                : new Date(0);
+              return new Date(q.date) >= periodStart;
+            })}
+            period={quotePeriod}
+          />
+        </div>
+
         {/* 🟡 אזור 2 - דורש טיפול */}
         <div className="space-y-8">
           <div>
