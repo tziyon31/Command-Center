@@ -24,6 +24,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import QuoteBreakdownCard from '../components/dashboard/QuoteBreakdownCard.jsx';
 
 export default function Dashboard() {
+  const [quotePeriod, setQuotePeriod] = React.useState('year');
+
   const { data: currentUser } = useQuery({
     queryKey: ['currentUser'],
     queryFn: () => base44.auth.me(),
