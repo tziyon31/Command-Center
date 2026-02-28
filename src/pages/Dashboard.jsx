@@ -100,10 +100,12 @@ export default function Dashboard() {
       yearlyRevenue,
       avgProfit,
       closeRate,
+      signedQuotes,
+      decidedQuotes,
       totalOutstanding,
       unpaidInvoicesCount: unpaidInvoices.length
     };
-  }, [projects, quotes, invoices]);
+  }, [projects, quotes, invoices, quotePeriod]);
 
   // דורש טיפול
   const needsAttention = useMemo(() => {
