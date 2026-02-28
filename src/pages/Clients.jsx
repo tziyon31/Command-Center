@@ -278,7 +278,7 @@ export default function Clients() {
           />
         </div>
 
-        {/* Clients Grid */}
+        {/* Clients Table */}
         {isLoading ? (
           <div className="text-center py-12">
             <p className="text-muted-foreground">טוען...</p>
@@ -288,49 +288,47 @@ export default function Clients() {
             <p className="text-muted-foreground">לא נמצאו לקוחות</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filteredClients.map(client => (
-              <Link key={client.id} to={createPageUrl(`ClientDetails?id=${client.id}`)}>
-                <Card className="hover:shadow-lg transition-shadow">
-                  <CardContent className="p-6">
-                    <div className="flex items-start justify-between mb-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
-                          <Building2 className="w-6 h-6 text-primary" />
-                        </div>
-                        <div>
-                          <h3 className="font-semibold text-lg">{client.name}</h3>
-                          {client.company && (
-                            <p className="text-sm text-muted-foreground">{client.company}</p>
-                          )}
-                        </div>
-                      </div>
-                      <StatusBadge status={client.rating} />
-                    </div>
-                    <div className="space-y-2">
-                      {client.email && (
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <Mail className="w-4 h-4" />
-                          <span className="truncate">{client.email}</span>
-                        </div>
-                      )}
-                      {client.phone && (
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <Phone className="w-4 h-4" />
-                          <span>{client.phone}</span>
-                        </div>
-                      )}
-                      {client.address && (
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <MapPin className="w-4 h-4" />
-                          <span className="truncate">{client.address}</span>
-                        </div>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              </Link>
-            ))}
+          <div className="border rounded-lg overflow-hidden">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-muted/50">
+                  <TableHead className="text-right w-12">#</TableHead>
+                  <TableHead className="text-right">שם העסק</TableHead>
+                  <TableHead className="text-right">שם איש הקשר</TableHead>
+                  <TableHead className="text-right">דוא"ל</TableHead>
+                  <TableHead className="text-right">נייד</TableHead>
+                  <TableHead className="text-right">מספר עסק (ח.פ.)</TableHead>
+                  <TableHead className="text-right">כתובת</TableHead>
+                  <TableHead className="text-right">כמות מסמכים</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredClients.map((client, index) => (
+                  <TableRow key={client.id} className="hover:bg-muted/30 cursor-pointer">
+                    <TableCell>
+                      <Link to={createPageUrl(`ClientDetails?id=${client.id}`)} className="block w-full">
+                        {index + 1}
+                      </Link>
+                    </TableCell>
+                    <TableCell className="font-medium">
+                      <Link to={createPageUrl(`ClientDetails?id=${client.id}`)} className="block w-full hover:text-primary">
+                        {client.company || '-'}
+                      </Link>
+                    </TableCell>
+                    <TableCell>
+                      <Link to={createPageUrl(`ClientDetails?id=${client.id}`)} className="block w-full hover:text-primary">
+                        {client.name}
+                      </Link>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">{client.email || '-'}</TableCell>
+                    <TableCell className="text-muted-foreground">{client.phone || '-'}</TableCell>
+                    <TableCell className="text-muted-foreground">{client.business_number || '-'}</TableCell>
+                    <TableCell className="text-muted-foreground max-w-[200px] truncate">{client.address || '-'}</TableCell>
+                    <TableCell className="text-center">{client.document_count ?? 0}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </div>
         )}
       </div>
