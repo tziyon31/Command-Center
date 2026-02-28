@@ -272,13 +272,26 @@ export default function Dashboard() {
               icon={TrendingUp}
               color="blue"
             />
-            <BusinessHealthCard
-              title="אחוז סגירת הצעות"
-              value={`${businessHealth.closeRate}%`}
-              subtitle={`${quotes.filter(q => q.status === 'signed').length} מתוך ${quotes.filter(q => q.status !== 'draft').length} הצעות`}
-              icon={Target}
-              color="primary"
-            />
+            <div className="space-y-2">
+              <BusinessHealthCard
+                title="אחוז סגירת הצעות"
+                value={`${businessHealth.closeRate}%`}
+                subtitle={`${businessHealth.signedQuotes} מתוך ${businessHealth.decidedQuotes} שהוכרעו`}
+                icon={Target}
+                color="primary"
+              />
+              <Select value={quotePeriod} onValueChange={setQuotePeriod}>
+                <SelectTrigger className="text-xs h-8">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="month">החודש</SelectItem>
+                  <SelectItem value="quarter">הרבעון</SelectItem>
+                  <SelectItem value="year">השנה</SelectItem>
+                  <SelectItem value="all">הכל</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
             <BusinessHealthCard
               title="גבייה פתוחה"
               value={`₪${businessHealth.totalOutstanding.toLocaleString()}`}
