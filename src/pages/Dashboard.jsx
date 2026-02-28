@@ -18,8 +18,10 @@ import {
   Plus,
   BarChart3
 } from 'lucide-react';
-import { format, subDays, startOfYear } from 'date-fns';
+import { format, subDays, startOfYear, startOfMonth, startOfQuarter } from 'date-fns';
 import { he } from 'date-fns/locale';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import QuoteBreakdownCard from '../components/dashboard/QuoteBreakdownCard.jsx';
 
 export default function Dashboard() {
   const { data: currentUser } = useQuery({
