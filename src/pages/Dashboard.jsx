@@ -68,7 +68,8 @@ export default function Dashboard() {
 
   // חישובי בריאות עסקית
   const businessHealth = useMemo(() => {
-    const yearStart = startOfYear(new Date());
+    const now = new Date();
+    const yearStart = startOfYear(now);
     const thisYearProjects = projects.filter(p => new Date(p.created_date) >= yearStart);
     
     // סך הכנסות שנה
@@ -80,10 +81,16 @@ export default function Dashboard() {
       ? completedProjects.reduce((sum, p) => sum + (p.total_amount || 0), 0) / completedProjects.length 
       : 0;
     
-    // אחוז סגירת הצעות
-    const signedQuotes = quotes.filter(q => q.status === 'signed').length;
-    const totalQuotes = quotes.filter(q => q.status !== 'draft').length;
-    const closeRate = totalQuotes > 0 ? Math.round((signedQuotes / totalQuotes) * 100) : 0;
+    // אחוז סגירת הצעות - לפי תקופה נבחרת
+    const periodStart = quotePeriod === 'month' ? startOfMonth(now)
+      : quotePeriod === 'quarter' ? startOfQuarter(now)
+      : quotePeriod === 'year' ? startOfYear(now)
+      : new Date(0); // 'all'
+    
+    const periodQuotes = quotes.filter(q => new Date(q.date) >= periodStart);
+    const signedQuotes = periodQuotes.filter(q => q.status === 'signed').length;
+    const decidedQuotes = periodQuotes.filter(q => ['signed', 'cancelled'].includes(q.status)).length;
+    const closeRate = decidedQuotes > 0 ? Math.round((signedQuotes / decidedQuotes) * 100) : 0;
     
     // גבייה פתוחה
     const unpaidInvoices = invoices.filter(i => i.status !== 'paid');
