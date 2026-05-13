@@ -2,11 +2,11 @@ import React from 'react';
 import { Card, CardContent } from "@/components/ui/card";
 import { CheckCircle2, XCircle, Clock } from 'lucide-react';
 
-export default function QuoteBreakdownCard({ quotes, period }) {
-  const won = quotes.filter(q => q.status === 'signed').length;
-  const lost = quotes.filter(q => q.status === 'cancelled').length;
-  const open = quotes.filter(q => ['sent', 'pending', 'negotiation'].includes(q.status)).length;
-  const total = won + lost + open;
+export default function QuoteBreakdownCard({ proposalBreakdown }) {
+  const open = proposalBreakdown?.open || 0;
+  const won = proposalBreakdown?.won || 0;
+  const lost = proposalBreakdown?.lost || 0;
+  const total = proposalBreakdown?.total || 0;
 
   const pct = (n) => total > 0 ? Math.round((n / total) * 100) : 0;
 

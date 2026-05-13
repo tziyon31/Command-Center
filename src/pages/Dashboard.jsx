@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import { base44 } from '@/api/base44Client';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
@@ -22,6 +22,24 @@ import { format, subDays, startOfYear, startOfMonth, startOfQuarter } from 'date
 import { he } from 'date-fns/locale';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import QuoteBreakdownCard from '../components/dashboard/QuoteBreakdownCard.jsx';
+
+const OPEN_PROPOSAL_STATUSES = ['pricing', 'waiting'];
+const WON_PROPOSAL_STATUSES = ['signed'];
+const LOST_PROPOSAL_STATUSES = ['rejected', 'cancelled'];
+const PROPOSAL_STATUSES = [
+  ...OPEN_PROPOSAL_STATUSES,
+  ...WON_PROPOSAL_STATUSES,
+  ...LOST_PROPOSAL_STATUSES,
+];
+
+const getPeriodStart = (period, now) => (
+  period === 'month' ? startOfMonth(now)
+    : period === 'quarter' ? startOfQuarter(now)
+    : period === 'year' ? startOfYear(now)
+    : new Date(0)
+);
+
+const getProjectTimelineDate = (project) => project?.created_date || project?.updated_date || null;
 
 export default function Dashboard() {
   const [quotePeriod, setQuotePeriod] = React.useState('year');
@@ -63,49 +81,53 @@ export default function Dashboard() {
     enabled: currentUser?.role === 'admin' || currentUser?.role === 'office_manager' || currentUser?.role === 'project_worker',
   });
 
-  useEffect(() => {
-    if (!currentUser) return;
-
-    console.table(projects.map((p) => ({
-      name: p.name,
-      status: p.status,
-      total_amount: p.total_amount,
-      collected_amount: p.collected_amount,
-      created_date: p.created_date,
-      updated_date: p.updated_date,
-    })));
-
-    console.log({
-      role: currentUser?.role,
-      projects: projects.map((p) => ({
-        id: p.id,
-        name: p.name,
-        status: p.status,
-        total_amount: p.total_amount,
-        collected_amount: p.collected_amount,
-        created_date: p.created_date,
-        updated_date: p.updated_date,
-      })),
-      quotes: quotes.map((q) => ({
-        id: q.id,
-        status: q.status,
-        total_amount: q.total_amount,
-        date: q.date,
-        updated_date: q.updated_date,
-      })),
-      invoices: invoices.map((i) => ({
-        id: i.id,
-        status: i.status,
-        amount: i.amount,
-        paid_amount: i.paid_amount,
-        date: i.date,
-        due_date: i.due_date,
-      })),
-    });
-  }, [currentUser, projects, quotes, invoices]);
-
   const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'office_manager';
   const isTaskWorker = currentUser?.role === 'task_worker';
+
+  const proposalMetrics = useMemo(() => {
+    const now = new Date();
+    const periodStart = getPeriodStart(quotePeriod, now);
+
+    const proposalProjects = projects.filter((project) => {
+      if (!PROPOSAL_STATUSES.includes(project.status)) return false;
+
+      const dateValue = getProjectTimelineDate(project);
+      if (!dateValue) return false;
+
+      const date = new Date(dateValue);
+      return !Number.isNaN(date.getTime()) && date >= periodStart;
+    });
+
+    const openProposals = proposalProjects.filter((project) =>
+      OPEN_PROPOSAL_STATUSES.includes(project.status)
+    );
+    const wonProposals = proposalProjects.filter((project) =>
+      WON_PROPOSAL_STATUSES.includes(project.status)
+    );
+    const lostProposals = proposalProjects.filter((project) =>
+      LOST_PROPOSAL_STATUSES.includes(project.status)
+    );
+
+    const decidedCount = wonProposals.length + lostProposals.length;
+    const closeRate = decidedCount > 0
+      ? Math.round((wonProposals.length / decidedCount) * 100)
+      : 0;
+
+    return {
+      proposalProjects,
+      openProposals,
+      wonProposals,
+      lostProposals,
+      closeRate,
+      decidedCount,
+      breakdown: {
+        open: openProposals.length,
+        won: wonProposals.length,
+        lost: lostProposals.length,
+        total: proposalProjects.length,
+      },
+    };
+  }, [projects, quotePeriod]);
 
   // חישובי בריאות עסקית
   const businessHealth = useMemo(() => {
@@ -122,17 +144,6 @@ export default function Dashboard() {
       ? completedProjects.reduce((sum, p) => sum + (p.total_amount || 0), 0) / completedProjects.length 
       : 0;
     
-    // אחוז סגירת הצעות - לפי תקופה נבחרת
-    const periodStart = quotePeriod === 'month' ? startOfMonth(now)
-      : quotePeriod === 'quarter' ? startOfQuarter(now)
-      : quotePeriod === 'year' ? startOfYear(now)
-      : new Date(0); // 'all'
-    
-    const periodQuotes = quotes.filter(q => new Date(q.date) >= periodStart);
-    const signedQuotes = periodQuotes.filter(q => q.status === 'signed').length;
-    const decidedQuotes = periodQuotes.filter(q => ['signed', 'cancelled'].includes(q.status)).length;
-    const closeRate = decidedQuotes > 0 ? Math.round((signedQuotes / decidedQuotes) * 100) : 0;
-    
     // גבייה פתוחה
     const unpaidInvoices = invoices.filter(i => i.status !== 'paid');
     const totalOutstanding = unpaidInvoices.reduce((sum, inv) => sum + (inv.amount - inv.paid_amount), 0);
@@ -140,13 +151,13 @@ export default function Dashboard() {
     return {
       yearlyRevenue,
       avgProfit,
-      closeRate,
-      signedQuotes,
-      decidedQuotes,
+      closeRate: proposalMetrics.closeRate,
+      wonProposalsCount: proposalMetrics.wonProposals.length,
+      decidedProposalsCount: proposalMetrics.decidedCount,
       totalOutstanding,
       unpaidInvoicesCount: unpaidInvoices.length
     };
-  }, [projects, quotes, invoices, quotePeriod]);
+  }, [projects, invoices, proposalMetrics]);
 
   // דורש טיפול
   const needsAttention = useMemo(() => {
@@ -156,20 +167,31 @@ export default function Dashboard() {
     const today = now.toISOString().split('T')[0];
     
     // הצעות פתוחות מעל 7 ימים
-    const oldQuotes = quotes
-      .filter(q => ['sent', 'pending', 'negotiation'].includes(q.status) && new Date(q.date) < sevenDaysAgo)
-      .map(q => ({
-        title: `הצעת מחיר ${q.quote_number}`,
-        subtitle: `פתוחה ${Math.floor((now - new Date(q.date)) / (1000 * 60 * 60 * 24))} ימים`,
-        data: q
-      }));
+    const oldProposals = proposalMetrics.openProposals
+      .filter((project) => {
+        const dateValue = project.updated_date || project.created_date;
+        if (!dateValue) return false;
+
+        const date = new Date(dateValue);
+        return !Number.isNaN(date.getTime()) && date < sevenDaysAgo;
+      })
+      .map((project) => {
+        const lastTouch = new Date(project.updated_date || project.created_date);
+        const daysOpen = Math.floor((now.getTime() - lastTouch.getTime()) / (1000 * 60 * 60 * 24));
+
+        return {
+          title: project.name || 'הצעה ללא שם',
+          subtitle: `בסטטוס ${project.status} כבר ${daysOpen} ימים`,
+          data: project
+        };
+      });
     
     // גבייה באיחור
     const overdueInvoices = invoices
       .filter(i => i.status !== 'paid' && i.due_date && new Date(i.due_date) < now)
       .map(i => ({
         title: `חשבונית ${i.invoice_number}`,
-        subtitle: `איחור ${Math.floor((now - new Date(i.due_date)) / (1000 * 60 * 60 * 24))} ימים - ₪${(i.amount - i.paid_amount).toLocaleString()}`,
+        subtitle: `איחור ${Math.floor((now.getTime() - new Date(i.due_date).getTime()) / (1000 * 60 * 60 * 24))} ימים - ₪${(i.amount - i.paid_amount).toLocaleString()}`,
         data: i
       }));
     
@@ -178,7 +200,7 @@ export default function Dashboard() {
       .filter(p => !['completed', 'collection_completed'].includes(p.status) && new Date(p.updated_date) < fourteenDaysAgo)
       .map(p => ({
         title: p.name,
-        subtitle: `ללא פעילות ${Math.floor((now - new Date(p.updated_date)) / (1000 * 60 * 60 * 24))} ימים`,
+        subtitle: `ללא פעילות ${Math.floor((now.getTime() - new Date(p.updated_date).getTime()) / (1000 * 60 * 60 * 24))} ימים`,
         data: p
       }));
     
@@ -192,12 +214,12 @@ export default function Dashboard() {
       }));
     
     return {
-      oldQuotes,
+      oldProposals,
       overdueInvoices,
       inactiveProjects,
       todayTasks
     };
-  }, [quotes, invoices, projects, tasks]);
+  }, [invoices, projects, proposalMetrics, tasks]);
 
   // תנועה עסקית
   const recentActivity = useMemo(() => {
@@ -244,7 +266,7 @@ export default function Dashboard() {
         date: p.updated_date
       }));
     
-    return activities.sort((a, b) => new Date(b.date) - new Date(a.date));
+    return activities.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }, [projects, quotes]);
 
   // תצוגה למבצע משימות
@@ -317,7 +339,7 @@ export default function Dashboard() {
               <BusinessHealthCard
                 title="אחוז סגירת הצעות"
                 value={`${businessHealth.closeRate}%`}
-                subtitle={`${businessHealth.signedQuotes} מתוך ${businessHealth.decidedQuotes} שהוכרעו`}
+                subtitle={`${businessHealth.wonProposalsCount} מתוך ${businessHealth.decidedProposalsCount} שהוכרעו`}
                 icon={Target}
                 color="primary"
               />
@@ -350,15 +372,7 @@ export default function Dashboard() {
             <p className="text-muted-foreground">ניתוח תוצאות הצעות מחיר לפי התקופה שנבחרה</p>
           </div>
           <QuoteBreakdownCard
-            quotes={quotes.filter(q => {
-              const now = new Date();
-              const periodStart = quotePeriod === 'month' ? startOfMonth(now)
-                : quotePeriod === 'quarter' ? startOfQuarter(now)
-                : quotePeriod === 'year' ? startOfYear(now)
-                : new Date(0);
-              return new Date(q.date) >= periodStart;
-            })}
-            period={quotePeriod}
+            proposalBreakdown={proposalMetrics.breakdown}
           />
         </div>
 
@@ -371,7 +385,7 @@ export default function Dashboard() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <ActionCard
               title="הצעות ממתינות לתגובה"
-              items={needsAttention.oldQuotes}
+              items={needsAttention.oldProposals}
               icon={Clock}
               color="amber"
             />
