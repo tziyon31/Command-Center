@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { base44 } from '@/api/base44Client';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
@@ -62,6 +62,38 @@ export default function Dashboard() {
     queryFn: () => base44.entities.Project.list(),
     enabled: currentUser?.role === 'admin' || currentUser?.role === 'office_manager' || currentUser?.role === 'project_worker',
   });
+
+  useEffect(() => {
+    if (!currentUser) return;
+
+    console.log({
+      role: currentUser?.role,
+      projects: projects.map((p) => ({
+        id: p.id,
+        name: p.name,
+        status: p.status,
+        total_amount: p.total_amount,
+        collected_amount: p.collected_amount,
+        created_date: p.created_date,
+        updated_date: p.updated_date,
+      })),
+      quotes: quotes.map((q) => ({
+        id: q.id,
+        status: q.status,
+        total_amount: q.total_amount,
+        date: q.date,
+        updated_date: q.updated_date,
+      })),
+      invoices: invoices.map((i) => ({
+        id: i.id,
+        status: i.status,
+        amount: i.amount,
+        paid_amount: i.paid_amount,
+        date: i.date,
+        due_date: i.due_date,
+      })),
+    });
+  }, [currentUser, projects, quotes, invoices]);
 
   const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'office_manager';
   const isTaskWorker = currentUser?.role === 'task_worker';
