@@ -66,6 +66,15 @@ export default function Dashboard() {
   useEffect(() => {
     if (!currentUser) return;
 
+    console.table(projects.map((p) => ({
+      name: p.name,
+      status: p.status,
+      total_amount: p.total_amount,
+      collected_amount: p.collected_amount,
+      created_date: p.created_date,
+      updated_date: p.updated_date,
+    })));
+
     console.log({
       role: currentUser?.role,
       projects: projects.map((p) => ({
