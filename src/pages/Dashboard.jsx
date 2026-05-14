@@ -81,7 +81,6 @@ export default function Dashboard() {
     enabled: currentUser?.role === 'admin' || currentUser?.role === 'office_manager' || currentUser?.role === 'project_worker',
   });
 
-  const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'office_manager';
   const isTaskWorker = currentUser?.role === 'task_worker';
 
   const proposalMetrics = useMemo(() => {
@@ -167,21 +166,34 @@ export default function Dashboard() {
     const today = now.toISOString().split('T')[0];
     
     // הצעות פתוחות מעל 7 ימים
-    const oldProposals = proposalMetrics.openProposals
-      .filter((project) => {
-        const dateValue = project.updated_date || project.created_date;
-        if (!dateValue) return false;
-
-        const date = new Date(dateValue);
-        return !Number.isNaN(date.getTime()) && date < sevenDaysAgo;
-      })
+    const waitingProposals = proposalMetrics.openProposals
+      .filter((project) => project.status === 'waiting')
       .map((project) => {
-        const lastTouch = new Date(project.updated_date || project.created_date);
-        const daysOpen = Math.floor((now.getTime() - lastTouch.getTime()) / (1000 * 60 * 60 * 24));
+        const lastTouchValue = project.updated_date || project.created_date;
+        const lastTouch = lastTouchValue ? new Date(lastTouchValue) : null;
+        const daysWaiting = lastTouch && !Number.isNaN(lastTouch.getTime())
+          ? Math.floor((now.getTime() - lastTouch.getTime()) / (1000 * 60 * 60 * 24))
+          : 0;
 
         return {
           title: project.name || 'הצעה ללא שם',
-          subtitle: `בסטטוס ${project.status} כבר ${daysOpen} ימים`,
+          subtitle: `ממתינה לתגובת לקוח${daysWaiting > 0 ? ` כבר ${daysWaiting} ימים` : ''}`,
+          data: project
+        };
+      });
+
+    const pricingProposals = proposalMetrics.openProposals
+      .filter((project) => project.status === 'pricing')
+      .map((project) => {
+        const lastTouchValue = project.updated_date || project.created_date;
+        const lastTouch = lastTouchValue ? new Date(lastTouchValue) : null;
+        const daysInPricing = lastTouch && !Number.isNaN(lastTouch.getTime())
+          ? Math.floor((now.getTime() - lastTouch.getTime()) / (1000 * 60 * 60 * 24))
+          : 0;
+
+        return {
+          title: project.name || 'הצעה ללא שם',
+          subtitle: `ממתינה לתמחור${daysInPricing > 0 ? ` כבר ${daysInPricing} ימים` : ''}`,
           data: project
         };
       });
@@ -214,7 +226,8 @@ export default function Dashboard() {
       }));
     
     return {
-      oldProposals,
+      pricingProposals,
+      waitingProposals,
       overdueInvoices,
       inactiveProjects,
       todayTasks
@@ -384,8 +397,14 @@ export default function Dashboard() {
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <ActionCard
+              title="הצעות ממתינות לתמחור"
+              items={needsAttention.pricingProposals}
+              icon={BarChart3}
+              color="amber"
+            />
+            <ActionCard
               title="הצעות ממתינות לתגובה"
-              items={needsAttention.oldProposals}
+              items={needsAttention.waitingProposals}
               icon={Clock}
               color="amber"
             />
