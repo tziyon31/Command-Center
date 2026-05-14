@@ -144,6 +144,13 @@ export default function ProjectDetails() {
     project.collection_due_now === true &&
     toNumber(project.collection_due_amount) > 0;
 
+  console.log("PROJECT COLLECTION EVENTS CHECK", {
+    name: project.name,
+    collected_amount: project.collected_amount,
+    last_collection_paid_on: project.last_collection_paid_on,
+    collection_events: project.collection_events,
+  });
+
   const refreshProjectData = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['project', projectId] }),
