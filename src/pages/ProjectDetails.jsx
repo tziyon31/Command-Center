@@ -213,6 +213,7 @@ export default function ProjectDetails() {
     const dueNote = project.collection_due_note || '';
     const openedAt = project.collection_due_date || '';
     const currentCollected = toNumber(project.collected_amount);
+    const now = new Date().toISOString();
 
     if (dueAmount <= 0) {
       alert('אין סכום גבייה תקין לסימון');
@@ -222,27 +223,32 @@ export default function ProjectDetails() {
     setIsSavingCollection(true);
 
     try {
-      const existingEvents = Array.isArray(project.collection_events) ? project.collection_events : [];
-      const newEvent = {
-        amount: dueAmount,
-        note: dueNote,
-        opened_at: openedAt,
-        paid_at: new Date().toISOString(),
-        type: 'collection_paid',
-      };
-
-      const payload = {
+      // 1. Update project fields
+      const projectPayload = {
         collected_amount: currentCollected + dueAmount,
-        last_collection_paid_on: new Date().toISOString(),
+        last_collection_paid_on: now,
         collection_due_now: false,
         collection_due_amount: 0,
         collection_due_note: '',
         collection_due_date: '',
-        collection_events: [...existingEvents, newEvent],
       };
-      console.log('[CollectionDue] mark paid payload:', payload);
-      const result = await base44.entities.Project.update(project.id, payload);
-      console.log('[CollectionDue] mark paid result:', result);
+      console.log('[CollectionDue] mark paid project payload:', projectPayload);
+      const projectResult = await base44.entities.Project.update(project.id, projectPayload);
+      console.log('[CollectionDue] mark paid project result:', projectResult);
+
+      // 2. Create CollectionEvent record
+      const eventPayload = {
+        project_id: project.id,
+        project_name: project.name || '',
+        amount: dueAmount,
+        note: dueNote,
+        opened_at: openedAt,
+        paid_at: now,
+        type: 'collection_paid',
+      };
+      console.log('[CollectionDue] creating CollectionEvent:', eventPayload);
+      const eventResult = await base44.entities.CollectionEvent.create(eventPayload);
+      console.log('[CollectionDue] CollectionEvent created:', eventResult);
 
       await refreshProjectData();
     } catch (err) {
