@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useLocation } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
@@ -144,12 +144,46 @@ export default function ProjectDetails() {
     project.collection_due_now === true &&
     toNumber(project.collection_due_amount) > 0;
 
-  console.log("PROJECT COLLECTION EVENTS CHECK", {
-    name: project.name,
-    collected_amount: project.collected_amount,
-    last_collection_paid_on: project.last_collection_paid_on,
-    collection_events: project.collection_events,
-  });
+  useEffect(() => {
+    let isCancelled = false;
+
+    const debugLoadCollectionEvents = async () => {
+      try {
+        let events;
+
+        try {
+          events = await base44.entities.CollectionEvent.filter({ project_id: project.id });
+        } catch (error) {
+          const allEvents = await base44.entities.CollectionEvent.list();
+          events = allEvents.filter((item) => item.project_id === project.id);
+        }
+
+        if (isCancelled) return;
+
+        console.log('PROJECT COLLECTION EVENT ENTITY CHECK', {
+          project_id: project.id,
+          project_name: project.name,
+          collected_amount: project.collected_amount,
+          last_collection_paid_on: project.last_collection_paid_on,
+          collection_event_records: events,
+        });
+      } catch (error) {
+        if (isCancelled) return;
+        console.error('[CollectionEvent] debug load failed:', error);
+      }
+    };
+
+    debugLoadCollectionEvents();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [
+    project.id,
+    project.name,
+    project.collected_amount,
+    project.last_collection_paid_on,
+  ]);
 
   const refreshProjectData = async () => {
     await Promise.all([
@@ -223,7 +257,6 @@ export default function ProjectDetails() {
     setIsSavingCollection(true);
 
     try {
-      // 1. Update project fields
       const projectPayload = {
         collected_amount: currentCollected + dueAmount,
         last_collection_paid_on: now,
@@ -233,11 +266,9 @@ export default function ProjectDetails() {
         collection_due_date: '',
       };
       console.log('[CollectionDue] mark paid project payload:', projectPayload);
-      const projectResult = await base44.entities.Project.update(project.id, projectPayload);
-      console.log('[CollectionDue] mark paid project result:', projectResult);
+      await base44.entities.Project.update(project.id, projectPayload);
 
-      // 2. Create CollectionEvent record
-      const eventPayload = {
+      const collectionEventPayload = {
         project_id: project.id,
         project_name: project.name || '',
         amount: dueAmount,
@@ -246,9 +277,9 @@ export default function ProjectDetails() {
         paid_at: now,
         type: 'collection_paid',
       };
-      console.log('[CollectionDue] creating CollectionEvent:', eventPayload);
-      const eventResult = await base44.entities.CollectionEvent.create(eventPayload);
-      console.log('[CollectionDue] CollectionEvent created:', eventResult);
+      console.log('[CollectionEvent] create payload:', collectionEventPayload);
+      const createdEvent = await base44.entities.CollectionEvent.create(collectionEventPayload);
+      console.log('[CollectionEvent] created event:', createdEvent);
 
       await refreshProjectData();
     } catch (err) {
