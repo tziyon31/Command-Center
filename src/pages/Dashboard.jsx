@@ -31,6 +31,7 @@ const PROPOSAL_STATUSES = [
   ...WON_PROPOSAL_STATUSES,
   ...LOST_PROPOSAL_STATUSES,
 ];
+const COLLECTION_RELEVANT_STATUSES = ['signed', 'planning', 'submission', 'execution', 'completed'];
 
 const getPeriodStart = (period, now) => (
   period === 'month' ? startOfMonth(now)
@@ -40,6 +41,10 @@ const getPeriodStart = (period, now) => (
 );
 
 const getProjectTimelineDate = (project) => project?.created_date || project?.updated_date || null;
+const toNumber = (value) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : 0;
+};
 
 export default function Dashboard() {
   const [quotePeriod, setQuotePeriod] = React.useState('year');
@@ -144,8 +149,21 @@ export default function Dashboard() {
       : 0;
     
     // גבייה פתוחה
-    const unpaidInvoices = invoices.filter(i => i.status !== 'paid');
-    const totalOutstanding = unpaidInvoices.reduce((sum, inv) => sum + (inv.amount - inv.paid_amount), 0);
+    const collectionProjects = projects.filter((project) =>
+      COLLECTION_RELEVANT_STATUSES.includes(project.status)
+    );
+    const openCollectionProjects = collectionProjects.filter((project) => {
+      const total = toNumber(project.total_amount);
+      const collected = toNumber(project.collected_amount);
+
+      return total > collected;
+    });
+    const totalOutstanding = openCollectionProjects.reduce((sum, project) => {
+      const total = toNumber(project.total_amount);
+      const collected = toNumber(project.collected_amount);
+
+      return sum + Math.max(total - collected, 0);
+    }, 0);
     
     return {
       yearlyRevenue,
@@ -154,9 +172,9 @@ export default function Dashboard() {
       wonProposalsCount: proposalMetrics.wonProposals.length,
       decidedProposalsCount: proposalMetrics.decidedCount,
       totalOutstanding,
-      unpaidInvoicesCount: unpaidInvoices.length
+      openCollectionProjectsCount: openCollectionProjects.length
     };
-  }, [projects, invoices, proposalMetrics]);
+  }, [projects, proposalMetrics]);
 
   // דורש טיפול
   const needsAttention = useMemo(() => {
@@ -371,9 +389,9 @@ export default function Dashboard() {
             <BusinessHealthCard
               title="גבייה פתוחה"
               value={`₪${businessHealth.totalOutstanding.toLocaleString()}`}
-              subtitle={`${businessHealth.unpaidInvoicesCount} חשבוניות`}
+              subtitle={`${businessHealth.openCollectionProjectsCount} פרויקטים עם יתרת גבייה`}
               icon={AlertCircle}
-              color={businessHealth.unpaidInvoicesCount > 5 ? "red" : "amber"}
+              color={businessHealth.openCollectionProjectsCount > 5 ? "red" : "amber"}
             />
           </div>
         </div>
