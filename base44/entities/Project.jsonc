@@ -1,0 +1,109 @@
+{
+  "name": "Project",
+  "type": "object",
+  "properties": {
+    "client_id": {
+      "type": "string",
+      "description": "\u05de\u05d6\u05d4\u05d4 \u05dc\u05e7\u05d5\u05d7"
+    },
+    "bid_number": {
+      "type": "string",
+      "description": "\u05de\u05e1\u05e4\u05e8 BID"
+    },
+    "work_number": {
+      "type": "string",
+      "description": "\u05de\u05e1\u05e4\u05e8 \u05e2\u05d1\u05d5\u05d3\u05d4"
+    },
+    "name": {
+      "type": "string",
+      "description": "\u05e9\u05dd \u05d4\u05e4\u05e8\u05d5\u05d9\u05e7\u05d8"
+    },
+    "city": {
+      "type": "string",
+      "description": "\u05e2\u05d9\u05e8"
+    },
+    "project_type": {
+      "type": "string",
+      "description": "\u05e1\u05d5\u05d2 \u05e4\u05e8\u05d5\u05d9\u05e7\u05d8"
+    },
+    "area": {
+      "type": "string",
+      "description": "\u05e9\u05d8\u05d7 / \u05d9\u05d7\"\u05d3"
+    },
+    "description": {
+      "type": "string",
+      "description": "\u05ea\u05d9\u05d0\u05d5\u05e8"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "lead",
+        "pricing",
+        "signed",
+        "planning",
+        "submission",
+        "execution",
+        "completed",
+        "collection_completed",
+        "cancelled",
+        "waiting",
+        "rejected"
+      ],
+      "default": "lead",
+      "description": "\u05e1\u05d8\u05d8\u05d5\u05e1 \u05e4\u05e8\u05d5\u05d9\u05e7\u05d8"
+    },
+    "year": {
+      "type": "number",
+      "description": "\u05e9\u05e0\u05d4"
+    },
+    "total_amount": {
+      "type": "number",
+      "default": 0,
+      "description": "\u05e9\u05db\"\u05d8 \u20aa"
+    },
+    "collected_amount": {
+      "type": "number",
+      "default": 0,
+      "description": "\u05e1\u05db\u05d5\u05dd \u05e9\u05e0\u05d2\u05d1\u05d4"
+    },
+    "start_date": {
+      "type": "string",
+      "format": "date",
+      "description": "\u05ea\u05d0\u05e8\u05d9\u05da \u05d4\u05ea\u05d7\u05dc\u05d4"
+    },
+    "end_date": {
+      "type": "string",
+      "format": "date",
+      "description": "\u05ea\u05d0\u05e8\u05d9\u05da \u05e1\u05d9\u05d5\u05dd \u05de\u05e9\u05d5\u05e2\u05e8"
+    },
+    "notes": {
+      "type": "string",
+      "description": "\u05d4\u05e2\u05e8\u05d5\u05ea"
+    },
+    "collection_due_now": {
+      "type": "boolean",
+      "default": false,
+      "description": "\u05d4\u05d0\u05dd \u05d9\u05e9 \u05db\u05e8\u05d2\u05e2 \u05d2\u05d1\u05d9\u05d9\u05d4 \u05e4\u05ea\u05d5\u05d7\u05d4 \u05dc\u05d8\u05d9\u05e4\u05d5\u05dc \u05d1\u05e4\u05e8\u05d5\u05d9\u05e7\u05d8"
+    },
+    "collection_due_amount": {
+      "type": "number",
+      "default": 0,
+      "description": "\u05d4\u05e1\u05db\u05d5\u05dd \u05e9\u05e6\u05e8\u05d9\u05da \u05dc\u05d2\u05d1\u05d5\u05ea \u05e2\u05db\u05e9\u05d9\u05d5 \u05dc\u05e4\u05d9 \u05d0\u05d1\u05df \u05d4\u05d3\u05e8\u05da \u05d4\u05e0\u05d5\u05db\u05d7\u05d9\u05ea"
+    },
+    "collection_due_note": {
+      "type": "string",
+      "description": "\u05e1\u05d9\u05d1\u05ea \u05d4\u05d2\u05d1\u05d9\u05d9\u05d4 \u05d0\u05d5 \u05d0\u05d1\u05df \u05d4\u05d3\u05e8\u05da"
+    },
+    "collection_due_date": {
+      "type": "string",
+      "description": "\u05de\u05ea\u05d9 \u05e0\u05e4\u05ea\u05d7\u05d4 \u05d4\u05d2\u05d1\u05d9\u05d9\u05d4 \u05dc\u05d8\u05d9\u05e4\u05d5\u05dc (ISO string)"
+    },
+    "last_collection_paid_on": {
+      "type": "string",
+      "description": "\u05de\u05ea\u05d9 \u05d1\u05e4\u05e2\u05dd \u05d4\u05d0\u05d7\u05e8\u05d5\u05e0\u05d4 \u05e1\u05d5\u05de\u05e0\u05d4 \u05d2\u05d1\u05d9\u05d9\u05d4 \u05db\u05e0\u05d2\u05d1\u05ea\u05d4 (ISO string)"
+    }
+  },
+  "required": [
+    "name"
+  ]
+}

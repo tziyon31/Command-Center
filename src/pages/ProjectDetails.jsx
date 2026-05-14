@@ -178,18 +178,24 @@ export default function ProjectDetails() {
     setIsSavingCollection(true);
 
     try {
-      await base44.entities.Project.update(project.id, {
+      const payload = {
         collection_due_now: true,
         collection_due_amount: amount,
         collection_due_note: collectionNote,
         collection_due_date: project.collection_due_date || new Date().toISOString(),
-      });
+      };
+      console.log('[CollectionDue] saving payload:', payload);
+      const result = await base44.entities.Project.update(project.id, payload);
+      console.log('[CollectionDue] update result:', result);
 
       setIsCollectionDialogOpen(false);
       setCollectionAmount('');
       setCollectionNote('');
 
       await refreshProjectData();
+    } catch (err) {
+      console.error('[CollectionDue] save failed:', err);
+      alert('שגיאה בשמירה: ' + (err?.message || err));
     } finally {
       setIsSavingCollection(false);
     }
@@ -207,16 +213,22 @@ export default function ProjectDetails() {
     setIsSavingCollection(true);
 
     try {
-      await base44.entities.Project.update(project.id, {
+      const payload = {
         collected_amount: currentCollected + dueAmount,
         last_collection_paid_on: new Date().toISOString(),
         collection_due_now: false,
         collection_due_amount: 0,
         collection_due_note: '',
         collection_due_date: '',
-      });
+      };
+      console.log('[CollectionDue] mark paid payload:', payload);
+      const result = await base44.entities.Project.update(project.id, payload);
+      console.log('[CollectionDue] mark paid result:', result);
 
       await refreshProjectData();
+    } catch (err) {
+      console.error('[CollectionDue] mark paid failed:', err);
+      alert('שגיאה בסימון גבייה: ' + (err?.message || err));
     } finally {
       setIsSavingCollection(false);
     }
@@ -226,14 +238,20 @@ export default function ProjectDetails() {
     setIsSavingCollection(true);
 
     try {
-      await base44.entities.Project.update(project.id, {
+      const payload = {
         collection_due_now: false,
         collection_due_amount: 0,
         collection_due_note: '',
         collection_due_date: '',
-      });
+      };
+      console.log('[CollectionDue] cancel payload:', payload);
+      const result = await base44.entities.Project.update(project.id, payload);
+      console.log('[CollectionDue] cancel result:', result);
 
       await refreshProjectData();
+    } catch (err) {
+      console.error('[CollectionDue] cancel failed:', err);
+      alert('שגיאה בביטול גבייה: ' + (err?.message || err));
     } finally {
       setIsSavingCollection(false);
     }
