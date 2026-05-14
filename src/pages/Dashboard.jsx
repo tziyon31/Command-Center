@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { base44 } from '@/api/base44Client';
 import { useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import BusinessHealthCard from '../components/dashboard/BusinessHealthCard.jsx';
 import ActionCard from '../components/dashboard/ActionCard.jsx';
@@ -45,9 +45,19 @@ const toNumber = (value) => {
   const num = Number(value);
   return Number.isFinite(num) ? num : 0;
 };
+const daysSince = (dateValue) => {
+  if (!dateValue) return null;
+
+  const date = new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return null;
+
+  const diffMs = Date.now() - date.getTime();
+  return Math.floor(diffMs / (1000 * 60 * 60 * 24));
+};
 
 export default function Dashboard() {
   const [quotePeriod, setQuotePeriod] = React.useState('year');
+  const navigate = useNavigate();
 
   const { data: currentUser } = useQuery({
     queryKey: ['currentUser'],
@@ -87,6 +97,22 @@ export default function Dashboard() {
   });
 
   const isTaskWorker = currentUser?.role === 'task_worker';
+
+  const collectionDueMetrics = useMemo(() => {
+    const collectionDueNowProjects = projects.filter((project) =>
+      project.collection_due_now === true &&
+      toNumber(project.collection_due_amount) > 0
+    );
+
+    const collectionDueNowAmount = collectionDueNowProjects.reduce((sum, project) => (
+      sum + toNumber(project.collection_due_amount)
+    ), 0);
+
+    return {
+      collectionDueNowProjects,
+      collectionDueNowAmount,
+    };
+  }, [projects]);
 
   const proposalMetrics = useMemo(() => {
     const now = new Date();
@@ -158,18 +184,6 @@ export default function Dashboard() {
 
       return total > collected;
     });
-    console.table(openCollectionProjects.map((project) => {
-      const total = toNumber(project.total_amount);
-      const collected = toNumber(project.collected_amount);
-
-      return {
-        name: project.name,
-        status: project.status,
-        total_amount: total,
-        collected_amount: collected,
-        outstanding: Math.max(total - collected, 0),
-      };
-    }));
     const totalOutstanding = openCollectionProjects.reduce((sum, project) => {
       const total = toNumber(project.total_amount);
       const collected = toNumber(project.collected_amount);
@@ -184,9 +198,11 @@ export default function Dashboard() {
       wonProposalsCount: proposalMetrics.wonProposals.length,
       decidedProposalsCount: proposalMetrics.decidedCount,
       totalOutstanding,
-      openCollectionProjectsCount: openCollectionProjects.length
+      openCollectionProjectsCount: openCollectionProjects.length,
+      collectionDueNowAmount: collectionDueMetrics.collectionDueNowAmount,
+      collectionDueNowProjectsCount: collectionDueMetrics.collectionDueNowProjects.length,
     };
-  }, [projects, proposalMetrics]);
+  }, [projects, proposalMetrics, collectionDueMetrics]);
 
   // דורש טיפול
   const needsAttention = useMemo(() => {
@@ -227,6 +243,18 @@ export default function Dashboard() {
           data: project
         };
       });
+
+    const collectionDueNow = collectionDueMetrics.collectionDueNowProjects
+      .map((project) => {
+        const amount = toNumber(project.collection_due_amount);
+        const daysOpen = daysSince(project.collection_due_date);
+
+        return {
+          title: project.name || 'פרויקט ללא שם',
+          subtitle: `₪${amount.toLocaleString()}${project.collection_due_note ? ` - ${project.collection_due_note}` : ''}${daysOpen !== null ? ` · נפתחה לפני ${daysOpen} ימים` : ''}`,
+          data: project,
+        };
+      });
     
     // גבייה באיחור
     const overdueInvoices = invoices
@@ -258,11 +286,19 @@ export default function Dashboard() {
     return {
       pricingProposals,
       waitingProposals,
+      collectionDueNow,
       overdueInvoices,
       inactiveProjects,
       todayTasks
     };
-  }, [invoices, projects, proposalMetrics, tasks]);
+  }, [collectionDueMetrics, invoices, projects, proposalMetrics, tasks]);
+
+  const openProjectDetails = (item) => {
+    const projectId = item?.data?.id;
+    if (!projectId) return;
+
+    navigate(createPageUrl(`ProjectDetails?id=${projectId}`));
+  };
 
   // תנועה עסקית
   const recentActivity = useMemo(() => {
@@ -328,6 +364,7 @@ export default function Dashboard() {
             items={needsAttention.todayTasks}
             icon={Calendar}
             color="purple"
+            onItemClick={() => {}}
           />
         </div>
       </div>
@@ -362,7 +399,7 @@ export default function Dashboard() {
             <h2 className="text-3xl font-bold tracking-tight mb-2">בריאות עסקית</h2>
             <p className="text-muted-foreground">המדדים המרכזיים של העסק</p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
             <BusinessHealthCard
               title="הכנסות השנה"
               value={`₪${businessHealth.yearlyRevenue.toLocaleString()}`}
@@ -405,6 +442,15 @@ export default function Dashboard() {
               icon={BarChart3}
               color="blue"
             />
+            <BusinessHealthCard
+              title="גבייה לטיפול עכשיו"
+              value={`₪${businessHealth.collectionDueNowAmount.toLocaleString()}`}
+              subtitle={businessHealth.collectionDueNowProjectsCount > 0
+                ? `${businessHealth.collectionDueNowProjectsCount} פרויקטים דורשים גבייה`
+                : 'אין גביות פתוחות לטיפול'}
+              icon={AlertCircle}
+              color={businessHealth.collectionDueNowProjectsCount > 0 ? 'amber' : 'blue'}
+            />
           </div>
         </div>
 
@@ -431,30 +477,42 @@ export default function Dashboard() {
               items={needsAttention.pricingProposals}
               icon={BarChart3}
               color="amber"
+              onItemClick={openProjectDetails}
             />
             <ActionCard
               title="הצעות ממתינות לתגובה"
               items={needsAttention.waitingProposals}
               icon={Clock}
               color="amber"
+              onItemClick={openProjectDetails}
+            />
+            <ActionCard
+              title="גבייה לטיפול עכשיו"
+              items={needsAttention.collectionDueNow}
+              icon={AlertCircle}
+              color="red"
+              onItemClick={openProjectDetails}
             />
             <ActionCard
               title="גבייה באיחור"
               items={needsAttention.overdueInvoices}
               icon={AlertCircle}
               color="red"
+              onItemClick={() => {}}
             />
             <ActionCard
               title="פרויקטים ללא פעילות"
               items={needsAttention.inactiveProjects}
               icon={Flame}
               color="blue"
+              onItemClick={openProjectDetails}
             />
             <ActionCard
               title="משימות להיום"
               items={needsAttention.todayTasks}
               icon={Calendar}
               color="purple"
+              onItemClick={() => {}}
             />
           </div>
         </div>
