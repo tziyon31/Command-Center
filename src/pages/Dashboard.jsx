@@ -399,11 +399,11 @@ export default function Dashboard() {
               </Select>
             </div>
             <BusinessHealthCard
-              title="גבייה פתוחה"
+              title="יתרת גבייה כוללת"
               value={`₪${businessHealth.totalOutstanding.toLocaleString()}`}
               subtitle={`${businessHealth.openCollectionProjectsCount} פרויקטים עם יתרת גבייה`}
-              icon={AlertCircle}
-              color={businessHealth.openCollectionProjectsCount > 5 ? "red" : "amber"}
+              icon={BarChart3}
+              color="blue"
             />
           </div>
         </div>
