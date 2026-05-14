@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useLocation } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
@@ -84,49 +84,6 @@ export default function ProjectDetails() {
     },
     enabled: !!projectId,
   });
-
-  useEffect(() => {
-    if (!project?.id) return;
-
-    let isCancelled = false;
-
-    const debugLoadCollectionEvents = async () => {
-      try {
-        let events;
-
-        try {
-          events = await base44.entities.CollectionEvent.filter({ project_id: project.id });
-        } catch (error) {
-          const allEvents = await base44.entities.CollectionEvent.list();
-          events = allEvents.filter((item) => item.project_id === project.id);
-        }
-
-        if (isCancelled) return;
-
-        console.log('PROJECT COLLECTION EVENT ENTITY CHECK', {
-          project_id: project.id,
-          project_name: project.name,
-          collected_amount: project.collected_amount,
-          last_collection_paid_on: project.last_collection_paid_on,
-          collection_event_records: events,
-        });
-      } catch (error) {
-        if (isCancelled) return;
-        console.error('[CollectionEvent] debug load failed:', error);
-      }
-    };
-
-    debugLoadCollectionEvents();
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [
-    project?.id,
-    project?.name,
-    project?.collected_amount,
-    project?.last_collection_paid_on,
-  ]);
 
   if (!projectId) {
     return (
@@ -227,9 +184,7 @@ export default function ProjectDetails() {
         collection_due_note: collectionNote,
         collection_due_date: project.collection_due_date || new Date().toISOString(),
       };
-      console.log('[CollectionDue] saving payload:', payload);
-      const result = await base44.entities.Project.update(project.id, payload);
-      console.log('[CollectionDue] update result:', result);
+      await base44.entities.Project.update(project.id, payload);
 
       setIsCollectionDialogOpen(false);
       setCollectionAmount('');
@@ -267,7 +222,6 @@ export default function ProjectDetails() {
         collection_due_note: '',
         collection_due_date: '',
       };
-      console.log('[CollectionDue] mark paid project payload:', projectPayload);
       await base44.entities.Project.update(project.id, projectPayload);
 
       const collectionEventPayload = {
@@ -279,9 +233,7 @@ export default function ProjectDetails() {
         paid_at: now,
         type: 'collection_paid',
       };
-      console.log('[CollectionEvent] create payload:', collectionEventPayload);
-      const createdEvent = await base44.entities.CollectionEvent.create(collectionEventPayload);
-      console.log('[CollectionEvent] created event:', createdEvent);
+      await base44.entities.CollectionEvent.create(collectionEventPayload);
 
       await refreshProjectData();
     } catch (err) {
@@ -302,9 +254,7 @@ export default function ProjectDetails() {
         collection_due_note: '',
         collection_due_date: '',
       };
-      console.log('[CollectionDue] cancel payload:', payload);
-      const result = await base44.entities.Project.update(project.id, payload);
-      console.log('[CollectionDue] cancel result:', result);
+      await base44.entities.Project.update(project.id, payload);
 
       await refreshProjectData();
     } catch (err) {
