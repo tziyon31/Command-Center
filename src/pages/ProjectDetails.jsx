@@ -203,6 +203,8 @@ export default function ProjectDetails() {
 
   const handleMarkCollectionPaid = async () => {
     const dueAmount = toNumber(project.collection_due_amount);
+    const dueNote = project.collection_due_note || '';
+    const openedAt = project.collection_due_date || '';
     const currentCollected = toNumber(project.collected_amount);
 
     if (dueAmount <= 0) {
@@ -213,6 +215,15 @@ export default function ProjectDetails() {
     setIsSavingCollection(true);
 
     try {
+      const existingEvents = Array.isArray(project.collection_events) ? project.collection_events : [];
+      const newEvent = {
+        amount: dueAmount,
+        note: dueNote,
+        opened_at: openedAt,
+        paid_at: new Date().toISOString(),
+        type: 'collection_paid',
+      };
+
       const payload = {
         collected_amount: currentCollected + dueAmount,
         last_collection_paid_on: new Date().toISOString(),
@@ -220,6 +231,7 @@ export default function ProjectDetails() {
         collection_due_amount: 0,
         collection_due_note: '',
         collection_due_date: '',
+        collection_events: [...existingEvents, newEvent],
       };
       console.log('[CollectionDue] mark paid payload:', payload);
       const result = await base44.entities.Project.update(project.id, payload);
