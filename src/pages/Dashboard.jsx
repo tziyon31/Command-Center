@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
@@ -58,6 +58,7 @@ const daysSince = (dateValue) => {
 export default function Dashboard() {
   const [quotePeriod, setQuotePeriod] = React.useState('year');
   const navigate = useNavigate();
+  const collectionDueNowCardRef = useRef(null);
 
   const { data: currentUser } = useQuery({
     queryKey: ['currentUser'],
@@ -300,6 +301,15 @@ export default function Dashboard() {
     navigate(createPageUrl(`ProjectDetails?id=${projectId}`));
   };
 
+  const scrollToCollectionDueNow = () => {
+    if (!collectionDueNowCardRef.current) return;
+
+    collectionDueNowCardRef.current.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    });
+  };
+
   // תנועה עסקית
   const recentActivity = useMemo(() => {
     const activities = [];
@@ -442,15 +452,21 @@ export default function Dashboard() {
               icon={BarChart3}
               color="blue"
             />
-            <BusinessHealthCard
-              title="גבייה לטיפול עכשיו"
-              value={`₪${businessHealth.collectionDueNowAmount.toLocaleString()}`}
-              subtitle={businessHealth.collectionDueNowProjectsCount > 0
-                ? `${businessHealth.collectionDueNowProjectsCount} פרויקטים דורשים גבייה`
-                : 'אין גביות פתוחות לטיפול'}
-              icon={AlertCircle}
-              color={businessHealth.collectionDueNowProjectsCount > 0 ? 'amber' : 'blue'}
-            />
+            <button
+              type="button"
+              onClick={scrollToCollectionDueNow}
+              className="w-full text-right cursor-pointer rounded-xl transition-transform hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            >
+              <BusinessHealthCard
+                title="גבייה לטיפול עכשיו"
+                value={`₪${businessHealth.collectionDueNowAmount.toLocaleString()}`}
+                subtitle={businessHealth.collectionDueNowProjectsCount > 0
+                  ? `${businessHealth.collectionDueNowProjectsCount} פרויקטים דורשים גבייה`
+                  : 'אין גביות פתוחות לטיפול'}
+                icon={AlertCircle}
+                color={businessHealth.collectionDueNowProjectsCount > 0 ? 'amber' : 'blue'}
+              />
+            </button>
           </div>
         </div>
 
@@ -486,13 +502,15 @@ export default function Dashboard() {
               color="amber"
               onItemClick={openProjectDetails}
             />
-            <ActionCard
-              title="גבייה לטיפול עכשיו"
-              items={needsAttention.collectionDueNow}
-              icon={AlertCircle}
-              color="red"
-              onItemClick={openProjectDetails}
-            />
+            <div ref={collectionDueNowCardRef}>
+              <ActionCard
+                title="גבייה לטיפול עכשיו"
+                items={needsAttention.collectionDueNow}
+                icon={AlertCircle}
+                color="red"
+                onItemClick={openProjectDetails}
+              />
+            </div>
             <ActionCard
               title="גבייה באיחור"
               items={needsAttention.overdueInvoices}
