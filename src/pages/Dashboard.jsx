@@ -158,6 +158,18 @@ export default function Dashboard() {
 
       return total > collected;
     });
+    console.table(openCollectionProjects.map((project) => {
+      const total = toNumber(project.total_amount);
+      const collected = toNumber(project.collected_amount);
+
+      return {
+        name: project.name,
+        status: project.status,
+        total_amount: total,
+        collected_amount: collected,
+        outstanding: Math.max(total - collected, 0),
+      };
+    }));
     const totalOutstanding = openCollectionProjects.reduce((sum, project) => {
       const total = toNumber(project.total_amount);
       const collected = toNumber(project.collected_amount);
