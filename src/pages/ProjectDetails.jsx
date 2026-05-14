@@ -1,5 +1,5 @@
-import React from 'react';
-import { useQuery } from '@tanstack/react-query';
+import React, { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useLocation } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
@@ -13,6 +13,16 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 const toNumber = (value) => {
   const num = Number(value);
@@ -47,6 +57,11 @@ export default function ProjectDetails() {
   const location = useLocation();
   const params = new URLSearchParams(location.search);
   const projectId = params.get('id');
+  const queryClient = useQueryClient();
+  const [isCollectionDialogOpen, setIsCollectionDialogOpen] = useState(false);
+  const [collectionAmount, setCollectionAmount] = useState('');
+  const [collectionNote, setCollectionNote] = useState('');
+  const [isSavingCollection, setIsSavingCollection] = useState(false);
 
   const {
     data: project,
@@ -125,6 +140,104 @@ export default function ProjectDetails() {
   const totalAmount = toNumber(project.total_amount);
   const collectedAmount = toNumber(project.collected_amount);
   const outstandingAmount = Math.max(totalAmount - collectedAmount, 0);
+  const hasCollectionDueNow =
+    project.collection_due_now === true &&
+    toNumber(project.collection_due_amount) > 0;
+
+  const refreshProjectData = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['project', projectId] }),
+      queryClient.invalidateQueries({ queryKey: ['projects'] }),
+      queryClient.invalidateQueries({ queryKey: ['client-details'] }),
+    ]);
+  };
+
+  const openCollectionDialog = () => {
+    setCollectionAmount(
+      project.collection_due_amount
+        ? String(project.collection_due_amount)
+        : ''
+    );
+    setCollectionNote(project.collection_due_note || '');
+    setIsCollectionDialogOpen(true);
+  };
+
+  const handleSaveCollectionDue = async () => {
+    const amount = toNumber(collectionAmount);
+
+    if (amount <= 0) {
+      alert('יש להזין סכום גדול מ-0');
+      return;
+    }
+
+    if (amount > outstandingAmount) {
+      alert('הסכום לגבייה לא יכול להיות גדול מיתרת הגבייה הכוללת');
+      return;
+    }
+
+    setIsSavingCollection(true);
+
+    try {
+      await base44.entities.Project.update(project.id, {
+        collection_due_now: true,
+        collection_due_amount: amount,
+        collection_due_note: collectionNote,
+        collection_due_date: project.collection_due_date || new Date().toISOString(),
+      });
+
+      setIsCollectionDialogOpen(false);
+      setCollectionAmount('');
+      setCollectionNote('');
+
+      await refreshProjectData();
+    } finally {
+      setIsSavingCollection(false);
+    }
+  };
+
+  const handleMarkCollectionPaid = async () => {
+    const dueAmount = toNumber(project.collection_due_amount);
+    const currentCollected = toNumber(project.collected_amount);
+
+    if (dueAmount <= 0) {
+      alert('אין סכום גבייה תקין לסימון');
+      return;
+    }
+
+    setIsSavingCollection(true);
+
+    try {
+      await base44.entities.Project.update(project.id, {
+        collected_amount: currentCollected + dueAmount,
+        last_collection_paid_on: new Date().toISOString(),
+        collection_due_now: false,
+        collection_due_amount: 0,
+        collection_due_note: '',
+        collection_due_date: '',
+      });
+
+      await refreshProjectData();
+    } finally {
+      setIsSavingCollection(false);
+    }
+  };
+
+  const handleCancelCollectionDue = async () => {
+    setIsSavingCollection(true);
+
+    try {
+      await base44.entities.Project.update(project.id, {
+        collection_due_now: false,
+        collection_due_amount: 0,
+        collection_due_note: '',
+        collection_due_date: '',
+      });
+
+      await refreshProjectData();
+    } finally {
+      setIsSavingCollection(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 p-6">
@@ -196,11 +309,122 @@ export default function ProjectDetails() {
         <Card className="border-0 shadow-sm">
           <CardHeader>
             <CardTitle>גבייה לטיפול עכשיו</CardTitle>
+            <CardDescription>
+              פתיחת גבייה לפי אבן הדרך הנוכחית בפרויקט.
+            </CardDescription>
           </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">יוגדר בשלב הבא.</p>
+          <CardContent className="space-y-4">
+            {hasCollectionDueNow ? (
+              <>
+                <div className="grid gap-4 md:grid-cols-4">
+                  <DetailField label="סכום לגבייה עכשיו">
+                    <span className="text-2xl font-semibold">
+                      {formatCurrency(project.collection_due_amount)}
+                    </span>
+                  </DetailField>
+                  <DetailField label="סיבה / אבן דרך">
+                    {project.collection_due_note || '-'}
+                  </DetailField>
+                  <DetailField label="נפתח בתאריך">
+                    {formatDate(project.collection_due_date)}
+                  </DetailField>
+                  <DetailField label="סומן לאחרונה כנגבה">
+                    {formatDate(project.last_collection_paid_on)}
+                  </DetailField>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    onClick={handleMarkCollectionPaid}
+                    disabled={isSavingCollection}
+                  >
+                    {isSavingCollection ? 'מעדכן...' : 'סמן כנגבה'}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={openCollectionDialog}
+                    disabled={isSavingCollection}
+                  >
+                    ערוך
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={handleCancelCollectionDue}
+                    disabled={isSavingCollection}
+                  >
+                    בטל גבייה
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-muted-foreground">
+                  אין גבייה פתוחה לטיפול כרגע.
+                </p>
+                <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
+                  <span>סומן לאחרונה כנגבה: {formatDate(project.last_collection_paid_on)}</span>
+                </div>
+                <Button onClick={openCollectionDialog}>
+                  פתח גבייה לשלב
+                </Button>
+              </>
+            )}
           </CardContent>
         </Card>
+
+        <Dialog open={isCollectionDialogOpen} onOpenChange={setIsCollectionDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{hasCollectionDueNow ? 'עריכת גבייה לשלב' : 'פתיחת גבייה לשלב'}</DialogTitle>
+              <DialogDescription>
+                הזן את הסכום והסיבה לגבייה הנוכחית.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="collection-amount">סכום לגבייה עכשיו</Label>
+                <Input
+                  id="collection-amount"
+                  type="number"
+                  value={collectionAmount}
+                  onChange={(event) => setCollectionAmount(event.target.value)}
+                  placeholder="לדוגמה: 5000"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="collection-note">סיבה / אבן דרך</Label>
+                <Input
+                  id="collection-note"
+                  value={collectionNote}
+                  onChange={(event) => setCollectionNote(event.target.value)}
+                  placeholder="לדוגמה: מקדמה / סיום שלב תכנון"
+                />
+              </div>
+
+              <p className="text-xs text-muted-foreground">
+                יתרת הגבייה הכוללת כרגע: {formatCurrency(outstandingAmount)}
+              </p>
+            </div>
+
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setIsCollectionDialogOpen(false)}
+                disabled={isSavingCollection}
+              >
+                ביטול
+              </Button>
+              <Button
+                onClick={handleSaveCollectionDue}
+                disabled={isSavingCollection}
+              >
+                {isSavingCollection ? 'שומר...' : 'שמור'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );
