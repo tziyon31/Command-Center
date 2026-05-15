@@ -2,20 +2,28 @@ import React from 'react';
 import { Card, CardContent } from "@/components/ui/card";
 import { CheckCircle2, XCircle, Clock } from 'lucide-react';
 
-export default function QuoteBreakdownCard({ proposalBreakdown }) {
+const QUOTE_PERIOD_LABELS = {
+  month: 'החודש',
+  quarter: 'הרבעון',
+  year: 'השנה',
+  all: 'הכל',
+};
+
+export default function QuoteBreakdownCard({ proposalBreakdown, period = 'year' }) {
   const open = proposalBreakdown?.open || 0;
   const won = proposalBreakdown?.won || 0;
   const lost = proposalBreakdown?.lost || 0;
   const total = proposalBreakdown?.total || 0;
 
   const pct = (n) => total > 0 ? Math.round((n / total) * 100) : 0;
+  const periodLabel = QUOTE_PERIOD_LABELS[period] || QUOTE_PERIOD_LABELS.year;
 
   return (
     <Card>
       <CardContent className="p-6">
         <div className="mb-4">
           <h3 className="font-semibold text-lg">פילוח הצעות מחיר</h3>
-          <p className="text-sm text-muted-foreground">{total} הצעות בתקופה שנבחרה</p>
+          <p className="text-sm text-muted-foreground">{total} הצעות בתקופה: {periodLabel}</p>
         </div>
         <div className="space-y-3">
           <div className="flex items-center justify-between">

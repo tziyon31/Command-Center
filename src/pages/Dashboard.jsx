@@ -557,6 +557,7 @@ export default function Dashboard() {
           </div>
           <QuoteBreakdownCard
             proposalBreakdown={proposalMetrics.breakdown}
+            period={quotePeriod}
           />
         </div>
 
