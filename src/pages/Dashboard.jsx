@@ -33,17 +33,27 @@ const PROPOSAL_STATUSES = [
 ];
 const COLLECTION_RELEVANT_STATUSES = ['signed', 'planning', 'submission', 'execution', 'completed'];
 const RECORDED_COLLECTION_TYPES = ['collection_paid', 'collection_paid_legacy'];
+const COLLECTION_PERIOD_SUBTITLES = {
+  month: 'לפי פעולות גבייה שתועדו החודש',
+  quarter: 'לפי פעולות גבייה שתועדו ברבעון',
+  year: 'לפי פעולות גבייה שתועדו השנה',
+  all: 'לפי כל פעולות הגבייה שתועדו במערכת',
+};
 
-const isPaidAtInSelectedYear = (paidAt, yearStart) => {
+const hasValidPaidAt = (paidAt) => {
   if (!paidAt) return false;
 
   const paidDate = new Date(paidAt);
-  if (Number.isNaN(paidDate.getTime())) return false;
+  return !Number.isNaN(paidDate.getTime());
+};
 
-  const yearEnd = new Date(yearStart);
-  yearEnd.setFullYear(yearEnd.getFullYear() + 1);
+const isEventInCollectionPeriod = (event, period, now) => {
+  if (!RECORDED_COLLECTION_TYPES.includes(event.type)) return false;
+  if (!hasValidPaidAt(event.paid_at)) return false;
+  if (period === 'all') return true;
 
-  return paidDate >= yearStart && paidDate < yearEnd;
+  const paidDate = new Date(event.paid_at);
+  return paidDate >= getPeriodStart(period, now);
 };
 
 const getPeriodStart = (period, now) => (
@@ -70,6 +80,7 @@ const daysSince = (dateValue) => {
 
 export default function Dashboard() {
   const [quotePeriod, setQuotePeriod] = React.useState('year');
+  const [collectionPeriod, setCollectionPeriod] = React.useState('year');
   const navigate = useNavigate();
   const collectionDueNowCardRef = useRef(null);
 
@@ -182,14 +193,10 @@ export default function Dashboard() {
   // חישובי בריאות עסקית
   const businessHealth = useMemo(() => {
     const now = new Date();
-    const yearStart = startOfYear(now);
     const events = Array.isArray(collectionEvents) ? collectionEvents : [];
 
-    const yearlyRecordedCollection = events
-      .filter((event) => (
-        RECORDED_COLLECTION_TYPES.includes(event.type) &&
-        isPaidAtInSelectedYear(event.paid_at, yearStart)
-      ))
+    const recordedCollection = events
+      .filter((event) => isEventInCollectionPeriod(event, collectionPeriod, now))
       .reduce((sum, event) => sum + toNumber(event.amount), 0);
 
     // רווחיות ממוצעת
@@ -216,7 +223,7 @@ export default function Dashboard() {
     }, 0);
     
     return {
-      yearlyRecordedCollection,
+      recordedCollection,
       avgProfit,
       closeRate: proposalMetrics.closeRate,
       wonProposalsCount: proposalMetrics.wonProposals.length,
@@ -226,7 +233,7 @@ export default function Dashboard() {
       collectionDueNowAmount: collectionDueMetrics.collectionDueNowAmount,
       collectionDueNowProjectsCount: collectionDueMetrics.collectionDueNowProjects.length,
     };
-  }, [projects, collectionEvents, proposalMetrics, collectionDueMetrics]);
+  }, [projects, collectionEvents, collectionPeriod, proposalMetrics, collectionDueMetrics]);
 
   // דורש טיפול
   const needsAttention = useMemo(() => {
@@ -324,6 +331,12 @@ export default function Dashboard() {
     navigate(createPageUrl(`ProjectDetails?id=${projectId}`));
   };
 
+  const openCollectionActivity = (activity) => {
+    if (!activity?.projectId) return;
+
+    navigate(createPageUrl(`ProjectDetails?id=${activity.projectId}`));
+  };
+
   const scrollToCollectionDueNow = () => {
     if (!collectionDueNowCardRef.current) return;
 
@@ -333,53 +346,22 @@ export default function Dashboard() {
     });
   };
 
-  // תנועה עסקית
+  // תנועה עסקית — רק גביות אמיתיות שנרשמו במערכת (לא legacy)
   const recentActivity = useMemo(() => {
-    const activities = [];
-    const sevenDaysAgo = subDays(new Date(), 7);
-    
-    // לידים חדשים (פרויקטים בסטטוס lead)
-    projects
-      .filter(p => p.status === 'lead' && new Date(p.created_date) >= sevenDaysAgo)
-      .forEach(p => activities.push({
-        type: 'lead',
-        title: 'ליד חדש',
-        description: p.name,
-        date: p.created_date
+    const events = Array.isArray(collectionEvents) ? collectionEvents : [];
+
+    return events
+      .filter((event) => event.type === 'collection_paid' && hasValidPaidAt(event.paid_at))
+      .sort((a, b) => new Date(b.paid_at).getTime() - new Date(a.paid_at).getTime())
+      .slice(0, 10)
+      .map((event) => ({
+        type: 'collection_paid',
+        title: 'גבייה בוצעה',
+        description: `${event.project_name || 'פרויקט ללא שם'} · ₪${toNumber(event.amount).toLocaleString()}`,
+        date: event.paid_at,
+        projectId: event.project_id,
       }));
-    
-    // הצעות שנשלחו
-    quotes
-      .filter(q => ['sent', 'pending'].includes(q.status) && new Date(q.date) >= sevenDaysAgo)
-      .forEach(q => activities.push({
-        type: 'quote',
-        title: 'הצעת מחיר נשלחה',
-        description: `הצעה ${q.quote_number}`,
-        date: q.date
-      }));
-    
-    // הצעות שנחתמו
-    quotes
-      .filter(q => q.status === 'signed' && new Date(q.updated_date) >= sevenDaysAgo)
-      .forEach(q => activities.push({
-        type: 'signed',
-        title: 'הצעה נחתמה! 🎉',
-        description: `הצעה ${q.quote_number}`,
-        date: q.updated_date
-      }));
-    
-    // פרויקטים שהושלמו
-    projects
-      .filter(p => p.status === 'completed' && new Date(p.updated_date) >= sevenDaysAgo)
-      .forEach(p => activities.push({
-        type: 'completed',
-        title: 'פרויקט הושלם',
-        description: p.name,
-        date: p.updated_date
-      }));
-    
-    return activities.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [projects, quotes]);
+  }, [collectionEvents]);
 
   // תצוגה למבצע משימות
   if (isTaskWorker) {
@@ -433,14 +415,27 @@ export default function Dashboard() {
             <p className="text-muted-foreground">המדדים המרכזיים של העסק</p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
-            <BusinessHealthCard
-              title="גבייה רשומה השנה"
-              value={`₪${toNumber(businessHealth.yearlyRecordedCollection).toLocaleString()}`}
-              subtitle="לפי פעולות גבייה שתועדו במערכת"
-              icon={DollarSign}
-              color="green"
-              trend={12}
-            />
+            <div className="space-y-2">
+              <BusinessHealthCard
+                title="גבייה רשומה"
+                value={`₪${toNumber(businessHealth.recordedCollection).toLocaleString()}`}
+                subtitle={COLLECTION_PERIOD_SUBTITLES[collectionPeriod]}
+                icon={DollarSign}
+                color="green"
+                trend={12}
+              />
+              <Select value={collectionPeriod} onValueChange={setCollectionPeriod}>
+                <SelectTrigger className="text-xs h-8">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="month">החודש</SelectItem>
+                  <SelectItem value="quarter">הרבעון</SelectItem>
+                  <SelectItem value="year">השנה</SelectItem>
+                  <SelectItem value="all">הכל</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
             <BusinessHealthCard
               title="רווחיות ממוצעת"
               value={`₪${Math.round(businessHealth.avgProfit).toLocaleString()}`}
@@ -560,7 +555,10 @@ export default function Dashboard() {
 
         {/* 🟢 אזור 3 - תנועה עסקית */}
         <div>
-          <ActivityFeed activities={recentActivity} />
+          <ActivityFeed
+            activities={recentActivity}
+            onActivityClick={openCollectionActivity}
+          />
         </div>
       </div>
     </div>
