@@ -22,6 +22,8 @@ import { format, subDays, startOfYear, startOfMonth, startOfQuarter } from 'date
 import { he } from 'date-fns/locale';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import QuoteBreakdownCard from '../components/dashboard/QuoteBreakdownCard.jsx';
+// TEMP DEBUG: remove after legacy collection migration verification.
+import { verifyLegacyCollectionMigration } from '@/lib/verifyLegacyCollectionMigration';
 
 const OPEN_PROPOSAL_STATUSES = ['pricing', 'waiting'];
 const WON_PROPOSAL_STATUSES = ['signed'];
@@ -57,6 +59,7 @@ const daysSince = (dateValue) => {
 
 export default function Dashboard() {
   const [quotePeriod, setQuotePeriod] = React.useState('year');
+  const [isVerifyingLegacyMigration, setIsVerifyingLegacyMigration] = React.useState(false);
   const navigate = useNavigate();
   const collectionDueNowCardRef = useRef(null);
 
@@ -98,6 +101,19 @@ export default function Dashboard() {
   });
 
   const isTaskWorker = currentUser?.role === 'task_worker';
+  const isVerificationAdmin = currentUser?.role === 'admin';
+
+  const handleVerifyLegacyCollectionMigration = async () => {
+    setIsVerifyingLegacyMigration(true);
+
+    try {
+      await verifyLegacyCollectionMigration();
+    } catch (error) {
+      console.error('[LegacyCollectionMigrationVerification] failed:', error);
+    } finally {
+      setIsVerifyingLegacyMigration(false);
+    }
+  };
 
   const collectionDueMetrics = useMemo(() => {
     const collectionDueNowProjects = projects.filter((project) =>
@@ -539,6 +555,22 @@ export default function Dashboard() {
         <div>
           <ActivityFeed activities={recentActivity} />
         </div>
+
+        {/* TEMP DEBUG: read-only legacy migration verification. Remove after check. */}
+        {isVerificationAdmin && (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <p className="text-sm text-muted-foreground mb-3">
+              אימות מיגרציית גביות עבר (קריאה בלבד — בדוק את ה-console)
+            </p>
+            <Button
+              variant="outline"
+              onClick={handleVerifyLegacyCollectionMigration}
+              disabled={isVerifyingLegacyMigration}
+            >
+              {isVerifyingLegacyMigration ? 'מריץ אימות...' : 'הרץ אימות מיגרציית גביות עבר'}
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );
