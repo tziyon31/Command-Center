@@ -32,6 +32,9 @@ const PROPOSAL_STATUSES = [
   ...LOST_PROPOSAL_STATUSES,
 ];
 const COLLECTION_RELEVANT_STATUSES = ['signed', 'planning', 'submission', 'execution', 'completed'];
+const ACTIVE_INACTIVITY_STATUSES = ['pricing', 'waiting', 'signed', 'planning', 'submission', 'execution'];
+const INACTIVE_PROJECT_EXCLUDED_STATUSES = ['rejected', 'cancelled', 'collection_completed'];
+const INACTIVITY_THRESHOLD_DAYS = 14;
 const RECORDED_COLLECTION_TYPES = ['collection_paid', 'collection_paid_legacy'];
 const COLLECTION_PERIOD_SUBTITLES = {
   month: 'לפי פעולות גבייה שתועדו החודש',
@@ -76,6 +79,32 @@ const daysSince = (dateValue) => {
 
   const diffMs = Date.now() - date.getTime();
   return Math.floor(diffMs / (1000 * 60 * 60 * 24));
+};
+
+const getProjectLastActivityDate = (project) => {
+  const value = project?.updated_date || project?.created_date;
+  if (!value) return null;
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const isProjectEligibleForInactivityCheck = (project) => {
+  const status = project?.status;
+  if (!status || INACTIVE_PROJECT_EXCLUDED_STATUSES.includes(status)) return false;
+  if (ACTIVE_INACTIVITY_STATUSES.includes(status)) return true;
+
+  if (status === 'completed') {
+    const total = toNumber(project.total_amount);
+    const collected = toNumber(project.collected_amount);
+    const hasOutstanding = total > collected;
+    const hasCollectionDueNow =
+      project.collection_due_now === true && toNumber(project.collection_due_amount) > 0;
+
+    return hasOutstanding || hasCollectionDueNow;
+  }
+
+  return false;
 };
 
 export default function Dashboard() {
@@ -199,10 +228,9 @@ export default function Dashboard() {
       .filter((event) => isEventInCollectionPeriod(event, collectionPeriod, now))
       .reduce((sum, event) => sum + toNumber(event.amount), 0);
 
-    // רווחיות ממוצעת
     const completedProjects = projects.filter(p => p.status === 'completed' || p.status === 'collection_completed');
-    const avgProfit = completedProjects.length > 0 
-      ? completedProjects.reduce((sum, p) => sum + (p.total_amount || 0), 0) / completedProjects.length 
+    const averageProjectValue = completedProjects.length > 0
+      ? completedProjects.reduce((sum, p) => sum + toNumber(p.total_amount), 0) / completedProjects.length
       : 0;
     
     // גבייה פתוחה
@@ -224,7 +252,7 @@ export default function Dashboard() {
     
     return {
       recordedCollection,
-      avgProfit,
+      averageProjectValue,
       closeRate: proposalMetrics.closeRate,
       wonProposalsCount: proposalMetrics.wonProposals.length,
       decidedProposalsCount: proposalMetrics.decidedCount,
@@ -239,7 +267,7 @@ export default function Dashboard() {
   const needsAttention = useMemo(() => {
     const now = new Date();
     const sevenDaysAgo = subDays(now, 7);
-    const fourteenDaysAgo = subDays(now, 14);
+    const inactivityThresholdDate = subDays(now, INACTIVITY_THRESHOLD_DAYS);
     const today = now.toISOString().split('T')[0];
     
     // הצעות פתוחות מעל 7 ימים
@@ -296,13 +324,35 @@ export default function Dashboard() {
         data: i
       }));
     
-    // פרויקטים בלי פעילות 14 יום
     const inactiveProjects = projects
-      .filter(p => !['completed', 'collection_completed'].includes(p.status) && new Date(p.updated_date) < fourteenDaysAgo)
-      .map(p => ({
-        title: p.name,
-        subtitle: `ללא פעילות ${Math.floor((now.getTime() - new Date(p.updated_date).getTime()) / (1000 * 60 * 60 * 24))} ימים`,
-        data: p
+      .filter(isProjectEligibleForInactivityCheck)
+      .map((project) => {
+        const lastActivity = getProjectLastActivityDate(project);
+        const daysInactive = lastActivity
+          ? Math.floor((now.getTime() - lastActivity.getTime()) / (1000 * 60 * 60 * 24))
+          : null;
+
+        return {
+          project,
+          lastActivity,
+          daysInactive,
+        };
+      })
+      .filter(({ lastActivity }) => (
+        lastActivity === null || lastActivity < inactivityThresholdDate
+      ))
+      .sort((a, b) => {
+        if (a.lastActivity === null && b.lastActivity === null) return 0;
+        if (a.lastActivity === null) return -1;
+        if (b.lastActivity === null) return 1;
+        return b.daysInactive - a.daysInactive;
+      })
+      .map(({ project, daysInactive }) => ({
+        title: project.name || 'פרויקט ללא שם',
+        subtitle: daysInactive !== null
+          ? `ללא פעילות ${daysInactive} ימים`
+          : 'ללא פעילות - אין תאריך עדכון',
+        data: project,
       }));
     
     // משימות להיום
@@ -437,9 +487,9 @@ export default function Dashboard() {
               </Select>
             </div>
             <BusinessHealthCard
-              title="רווחיות ממוצעת"
-              value={`₪${Math.round(businessHealth.avgProfit).toLocaleString()}`}
-              subtitle="לפרויקט מושלם"
+              title="היקף פרויקט ממוצע"
+              value={`₪${Math.round(businessHealth.averageProjectValue).toLocaleString()}`}
+              subtitle="לפרויקט מאושר"
               icon={TrendingUp}
               color="blue"
             />
