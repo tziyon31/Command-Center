@@ -347,13 +347,24 @@ export default function Dashboard() {
         if (b.lastActivity === null) return 1;
         return b.daysInactive - a.daysInactive;
       })
-      .map(({ project, daysInactive }) => ({
-        title: project.name || 'פרויקט ללא שם',
-        subtitle: daysInactive !== null
-          ? `ללא פעילות ${daysInactive} ימים`
-          : 'ללא פעילות - אין תאריך עדכון',
-        data: project,
-      }));
+      .map(({ project, daysInactive }) => {
+        const total = toNumber(project.total_amount);
+        const collected = toNumber(project.collected_amount);
+        const outstandingAmount = Math.max(total - collected, 0);
+
+        return {
+          title: project.name || 'פרויקט ללא שם',
+          subtitle: daysInactive !== null
+            ? `ללא פעילות ${daysInactive} ימים`
+            : 'ללא פעילות - אין תאריך עדכון',
+          data: project,
+          dialogExtras: {
+            status: project.status,
+            daysInactive,
+            outstandingAmount,
+          },
+        };
+      });
     
     // משימות להיום
     const todayTasks = tasks
