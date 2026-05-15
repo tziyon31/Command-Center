@@ -32,6 +32,19 @@ const PROPOSAL_STATUSES = [
   ...LOST_PROPOSAL_STATUSES,
 ];
 const COLLECTION_RELEVANT_STATUSES = ['signed', 'planning', 'submission', 'execution', 'completed'];
+const RECORDED_COLLECTION_TYPES = ['collection_paid', 'collection_paid_legacy'];
+
+const isPaidAtInSelectedYear = (paidAt, yearStart) => {
+  if (!paidAt) return false;
+
+  const paidDate = new Date(paidAt);
+  if (Number.isNaN(paidDate.getTime())) return false;
+
+  const yearEnd = new Date(yearStart);
+  yearEnd.setFullYear(yearEnd.getFullYear() + 1);
+
+  return paidDate >= yearStart && paidDate < yearEnd;
+};
 
 const getPeriodStart = (period, now) => (
   period === 'month' ? startOfMonth(now)
@@ -94,6 +107,12 @@ export default function Dashboard() {
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
     queryFn: () => base44.entities.Project.list(),
+    enabled: currentUser?.role === 'admin' || currentUser?.role === 'office_manager' || currentUser?.role === 'project_worker',
+  });
+
+  const { data: collectionEvents = [] } = useQuery({
+    queryKey: ['collection-events'],
+    queryFn: () => base44.entities.CollectionEvent.list(),
     enabled: currentUser?.role === 'admin' || currentUser?.role === 'office_manager' || currentUser?.role === 'project_worker',
   });
 
@@ -164,11 +183,15 @@ export default function Dashboard() {
   const businessHealth = useMemo(() => {
     const now = new Date();
     const yearStart = startOfYear(now);
-    const thisYearProjects = projects.filter(p => new Date(p.created_date) >= yearStart);
-    
-    // סך הכנסות שנה
-    const yearlyRevenue = thisYearProjects.reduce((sum, p) => sum + (p.collected_amount || 0), 0);
-    
+    const events = Array.isArray(collectionEvents) ? collectionEvents : [];
+
+    const yearlyRecordedCollection = events
+      .filter((event) => (
+        RECORDED_COLLECTION_TYPES.includes(event.type) &&
+        isPaidAtInSelectedYear(event.paid_at, yearStart)
+      ))
+      .reduce((sum, event) => sum + toNumber(event.amount), 0);
+
     // רווחיות ממוצעת
     const completedProjects = projects.filter(p => p.status === 'completed' || p.status === 'collection_completed');
     const avgProfit = completedProjects.length > 0 
@@ -193,7 +216,7 @@ export default function Dashboard() {
     }, 0);
     
     return {
-      yearlyRevenue,
+      yearlyRecordedCollection,
       avgProfit,
       closeRate: proposalMetrics.closeRate,
       wonProposalsCount: proposalMetrics.wonProposals.length,
@@ -203,7 +226,7 @@ export default function Dashboard() {
       collectionDueNowAmount: collectionDueMetrics.collectionDueNowAmount,
       collectionDueNowProjectsCount: collectionDueMetrics.collectionDueNowProjects.length,
     };
-  }, [projects, proposalMetrics, collectionDueMetrics]);
+  }, [projects, collectionEvents, proposalMetrics, collectionDueMetrics]);
 
   // דורש טיפול
   const needsAttention = useMemo(() => {
@@ -411,9 +434,9 @@ export default function Dashboard() {
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
             <BusinessHealthCard
-              title="הכנסות השנה"
-              value={`₪${businessHealth.yearlyRevenue.toLocaleString()}`}
-              subtitle="סך כל הגבייה בשנה זו"
+              title="גבייה רשומה השנה"
+              value={`₪${toNumber(businessHealth.yearlyRecordedCollection).toLocaleString()}`}
+              subtitle="לפי פעולות גבייה שתועדו במערכת"
               icon={DollarSign}
               color="green"
               trend={12}
