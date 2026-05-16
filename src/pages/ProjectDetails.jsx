@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useLocation } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
@@ -83,6 +83,16 @@ const isValidCollectionTargetDate = (value) => {
   return date >= today;
 };
 
+const hasProjectTargetDate = (project) => (
+  Boolean(String(project?.collection_due_target_date || '').trim())
+);
+
+const getCollectionTargetDateForInput = (project) => {
+  if (!hasProjectTargetDate(project)) return '';
+
+  return toDateInputValue(project.collection_due_target_date);
+};
+
 const DetailField = ({ label, children }) => (
   <div className="space-y-1">
     <div className="text-xs text-muted-foreground">{label}</div>
@@ -122,6 +132,26 @@ export default function ProjectDetails() {
     },
     enabled: !!projectId,
   });
+
+  useEffect(() => {
+    if (!isCollectionDialogOpen || !project) return;
+
+    setCollectionAmount(
+      project.collection_due_amount ? String(project.collection_due_amount) : ''
+    );
+    setCollectionNote(project.collection_due_note || '');
+    setCollectionTargetDate(getCollectionTargetDateForInput(project));
+  }, [isCollectionDialogOpen, project]);
+
+  const handleCollectionDialogOpenChange = (open) => {
+    setIsCollectionDialogOpen(open);
+
+    if (!open) {
+      setCollectionAmount('');
+      setCollectionNote('');
+      setCollectionTargetDate('');
+    }
+  };
 
   if (!projectId) {
     return (
@@ -183,7 +213,7 @@ export default function ProjectDetails() {
     toNumber(project.collection_due_amount) > 0;
   const hasMissingTargetDate =
     hasCollectionDueNow &&
-    !project.collection_due_target_date;
+    !hasProjectTargetDate(project);
 
   const refreshProjectData = async () => {
     await Promise.all([
@@ -195,12 +225,10 @@ export default function ProjectDetails() {
 
   const openCollectionDialog = () => {
     setCollectionAmount(
-      project.collection_due_amount
-        ? String(project.collection_due_amount)
-        : ''
+      project.collection_due_amount ? String(project.collection_due_amount) : ''
     );
     setCollectionNote(project.collection_due_note || '');
-    setCollectionTargetDate(toDateInputValue(project.collection_due_target_date));
+    setCollectionTargetDate(getCollectionTargetDateForInput(project));
     setIsCollectionDialogOpen(true);
   };
 
@@ -242,10 +270,7 @@ export default function ProjectDetails() {
       };
       await base44.entities.Project.update(project.id, payload);
 
-      setIsCollectionDialogOpen(false);
-      setCollectionAmount('');
-      setCollectionNote('');
-      setCollectionTargetDate('');
+      handleCollectionDialogOpenChange(false);
 
       await refreshProjectData();
     } catch (err) {
@@ -477,8 +502,8 @@ export default function ProjectDetails() {
           </CardContent>
         </Card>
 
-        <Dialog open={isCollectionDialogOpen} onOpenChange={setIsCollectionDialogOpen}>
-          <DialogContent>
+        <Dialog open={isCollectionDialogOpen} onOpenChange={handleCollectionDialogOpenChange}>
+          <DialogContent className="max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>{hasCollectionDueNow ? 'עריכת גבייה לשלב' : 'פתיחת גבייה לשלב'}</DialogTitle>
               <DialogDescription>
@@ -513,9 +538,15 @@ export default function ProjectDetails() {
                 <Input
                   id="collection-target-date"
                   type="date"
+                  className="w-full"
                   value={collectionTargetDate}
                   onChange={(event) => setCollectionTargetDate(event.target.value)}
                 />
+                {hasCollectionDueNow && !hasProjectTargetDate(project) && (
+                  <p className="text-xs text-amber-700">
+                    לגבייה זו חסר תאריך יעד. יש להשלים תאריך לפני שמירה.
+                  </p>
+                )}
               </div>
 
               <p className="text-xs text-muted-foreground">
@@ -526,7 +557,7 @@ export default function ProjectDetails() {
             <DialogFooter>
               <Button
                 variant="outline"
-                onClick={() => setIsCollectionDialogOpen(false)}
+                onClick={() => handleCollectionDialogOpenChange(false)}
                 disabled={isSavingCollection}
               >
                 ביטול
