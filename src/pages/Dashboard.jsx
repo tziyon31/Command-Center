@@ -74,11 +74,66 @@ const toNumber = (value) => {
 const daysSince = (dateValue) => {
   if (!dateValue) return null;
 
-  const date = new Date(dateValue);
-  if (Number.isNaN(date.getTime())) return null;
+  const date = parseDateOnly(dateValue);
+  if (!date) return null;
 
   const diffMs = Date.now() - date.getTime();
   return Math.floor(diffMs / (1000 * 60 * 60 * 24));
+};
+
+const parseDateOnly = (value) => {
+  if (!value) return null;
+
+  const datePart = String(value).split('T')[0];
+  const parts = datePart.split('-');
+  if (parts.length === 3) {
+    const date = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+    if (!Number.isNaN(date.getTime())) return date;
+  }
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const formatShortDate = (value) => {
+  const date = parseDateOnly(value);
+  if (!date) return null;
+
+  return new Intl.DateTimeFormat('he-IL').format(date);
+};
+
+const hasCollectionTargetDate = (project) => (
+  Boolean(project?.collection_due_target_date && String(project.collection_due_target_date).trim())
+);
+
+const isOverdueCollection = (project, now = new Date()) => {
+  if (project.collection_due_now !== true || toNumber(project.collection_due_amount) <= 0) {
+    return false;
+  }
+
+  if (!hasCollectionTargetDate(project)) return false;
+
+  const targetDate = parseDateOnly(project.collection_due_target_date);
+  if (!targetDate) return false;
+
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  targetDate.setHours(0, 0, 0, 0);
+
+  return targetDate < today;
+};
+
+const getDaysOverdue = (targetDateValue, now = new Date()) => {
+  const targetDate = parseDateOnly(targetDateValue);
+  if (!targetDate) return null;
+
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  targetDate.setHours(0, 0, 0, 0);
+
+  if (targetDate >= today) return null;
+
+  return Math.floor((today.getTime() - targetDate.getTime()) / (1000 * 60 * 60 * 24));
 };
 
 const getProjectLastActivityDate = (project) => {
@@ -121,12 +176,6 @@ export default function Dashboard() {
   const { data: quotes = [] } = useQuery({
     queryKey: ['quotes'],
     queryFn: () => base44.entities.Quote.list(),
-    enabled: currentUser?.role === 'admin' || currentUser?.role === 'office_manager',
-  });
-
-  const { data: invoices = [] } = useQuery({
-    queryKey: ['invoices'],
-    queryFn: () => base44.entities.Invoice.list(),
     enabled: currentUser?.role === 'admin' || currentUser?.role === 'office_manager',
   });
 
@@ -306,23 +355,30 @@ export default function Dashboard() {
     const collectionDueNow = collectionDueMetrics.collectionDueNowProjects
       .map((project) => {
         const amount = toNumber(project.collection_due_amount);
-        const daysOpen = daysSince(project.collection_due_date);
+        const notePart = project.collection_due_note ? ` - ${project.collection_due_note}` : '';
+        const targetLabel = hasCollectionTargetDate(project)
+          ? `יעד: ${formatShortDate(project.collection_due_target_date)}`
+          : 'ללא תאריך יעד';
 
         return {
           title: project.name || 'פרויקט ללא שם',
-          subtitle: `₪${amount.toLocaleString()}${project.collection_due_note ? ` - ${project.collection_due_note}` : ''}${daysOpen !== null ? ` · נפתחה לפני ${daysOpen} ימים` : ''}`,
+          subtitle: `₪${amount.toLocaleString()}${notePart} - ${targetLabel}`,
           data: project,
         };
       });
-    
-    // גבייה באיחור
-    const overdueInvoices = invoices
-      .filter(i => i.status !== 'paid' && i.due_date && new Date(i.due_date) < now)
-      .map(i => ({
-        title: `חשבונית ${i.invoice_number}`,
-        subtitle: `איחור ${Math.floor((now.getTime() - new Date(i.due_date).getTime()) / (1000 * 60 * 60 * 24))} ימים - ₪${(i.amount - i.paid_amount).toLocaleString()}`,
-        data: i
-      }));
+
+    const overdueCollections = projects
+      .filter((project) => isOverdueCollection(project, now))
+      .map((project) => {
+        const amount = toNumber(project.collection_due_amount);
+        const daysOverdue = getDaysOverdue(project.collection_due_target_date, now);
+
+        return {
+          title: project.name || 'פרויקט ללא שם',
+          subtitle: `₪${amount.toLocaleString()} - תאריך יעד עבר לפני ${daysOverdue} ימים`,
+          data: project,
+        };
+      });
     
     const inactiveProjects = projects
       .filter(isProjectEligibleForInactivityCheck)
@@ -379,11 +435,11 @@ export default function Dashboard() {
       pricingProposals,
       waitingProposals,
       collectionDueNow,
-      overdueInvoices,
+      overdueCollections,
       inactiveProjects,
       todayTasks
     };
-  }, [collectionDueMetrics, invoices, projects, proposalMetrics, tasks]);
+  }, [collectionDueMetrics, projects, proposalMetrics, tasks]);
 
   const openProjectDetails = (item) => {
     const projectId = item?.data?.id;
@@ -593,10 +649,11 @@ export default function Dashboard() {
             </div>
             <ActionCard
               title="גבייה באיחור"
-              items={needsAttention.overdueInvoices}
+              items={needsAttention.overdueCollections}
               icon={AlertCircle}
               color="red"
-              onItemClick={() => {}}
+              onItemClick={openProjectDetails}
+              emptyMessage="הכל מסודר! אין גביות שעברו את תאריך היעד"
             />
             <ActionCard
               title="פרויקטים ללא פעילות"

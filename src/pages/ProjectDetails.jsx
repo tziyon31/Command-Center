@@ -40,10 +40,47 @@ const formatCurrency = (value) => (
 const formatDate = (value) => {
   if (!value) return '-';
 
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '-';
+  const date = parseDateOnly(value);
+  if (!date) return '-';
 
   return new Intl.DateTimeFormat('he-IL').format(date);
+};
+
+const parseDateOnly = (value) => {
+  if (!value) return null;
+
+  const datePart = String(value).split('T')[0];
+  const parts = datePart.split('-');
+  if (parts.length === 3) {
+    const date = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+    if (!Number.isNaN(date.getTime())) return date;
+  }
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const toDateInputValue = (value) => {
+  if (!value) return '';
+
+  const datePart = String(value).split('T')[0];
+  if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return datePart;
+
+  const date = parseDateOnly(value);
+  if (!date) return '';
+
+  return date.toISOString().split('T')[0];
+};
+
+const isValidCollectionTargetDate = (value) => {
+  const date = parseDateOnly(value);
+  if (!date) return false;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  date.setHours(0, 0, 0, 0);
+
+  return date >= today;
 };
 
 const DetailField = ({ label, children }) => (
@@ -61,6 +98,7 @@ export default function ProjectDetails() {
   const [isCollectionDialogOpen, setIsCollectionDialogOpen] = useState(false);
   const [collectionAmount, setCollectionAmount] = useState('');
   const [collectionNote, setCollectionNote] = useState('');
+  const [collectionTargetDate, setCollectionTargetDate] = useState('');
   const [isSavingCollection, setIsSavingCollection] = useState(false);
 
   const {
@@ -143,6 +181,9 @@ export default function ProjectDetails() {
   const hasCollectionDueNow =
     project.collection_due_now === true &&
     toNumber(project.collection_due_amount) > 0;
+  const hasMissingTargetDate =
+    hasCollectionDueNow &&
+    !project.collection_due_target_date;
 
   const refreshProjectData = async () => {
     await Promise.all([
@@ -159,6 +200,7 @@ export default function ProjectDetails() {
         : ''
     );
     setCollectionNote(project.collection_due_note || '');
+    setCollectionTargetDate(toDateInputValue(project.collection_due_target_date));
     setIsCollectionDialogOpen(true);
   };
 
@@ -175,20 +217,35 @@ export default function ProjectDetails() {
       return;
     }
 
+    if (!collectionTargetDate.trim()) {
+      alert('יש לבחור תאריך יעד לגבייה');
+      return;
+    }
+
+    if (!isValidCollectionTargetDate(collectionTargetDate)) {
+      alert('תאריך היעד לא יכול להיות בעבר');
+      return;
+    }
+
     setIsSavingCollection(true);
 
     try {
+      const isEditingExistingCollection = hasCollectionDueNow;
       const payload = {
         collection_due_now: true,
         collection_due_amount: amount,
         collection_due_note: collectionNote,
-        collection_due_date: project.collection_due_date || new Date().toISOString(),
+        collection_due_target_date: collectionTargetDate.split('T')[0],
+        collection_due_date: isEditingExistingCollection
+          ? project.collection_due_date
+          : new Date().toISOString(),
       };
       await base44.entities.Project.update(project.id, payload);
 
       setIsCollectionDialogOpen(false);
       setCollectionAmount('');
       setCollectionNote('');
+      setCollectionTargetDate('');
 
       await refreshProjectData();
     } catch (err) {
@@ -221,6 +278,7 @@ export default function ProjectDetails() {
         collection_due_amount: 0,
         collection_due_note: '',
         collection_due_date: '',
+        collection_due_target_date: '',
       };
       await base44.entities.Project.update(project.id, projectPayload);
 
@@ -253,6 +311,7 @@ export default function ProjectDetails() {
         collection_due_amount: 0,
         collection_due_note: '',
         collection_due_date: '',
+        collection_due_target_date: '',
       };
       await base44.entities.Project.update(project.id, payload);
 
@@ -342,7 +401,21 @@ export default function ProjectDetails() {
           <CardContent className="space-y-4">
             {hasCollectionDueNow ? (
               <>
-                <div className="grid gap-4 md:grid-cols-4">
+                {hasMissingTargetDate && (
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                    <span className="font-medium">חסר תאריך יעד לגבייה</span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={openCollectionDialog}
+                      disabled={isSavingCollection}
+                    >
+                      ערוך
+                    </Button>
+                  </div>
+                )}
+
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                   <DetailField label="סכום לגבייה עכשיו">
                     <span className="text-2xl font-semibold">
                       {formatCurrency(project.collection_due_amount)}
@@ -354,10 +427,16 @@ export default function ProjectDetails() {
                   <DetailField label="נפתח בתאריך">
                     {formatDate(project.collection_due_date)}
                   </DetailField>
-                  <DetailField label="סומן לאחרונה כנגבה">
-                    {formatDate(project.last_collection_paid_on)}
+                  <DetailField label="תאריך יעד לגבייה">
+                    {project.collection_due_target_date
+                      ? formatDate(project.collection_due_target_date)
+                      : 'חסר'}
                   </DetailField>
                 </div>
+
+                <p className="text-sm text-muted-foreground">
+                  סומן לאחרונה כנגבה: {formatDate(project.last_collection_paid_on)}
+                </p>
 
                 <div className="flex flex-wrap gap-2">
                   <Button
@@ -403,7 +482,7 @@ export default function ProjectDetails() {
             <DialogHeader>
               <DialogTitle>{hasCollectionDueNow ? 'עריכת גבייה לשלב' : 'פתיחת גבייה לשלב'}</DialogTitle>
               <DialogDescription>
-                הזן את הסכום והסיבה לגבייה הנוכחית.
+                הזן את הסכום, הסיבה ותאריך היעד לגבייה הנוכחית.
               </DialogDescription>
             </DialogHeader>
 
@@ -426,6 +505,16 @@ export default function ProjectDetails() {
                   value={collectionNote}
                   onChange={(event) => setCollectionNote(event.target.value)}
                   placeholder="לדוגמה: מקדמה / סיום שלב תכנון"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="collection-target-date">תאריך יעד לגבייה</Label>
+                <Input
+                  id="collection-target-date"
+                  type="date"
+                  value={collectionTargetDate}
+                  onChange={(event) => setCollectionTargetDate(event.target.value)}
                 />
               </div>
 

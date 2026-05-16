@@ -86,6 +86,7 @@ export default function ActionCard({
   color = "amber",
   onItemClick,
   maxVisibleItems = DEFAULT_MAX_VISIBLE_ITEMS,
+  emptyMessage = 'הכל מסודר! אין פריטים הדורשים טיפול',
 }) {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const visibleItems = items.slice(0, maxVisibleItems);
@@ -125,7 +126,7 @@ export default function ActionCard({
             </Badge>
           </div>
           {items.length === 0 ? (
-            <p className="text-sm text-muted-foreground">הכל מסודר! אין פריטים הדורשים טיפול</p>
+            <p className="text-sm text-muted-foreground">{emptyMessage}</p>
           ) : (
             <>
               <div className="space-y-3">
