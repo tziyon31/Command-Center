@@ -151,7 +151,13 @@ export default function InvoiceUpload() {
   return (
     <div className="min-h-screen bg-slate-50 p-6 max-w-3xl mx-auto space-y-6">
       {/* Header */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <Link to={createPageUrl('Dashboard')}>
+          <Button variant="ghost" size="sm" className="gap-1">
+            <ArrowRight className="w-4 h-4" />
+            חזרה לדשבורד
+          </Button>
+        </Link>
         <Link to={createPageUrl('Projects')}>
           <Button variant="ghost" size="sm" className="gap-1">
             <ArrowRight className="w-4 h-4" />

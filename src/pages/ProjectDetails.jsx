@@ -352,11 +352,17 @@ export default function ProjectDetails() {
   return (
     <div className="min-h-screen bg-slate-50 p-6">
       <div className="max-w-[1100px] mx-auto space-y-6">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button asChild variant="ghost" size="sm" className="gap-1">
+            <Link to={createPageUrl('Dashboard')}>
+              <ArrowRight className="w-4 h-4" />
+              חזרה לדשבורד
+            </Link>
+          </Button>
           <Button asChild variant="ghost" size="sm" className="gap-1">
             <Link to={createPageUrl('Projects')}>
               <ArrowRight className="w-4 h-4" />
-              פרויקטים
+              חזרה לפרויקטים
             </Link>
           </Button>
         </div>

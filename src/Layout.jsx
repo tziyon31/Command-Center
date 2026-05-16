@@ -13,7 +13,20 @@ import {
 import { base44 } from '@/api/base44Client';
 import { useQuery } from '@tanstack/react-query';
 
+const resolveActiveNavPage = (currentPageName) => {
+  if (currentPageName === 'ProjectDetails' || currentPageName === 'InvoiceUpload') {
+    return 'Projects';
+  }
+
+  if (currentPageName === 'ClientDetails') {
+    return 'Clients';
+  }
+
+  return currentPageName;
+};
+
 export default function Layout({ children, currentPageName }) {
+  const activeNavPage = resolveActiveNavPage(currentPageName);
   const { data: currentUser } = useQuery({
     queryKey: ['currentUser'],
     queryFn: () => base44.auth.me(),
@@ -64,7 +77,7 @@ export default function Layout({ children, currentPageName }) {
               <div className="flex items-center gap-2">
                 {navItems.map(item => {
                   const Icon = item.icon;
-                  const isActive = currentPageName === item.name;
+                  const isActive = activeNavPage === item.name;
                   return (
                     <Link key={item.name} to={createPageUrl(item.name)}>
                       <Button 

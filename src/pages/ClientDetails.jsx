@@ -151,11 +151,17 @@ export default function ClientDetails() {
     <div className="min-h-screen bg-slate-50 p-6 space-y-6 max-w-[1400px] mx-auto">
 
       {/* HEADER */}
-      <div className="flex items-center gap-3 mb-2">
+      <div className="flex items-center gap-2 flex-wrap mb-2">
+        <Link to={createPageUrl('Dashboard')}>
+          <Button variant="ghost" size="sm" className="gap-1">
+            <ArrowRight className="w-4 h-4" />
+            חזרה לדשבורד
+          </Button>
+        </Link>
         <Link to={createPageUrl('Clients')}>
           <Button variant="ghost" size="sm" className="gap-1">
             <ArrowRight className="w-4 h-4" />
-            לקוחות
+            חזרה ללקוחות
           </Button>
         </Link>
       </div>
