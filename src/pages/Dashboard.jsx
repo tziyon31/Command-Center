@@ -490,7 +490,7 @@ export default function Dashboard() {
               {format(new Date(), 'EEEE, dd MMMM yyyy', { locale: he })}
             </p>
           </div>
-          <TodayTasksCard tasks={todayOpenTasks} />
+          <TodayTasksCard tasks={todayOpenTasks} projects={projects} />
         </div>
       </div>
     );
@@ -655,7 +655,7 @@ export default function Dashboard() {
               color="blue"
               onItemClick={openProjectDetails}
             />
-            <TodayTasksCard tasks={todayOpenTasks} />
+            <TodayTasksCard tasks={todayOpenTasks} projects={projects} />
           </div>
         </div>
 

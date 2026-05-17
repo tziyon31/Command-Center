@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { base44 } from '@/api/base44Client';
+import { createPageUrl } from '@/utils';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -8,6 +10,13 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import {
   Dialog,
   DialogContent,
@@ -20,6 +29,7 @@ import { Calendar, Plus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const DEFAULT_MAX_VISIBLE_ITEMS = 5;
+const NO_PROJECT_VALUE = 'none';
 
 const getTodayDateString = () => new Date().toISOString().split('T')[0];
 
@@ -36,7 +46,51 @@ const formatShortDate = (value) => {
   return new Intl.DateTimeFormat('he-IL').format(date);
 };
 
-function TaskRow({ task, onComplete, isCompleting }) {
+const getTaskProjectId = (task) => task?.project_id || null;
+
+const getTaskProjectName = (task) => {
+  const name = task?.project_name || task?.related_project_name;
+  return name ? String(name).trim() : '';
+};
+
+function TaskRow({ task, onComplete, isCompleting, onOpenProject }) {
+  const projectId = getTaskProjectId(task);
+  const projectName = getTaskProjectName(task);
+  const canOpenProject = Boolean(projectId && onOpenProject);
+
+  const handleOpenProject = () => {
+    if (canOpenProject) onOpenProject(projectId);
+  };
+
+  const titleBlock = (
+  <>
+      <div className="font-medium text-sm mb-1">{task.title}</div>
+      {projectName && (
+        <div className="text-xs text-muted-foreground">
+          פרויקט: {canOpenProject ? (
+            <button
+              type="button"
+              onClick={handleOpenProject}
+              className="underline underline-offset-2 hover:text-primary"
+            >
+              {projectName}
+            </button>
+          ) : (
+            projectName
+          )}
+        </div>
+      )}
+      {task.description && (
+        <div className="text-xs text-muted-foreground mt-1">{task.description}</div>
+      )}
+      {task.due_date && (
+        <div className="text-xs text-muted-foreground mt-1">
+          תאריך: {formatShortDate(task.due_date)}
+        </div>
+      )}
+    </>
+  );
+
   return (
     <div className="flex items-start gap-3 p-4 rounded-lg border border-slate-200 bg-slate-50/50 text-right">
       <Checkbox
@@ -48,37 +102,49 @@ function TaskRow({ task, onComplete, isCompleting }) {
         className="mt-0.5"
         aria-label={`סמן את "${task.title}" כהושלם`}
       />
-      <div className="flex-1 min-w-0">
-        <div className="font-medium text-sm mb-1">{task.title}</div>
-        {task.description && (
-          <div className="text-xs text-muted-foreground">{task.description}</div>
-        )}
-        {task.due_date && (
-          <div className="text-xs text-muted-foreground mt-1">
-            תאריך: {formatShortDate(task.due_date)}
-          </div>
-        )}
-      </div>
+      {canOpenProject ? (
+        <button
+          type="button"
+          onClick={handleOpenProject}
+          className="flex-1 min-w-0 text-right hover:bg-slate-100/80 rounded-md -m-1 p-1 transition-colors"
+        >
+          {titleBlock}
+        </button>
+      ) : (
+        <div className="flex-1 min-w-0">{titleBlock}</div>
+      )}
     </div>
   );
 }
 
-export default function TodayTasksCard({ tasks = [] }) {
+export default function TodayTasksCard({ tasks = [], projects = [] }) {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isAllDialogOpen, setIsAllDialogOpen] = useState(false);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [dueDate, setDueDate] = useState(getTodayDateString());
+  const [selectedProjectId, setSelectedProjectId] = useState(NO_PROJECT_VALUE);
   const [completingTaskId, setCompletingTaskId] = useState(null);
+
+  const sortedProjects = useMemo(() => (
+    [...projects].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'he'))
+  ), [projects]);
 
   const visibleTasks = tasks.slice(0, DEFAULT_MAX_VISIBLE_ITEMS);
   const hasMoreTasks = tasks.length > DEFAULT_MAX_VISIBLE_ITEMS;
+
+  const openProjectDetails = (projectId) => {
+    if (!projectId) return;
+    navigate(createPageUrl(`ProjectDetails?id=${projectId}`));
+  };
 
   const resetAddForm = () => {
     setTitle('');
     setDescription('');
     setDueDate(getTodayDateString());
+    setSelectedProjectId(NO_PROJECT_VALUE);
   };
 
   const handleAddDialogOpenChange = (open) => {
@@ -122,13 +188,25 @@ export default function TodayTasksCard({ tasks = [] }) {
       return;
     }
 
-    createMutation.mutate({
+    const payload = {
       title: trimmedTitle,
       description: description.trim(),
       due_date: dueDate.split('T')[0],
       is_completed: false,
       created_at: new Date().toISOString(),
-    });
+    };
+
+    if (selectedProjectId !== NO_PROJECT_VALUE) {
+      const project = sortedProjects.find((item) => item.id === selectedProjectId);
+      if (project?.id) {
+        payload.project_id = project.id;
+        if (project.name) {
+          payload.project_name = project.name;
+        }
+      }
+    }
+
+    createMutation.mutate(payload);
   };
 
   const handleCompleteTask = (task) => {
@@ -152,6 +230,7 @@ export default function TodayTasksCard({ tasks = [] }) {
           task={task}
           onComplete={handleCompleteTask}
           isCompleting={completingTaskId === task.id || completeMutation.isPending}
+          onOpenProject={openProjectDetails}
         />
       ))}
     </div>
@@ -211,7 +290,7 @@ export default function TodayTasksCard({ tasks = [] }) {
           <DialogHeader>
             <DialogTitle>הוספת משימה</DialogTitle>
             <DialogDescription>
-              הזן פרטי משימה ותאריך יעד.
+              הזן פרטי משימה, תאריך יעד ושיוך פרויקט אופציונלי.
             </DialogDescription>
           </DialogHeader>
 
@@ -246,6 +325,23 @@ export default function TodayTasksCard({ tasks = [] }) {
                 value={dueDate}
                 onChange={(event) => setDueDate(event.target.value)}
               />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="task-project">שיוך לפרויקט</Label>
+              <Select value={selectedProjectId} onValueChange={setSelectedProjectId}>
+                <SelectTrigger id="task-project">
+                  <SelectValue placeholder="בחר פרויקט" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_PROJECT_VALUE}>ללא שיוך לפרויקט</SelectItem>
+                  {sortedProjects.map((project) => (
+                    <SelectItem key={project.id} value={project.id}>
+                      {project.name || 'פרויקט ללא שם'}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
 
