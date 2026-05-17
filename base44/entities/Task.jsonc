@@ -4,28 +4,24 @@
   "properties": {
     "project_id": {
       "type": "string",
-      "description": "מזהה פרויקט"
-    },
-    "related_project_id": {
-      "type": "string",
-      "description": "מזהה פרויקט קשור (אופציונלי)"
+      "description": "\u05de\u05d6\u05d4\u05d4 \u05e4\u05e8\u05d5\u05d9\u05e7\u05d8 (\u05d0\u05d5\u05e4\u05e6\u05d9\u05d5\u05e0\u05dc\u05d9)"
     },
     "related_project_name": {
       "type": "string",
-      "description": "שם הפרויקט הקשור"
+      "description": "\u05e9\u05dd \u05d4\u05e4\u05e8\u05d5\u05d9\u05e7\u05d8 \u05d4\u05e7\u05e9\u05d5\u05e8 (\u05d0\u05d5\u05e4\u05e6\u05d9\u05d5\u05e0\u05dc\u05d9)"
     },
     "title": {
       "type": "string",
-      "description": "כותרת המשימה"
+      "description": "\u05db\u05d5\u05ea\u05e8\u05ea"
     },
     "description": {
       "type": "string",
-      "description": "תיאור / הערה"
+      "description": "\u05ea\u05d9\u05d0\u05d5\u05e8"
     },
     "due_date": {
       "type": "string",
       "format": "date",
-      "description": "תאריך המשימה (ISO date string)"
+      "description": "\u05ea\u05d0\u05e8\u05d9\u05da \u05d9\u05e2\u05d3"
     },
     "status": {
       "type": "string",
@@ -35,7 +31,7 @@
         "completed"
       ],
       "default": "pending",
-      "description": "סטטוס (legacy)"
+      "description": "\u05e1\u05d8\u05d8\u05d5\u05e1"
     },
     "priority": {
       "type": "string",
@@ -45,24 +41,20 @@
         "high"
       ],
       "default": "medium",
-      "description": "עדיפות"
+      "description": "\u05e2\u05d3\u05d9\u05e4\u05d5\u05ea"
     },
     "assigned_to": {
       "type": "string",
-      "description": "מוקצה ל"
+      "description": "\u05de\u05d5\u05e7\u05e6\u05d4 \u05dc"
     },
     "is_completed": {
       "type": "boolean",
       "default": false,
-      "description": "האם המשימה הושלמה"
+      "description": "\u05d4\u05d0\u05dd \u05d4\u05d5\u05e9\u05dc\u05de\u05d4"
     },
     "completed_at": {
       "type": "string",
-      "description": "מתי הושלמה (ISO string)"
-    },
-    "created_at": {
-      "type": "string",
-      "description": "מתי נוצרה (ISO string)"
+      "description": "\u05de\u05ea\u05d9 \u05d4\u05d5\u05e9\u05dc\u05de\u05d4 (ISO string)"
     }
   },
   "required": [
