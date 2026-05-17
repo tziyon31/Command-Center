@@ -4,24 +4,28 @@
   "properties": {
     "project_id": {
       "type": "string",
-      "description": "\u05de\u05d6\u05d4\u05d4 \u05e4\u05e8\u05d5\u05d9\u05e7\u05d8"
+      "description": "מזהה פרויקט"
+    },
+    "related_project_id": {
+      "type": "string",
+      "description": "מזהה פרויקט קשור (אופציונלי)"
     },
     "related_project_name": {
       "type": "string",
-      "description": "\u05e9\u05dd \u05d4\u05e4\u05e8\u05d5\u05d9\u05e7\u05d8 \u05d4\u05e7\u05e9\u05d5\u05e8"
+      "description": "שם הפרויקט הקשור"
     },
     "title": {
       "type": "string",
-      "description": "\u05db\u05d5\u05ea\u05e8\u05ea"
+      "description": "כותרת המשימה"
     },
     "description": {
       "type": "string",
-      "description": "\u05ea\u05d9\u05d0\u05d5\u05e8"
+      "description": "תיאור / הערה"
     },
     "due_date": {
       "type": "string",
       "format": "date",
-      "description": "\u05ea\u05d0\u05e8\u05d9\u05da \u05d9\u05e2\u05d3"
+      "description": "תאריך המשימה (ISO date string)"
     },
     "status": {
       "type": "string",
@@ -31,7 +35,7 @@
         "completed"
       ],
       "default": "pending",
-      "description": "\u05e1\u05d8\u05d8\u05d5\u05e1"
+      "description": "סטטוס (legacy)"
     },
     "priority": {
       "type": "string",
@@ -41,24 +45,27 @@
         "high"
       ],
       "default": "medium",
-      "description": "\u05e2\u05d3\u05d9\u05e4\u05d5\u05ea"
+      "description": "עדיפות"
     },
     "assigned_to": {
       "type": "string",
-      "description": "\u05de\u05d5\u05e7\u05e6\u05d4 \u05dc"
+      "description": "מוקצה ל"
     },
     "is_completed": {
       "type": "boolean",
       "default": false,
-      "description": "\u05d4\u05d0\u05dd \u05d4\u05d5\u05e9\u05dc\u05de\u05d4"
+      "description": "האם המשימה הושלמה"
     },
     "completed_at": {
       "type": "string",
-      "description": "\u05de\u05ea\u05d9 \u05d4\u05d5\u05e9\u05dc\u05de\u05d4 (ISO string)"
+      "description": "מתי הושלמה (ISO string)"
+    },
+    "created_at": {
+      "type": "string",
+      "description": "מתי נוצרה (ISO string)"
     }
   },
   "required": [
-    "project_id",
     "title"
   ]
 }

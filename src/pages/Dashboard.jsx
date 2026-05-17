@@ -14,7 +14,6 @@ import {
   AlertCircle,
   Clock,
   Flame,
-  Calendar,
   Plus,
   BarChart3
 } from 'lucide-react';
@@ -22,6 +21,7 @@ import { format, subDays, startOfYear, startOfMonth, startOfQuarter } from 'date
 import { he } from 'date-fns/locale';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import QuoteBreakdownCard from '../components/dashboard/QuoteBreakdownCard.jsx';
+import TodayTasksCard from '../components/dashboard/TodayTasksCard.jsx';
 
 const OPEN_PROPOSAL_STATUSES = ['pricing', 'waiting'];
 const WON_PROPOSAL_STATUSES = ['signed'];
@@ -206,6 +206,15 @@ export default function Dashboard() {
   });
 
   const isTaskWorker = currentUser?.role === 'task_worker';
+
+  const todayOpenTasks = useMemo(() => {
+    const today = new Date().toISOString().split('T')[0];
+
+    return tasks.filter((task) => {
+      const dueDate = String(task.due_date || '').split('T')[0];
+      return task.is_completed !== true && dueDate === today;
+    });
+  }, [tasks]);
 
   const collectionDueMetrics = useMemo(() => {
     const collectionDueNowProjects = projects.filter((project) =>
@@ -422,24 +431,14 @@ export default function Dashboard() {
         };
       });
     
-    // משימות להיום
-    const todayTasks = tasks
-      .filter(t => t.status !== 'completed' && t.due_date === today)
-      .map(t => ({
-        title: t.title,
-        subtitle: t.description || 'משימה דחופה',
-        data: t
-      }));
-    
     return {
       pricingProposals,
       waitingProposals,
       collectionDueNow,
       overdueCollections,
       inactiveProjects,
-      todayTasks
     };
-  }, [collectionDueMetrics, projects, proposalMetrics, tasks]);
+  }, [collectionDueMetrics, projects, proposalMetrics]);
 
   const openProjectDetails = (item) => {
     const projectId = item?.data?.id;
@@ -491,13 +490,7 @@ export default function Dashboard() {
               {format(new Date(), 'EEEE, dd MMMM yyyy', { locale: he })}
             </p>
           </div>
-          <ActionCard
-            title="משימות להיום"
-            items={needsAttention.todayTasks}
-            icon={Calendar}
-            color="purple"
-            onItemClick={() => {}}
-          />
+          <TodayTasksCard tasks={todayOpenTasks} />
         </div>
       </div>
     );
@@ -662,13 +655,7 @@ export default function Dashboard() {
               color="blue"
               onItemClick={openProjectDetails}
             />
-            <ActionCard
-              title="משימות להיום"
-              items={needsAttention.todayTasks}
-              icon={Calendar}
-              color="purple"
-              onItemClick={() => {}}
-            />
+            <TodayTasksCard tasks={todayOpenTasks} />
           </div>
         </div>
 
