@@ -522,18 +522,17 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50">
-      {import.meta.env.DEV && (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="fixed bottom-4 left-4 z-50 text-xs shadow-md"
-          onClick={handleRunReminderSanityCheck}
-          disabled={sanityCheckRunning}
-        >
-          {sanityCheckRunning ? 'Running sanity check...' : 'Run Reminder Sanity Check'}
-        </Button>
-      )}
+      {/* TEMPORARY: visible in prod for sanity check — remove after verification */}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="fixed bottom-4 left-4 z-50 text-xs shadow-md"
+        onClick={handleRunReminderSanityCheck}
+        disabled={sanityCheckRunning}
+      >
+        {sanityCheckRunning ? 'Running sanity check...' : 'Run Reminder Sanity Check'}
+      </Button>
       <div className="max-w-[1600px] mx-auto px-8 py-12 space-y-16">
         {/* Header */}
         <div className="flex items-end justify-between">
