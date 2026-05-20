@@ -1,0 +1,139 @@
+{
+  "name": "Reminder",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "\u05db\u05d5\u05ea\u05e8\u05ea \u05d4\u05ea\u05d6\u05db\u05d5\u05e8\u05ea"
+    },
+    "description": {
+      "type": "string",
+      "description": "\u05ea\u05d9\u05d0\u05d5\u05e8"
+    },
+    "client_name": {
+      "type": "string",
+      "description": "\u05e9\u05dd \u05d4\u05dc\u05e7\u05d5\u05d7 (\u05d7\u05d5\u05d1\u05d4)"
+    },
+    "client_id": {
+      "type": "string",
+      "description": "\u05de\u05d6\u05d4\u05d4 \u05dc\u05e7\u05d5\u05d7"
+    },
+    "project_name": {
+      "type": "string",
+      "description": "\u05e9\u05dd \u05d4\u05e4\u05e8\u05d5\u05d9\u05e7\u05d8"
+    },
+    "project_id": {
+      "type": "string",
+      "description": "\u05de\u05d6\u05d4\u05d4 \u05e4\u05e8\u05d5\u05d9\u05e7\u05d8"
+    },
+    "assigned_to_user_id": {
+      "type": "string",
+      "description": "\u05de\u05d6\u05d4\u05d4 \u05de\u05e9\u05ea\u05de\u05e9 \u05de\u05d5\u05e7\u05e6\u05d4 (\u05d4\u05db\u05e0\u05d4 \u05dc\u05e2\u05ea\u05d9\u05d3)"
+    },
+    "assigned_to_name": {
+      "type": "string",
+      "description": "\u05e9\u05dd \u05d4\u05de\u05e9\u05ea\u05de\u05e9 \u05d4\u05de\u05d5\u05e7\u05e6\u05d4"
+    },
+    "source_type": {
+      "type": "string",
+      "description": "\u05e1\u05d5\u05d2 \u05d4\u05de\u05e7\u05d5\u05e8 \u05e9\u05d9\u05e6\u05e8 \u05d0\u05ea \u05d4\u05ea\u05d6\u05db\u05d5\u05e8\u05ea (\u05dc\u05d3\u05d5\u05d2\u05de\u05d4: inquiry, project, collection_due)"
+    },
+    "source_id": {
+      "type": "string",
+      "description": "\u05de\u05d6\u05d4\u05d4 \u05d4\u05e8\u05e9\u05d5\u05de\u05d4 \u05e9\u05d9\u05e6\u05e8\u05d4 \u05d0\u05ea \u05d4\u05ea\u05d6\u05db\u05d5\u05e8\u05ea"
+    },
+    "condition_key": {
+      "type": "string",
+      "description": "\u05de\u05e4\u05ea\u05d7 \u05dc\u05d5\u05d2\u05d9 \u05dc\u05de\u05e0\u05d9\u05e2\u05ea \u05db\u05e4\u05d9\u05dc\u05d5\u05d9\u05d5\u05ea, \u05dc\u05d3\u05d5\u05d2\u05de\u05d4: collection_due_overdue:456"
+    },
+    "action_url": {
+      "type": "string",
+      "description": "\u05e7\u05d9\u05e9\u05d5\u05e8 \u05dc\u05e4\u05ea\u05d9\u05d7\u05ea \u05d4\u05e8\u05e9\u05d5\u05de\u05d4 \u05d4\u05de\u05d3\u05d5\u05d9\u05e7\u05ea"
+    },
+    "action_label": {
+      "type": "string",
+      "description": "\u05ea\u05d5\u05d5\u05d9\u05ea \u05d4\u05e4\u05e2\u05d5\u05dc\u05d4, \u05dc\u05d3\u05d5\u05d2\u05de\u05d4: \u05e4\u05ea\u05d7 \u05e4\u05e8\u05d5\u05d9\u05e7\u05d8"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "resolved",
+        "cancelled",
+        "snoozed"
+      ],
+      "default": "active",
+      "description": "\u05e1\u05d8\u05d8\u05d5\u05e1 \u05d4\u05ea\u05d6\u05db\u05d5\u05e8\u05ea"
+    },
+    "frequency": {
+      "type": "string",
+      "enum": [
+        "immediate",
+        "daily",
+        "weekly",
+        "due_date_based",
+        "custom"
+      ],
+      "default": "daily",
+      "description": "\u05ea\u05d3\u05d9\u05e8\u05d5\u05ea \u05d4\u05ea\u05d6\u05db\u05d5\u05e8\u05ea"
+    },
+    "default_time": {
+      "type": "string",
+      "default": "07:00",
+      "description": "\u05e9\u05e2\u05ea \u05d1\u05e8\u05d9\u05e8\u05ea \u05de\u05d7\u05d3\u05dc \u05dc\u05ea\u05d6\u05db\u05d5\u05e8\u05ea"
+    },
+    "next_remind_at": {
+      "type": "string",
+      "description": "\u05de\u05ea\u05d9 \u05dc\u05e9\u05dc\u05d5\u05d7 \u05d0\u05ea \u05d4\u05ea\u05d6\u05db\u05d5\u05e8\u05ea \u05d4\u05d1\u05d0\u05d4 (ISO string)"
+    },
+    "last_reminded_at": {
+      "type": "string",
+      "description": "\u05de\u05ea\u05d9 \u05e0\u05e9\u05dc\u05d7\u05d4 \u05d4\u05ea\u05d6\u05db\u05d5\u05e8\u05ea \u05dc\u05d0\u05d7\u05e8\u05d5\u05e0\u05d4 (ISO string)"
+    },
+    "active_since": {
+      "type": "string",
+      "description": "\u05de\u05ea\u05d9 \u05d4\u05ea\u05d6\u05db\u05d5\u05e8\u05ea \u05d4\u05d5\u05e4\u05e2\u05dc\u05d4 (ISO string)"
+    },
+    "is_snoozed": {
+      "type": "boolean",
+      "default": false,
+      "description": "\u05d4\u05d0\u05dd \u05d4\u05ea\u05d6\u05db\u05d5\u05e8\u05ea \u05d1\u05de\u05e6\u05d1 \u05e0\u05d5\u05d3\u05e0\u05d9\u05e7"
+    },
+    "snoozed_until": {
+      "type": "string",
+      "description": "\u05e2\u05d3 \u05de\u05ea\u05d9 \u05de\u05de\u05ea\u05d9\u05e0\u05d4 (ISO string)"
+    },
+    "reactivated_at": {
+      "type": "string",
+      "description": "\u05de\u05ea\u05d9 \u05d4\u05d5\u05e4\u05e2\u05dc\u05d4 \u05de\u05d7\u05d3\u05e9 (ISO string)"
+    },
+    "reactivation_count": {
+      "type": "number",
+      "default": 0,
+      "description": "\u05de\u05e1\u05e4\u05e8 \u05e4\u05e2\u05de\u05d9\u05dd \u05e9\u05d4\u05d5\u05e4\u05e2\u05dc\u05d4 \u05de\u05d7\u05d3\u05e9"
+    },
+    "future_email_enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "\u05d4\u05d0\u05dd \u05dc\u05e9\u05dc\u05d5\u05d7 \u05de\u05d9\u05d9\u05dc \u05d1\u05e2\u05ea\u05d9\u05d3 (\u05d4\u05db\u05e0\u05d4 \u05dc\u05e2\u05ea\u05d9\u05d3 \u05d1\u05dc\u05d1\u05d3)"
+    },
+    "resolved_at": {
+      "type": "string",
+      "description": "\u05de\u05ea\u05d9 \u05e0\u05e4\u05ea\u05e8\u05d4 \u05d4\u05ea\u05d6\u05db\u05d5\u05e8\u05ea (ISO string)"
+    },
+    "resolved_reason": {
+      "type": "string",
+      "description": "\u05e1\u05d9\u05d1\u05ea \u05d4\u05e1\u05d2\u05d9\u05e8\u05d4"
+    }
+  },
+  "required": [
+    "title",
+    "client_name",
+    "source_type",
+    "source_id",
+    "condition_key",
+    "action_url",
+    "status",
+    "frequency"
+  ]
+}
