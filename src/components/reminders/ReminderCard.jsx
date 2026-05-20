@@ -2,6 +2,16 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -52,6 +62,19 @@ const SNOOZE_OPTIONS = [
   },
 ];
 
+const toDatetimeLocalValue = (date) => {
+  const pad = (value) => String(value).padStart(2, '0');
+
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+};
+
+const getDefaultCustomSnoozeValue = () => {
+  const date = new Date();
+  date.setDate(date.getDate() + 1);
+  date.setHours(7, 0, 0, 0);
+  return toDatetimeLocalValue(date);
+};
+
 const formatShortDateTime = (value) => {
   if (!value) return null;
 
@@ -80,6 +103,8 @@ const getActiveDays = (activeSince) => {
 export default function ReminderCard({ reminder, onSnoozed, className }) {
   const navigate = useNavigate();
   const [isSnoozing, setIsSnoozing] = useState(false);
+  const [customSnoozeOpen, setCustomSnoozeOpen] = useState(false);
+  const [customDateTimeValue, setCustomDateTimeValue] = useState(getDefaultCustomSnoozeValue);
   const activeDays = getActiveDays(reminder.active_since);
   const frequencyLabel = FREQUENCY_LABELS[reminder.frequency] || reminder.frequency || 'יומי';
   const nextRemindAtLabel = formatShortDateTime(reminder.next_remind_at);
@@ -96,102 +121,191 @@ export default function ReminderCard({ reminder, onSnoozed, className }) {
     navigate(actionUrl.startsWith('/') ? actionUrl : `/${actionUrl}`);
   };
 
-  const handleSnooze = async (option) => {
+  const applySnooze = async (snoozedUntil, label) => {
     if (!reminder?.id || isSnoozing) return;
 
     setIsSnoozing(true);
 
     try {
-      const snoozedUntil = option.getSnoozedUntil().toISOString();
       await snoozeReminder(reminder.id, snoozedUntil);
 
       toast({
         title: 'התזכורת נדחתה',
-        description: `${option.label} · עד ${formatShortDateTime(snoozedUntil)}`,
+        description: `${label} · עד ${formatShortDateTime(snoozedUntil)}`,
       });
 
       onSnoozed?.();
     } catch (error) {
-      console.error('[ReminderCard] failed to snooze reminder', error);
-      alert('לא הצלחתי לדחות את התזכורת');
+      throw error;
     } finally {
       setIsSnoozing(false);
     }
   };
 
+  const handleSnooze = async (option) => {
+    try {
+      const snoozedUntil = option.getSnoozedUntil().toISOString();
+      await applySnooze(snoozedUntil, option.label);
+    } catch (error) {
+      console.error('[ReminderCard] failed to snooze reminder', error);
+      alert('לא הצלחתי לדחות את התזכורת');
+    }
+  };
+
+  const openCustomSnoozeDialog = () => {
+    setCustomDateTimeValue(getDefaultCustomSnoozeValue());
+    setCustomSnoozeOpen(true);
+  };
+
+  const handleCustomSnooze = async () => {
+    if (!customDateTimeValue) {
+      alert('יש לבחור זמן עתידי לתזכורת');
+      return;
+    }
+
+    const selectedDate = new Date(customDateTimeValue);
+    if (Number.isNaN(selectedDate.getTime()) || selectedDate.getTime() <= Date.now()) {
+      alert('יש לבחור זמן עתידי לתזכורת');
+      return;
+    }
+
+    try {
+      const snoozedUntil = selectedDate.toISOString();
+      await applySnooze(snoozedUntil, 'בחר תאריך ושעה');
+      setCustomSnoozeOpen(false);
+    } catch (error) {
+      console.error('[ReminderCard] failed to custom snooze reminder', error);
+      alert('לא הצלחתי לדחות את התזכורת');
+    }
+  };
+
   return (
-    <div
-      className={cn(
-        'flex flex-col gap-3 p-4 rounded-lg border border-amber-200/80 bg-amber-50/40 text-right',
-        className,
-      )}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="font-medium text-sm mb-1">{reminder.title}</div>
-          <div className="text-xs text-muted-foreground">{reminder.client_name}</div>
-          {reminder.project_name && (
-            <div className="text-xs text-muted-foreground mt-0.5">
-              פרויקט: {reminder.project_name}
-            </div>
+    <>
+      <div
+        className={cn(
+          'flex flex-col gap-3 p-4 rounded-lg border border-amber-200/80 bg-amber-50/40 text-right',
+          className,
+        )}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex-1 min-w-0">
+            <div className="font-medium text-sm mb-1">{reminder.title}</div>
+            <div className="text-xs text-muted-foreground">{reminder.client_name}</div>
+            {reminder.project_name && (
+              <div className="text-xs text-muted-foreground mt-0.5">
+                פרויקט: {reminder.project_name}
+              </div>
+            )}
+          </div>
+          <Bell className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <Badge variant="outline" className="text-xs">
+            {frequencyLabel}
+          </Badge>
+          {activeDays !== null && (
+            <Badge variant="secondary" className="text-xs">
+              פעילה {activeDays} ימים
+            </Badge>
+          )}
+          {nextRemindAtLabel && (
+            <Badge variant="outline" className="text-xs">
+              הבא: {nextRemindAtLabel}
+            </Badge>
           )}
         </div>
-        <Bell className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleActionClick}
+          >
+            <ExternalLink className="w-3.5 h-3.5 ml-1.5" />
+            {reminder.action_label || 'פתח'}
+          </Button>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={isSnoozing}
+                className="text-muted-foreground"
+              >
+                <Clock className="w-3.5 h-3.5 ml-1.5" />
+                {isSnoozing ? 'מדחה...' : 'דחה'}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="text-right">
+              {SNOOZE_OPTIONS.map((option) => (
+                <DropdownMenuItem
+                  key={option.id}
+                  disabled={isSnoozing}
+                  onClick={() => handleSnooze(option)}
+                >
+                  {option.label}
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuItem
+                disabled={isSnoozing}
+                onSelect={(event) => {
+                  event.preventDefault();
+                  openCustomSnoozeDialog();
+                }}
+              >
+                בחר תאריך ושעה
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        <Badge variant="outline" className="text-xs">
-          {frequencyLabel}
-        </Badge>
-        {activeDays !== null && (
-          <Badge variant="secondary" className="text-xs">
-            פעילה {activeDays} ימים
-          </Badge>
-        )}
-        {nextRemindAtLabel && (
-          <Badge variant="outline" className="text-xs">
-            הבא: {nextRemindAtLabel}
-          </Badge>
-        )}
-      </div>
+      <Dialog open={customSnoozeOpen} onOpenChange={setCustomSnoozeOpen}>
+        <DialogContent className="max-w-sm text-right" dir="rtl">
+          <DialogHeader className="text-right sm:text-right">
+            <DialogTitle>דחיית תזכורת</DialogTitle>
+            <DialogDescription>
+              בחר מתי להציג שוב את התזכורת
+            </DialogDescription>
+          </DialogHeader>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={handleActionClick}
-        >
-          <ExternalLink className="w-3.5 h-3.5 ml-1.5" />
-          {reminder.action_label || 'פתח'}
-        </Button>
+          <div className="space-y-2">
+            <Label htmlFor={`custom-snooze-${reminder.id}`}>תאריך ושעה</Label>
+            <Input
+              id={`custom-snooze-${reminder.id}`}
+              type="datetime-local"
+              value={customDateTimeValue}
+              onChange={(event) => setCustomDateTimeValue(event.target.value)}
+              className="text-right"
+              dir="ltr"
+            />
+          </div>
 
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
+          <DialogFooter className="flex-row-reverse gap-2 sm:justify-start">
             <Button
               type="button"
-              variant="ghost"
               size="sm"
+              onClick={handleCustomSnooze}
               disabled={isSnoozing}
-              className="text-muted-foreground"
             >
-              <Clock className="w-3.5 h-3.5 ml-1.5" />
-              {isSnoozing ? 'מדחה...' : 'דחה'}
+              {isSnoozing ? 'מדחה...' : 'אישור'}
             </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="text-right">
-            {SNOOZE_OPTIONS.map((option) => (
-              <DropdownMenuItem
-                key={option.id}
-                disabled={isSnoozing}
-                onClick={() => handleSnooze(option)}
-              >
-                {option.label}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-    </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setCustomSnoozeOpen(false)}
+              disabled={isSnoozing}
+            >
+              ביטול
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
