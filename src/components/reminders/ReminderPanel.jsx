@@ -43,7 +43,8 @@ export default function ReminderPanel({
     return reminders.filter(hasClientName).length;
   }, [reminders]);
 
-  const hasMoreThanLimit = totalValidCount > METRICS_FOCUS_LIMIT;
+  const isMetricsFocus = mode === 'metrics_focus';
+  const isRemindersFocus = mode === 'reminders_focus';
 
   return (
     <Card className={cn('p-6 md:col-span-2', mode === 'reminders_focus' && 'order-first', className)}>
@@ -60,13 +61,13 @@ export default function ReminderPanel({
           </div>
         </div>
 
-        {mode === 'metrics_focus' && hasMoreThanLimit && onShowAll && (
+        {isMetricsFocus && onShowAll && (
           <Button type="button" variant="outline" size="sm" onClick={onShowAll}>
             הצג את כל התזכורות
           </Button>
         )}
 
-        {mode === 'reminders_focus' && onMinimize && (
+        {isRemindersFocus && onMinimize && (
           <Button type="button" variant="outline" size="sm" onClick={onMinimize}>
             מזער תזכורות
           </Button>
