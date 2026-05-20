@@ -17,6 +17,7 @@ export default function ReminderPanel({
   mode = 'metrics_focus',
   onShowAll,
   onMinimize,
+  onSnoozed,
   isLoading = false,
   className,
 }) {
@@ -81,7 +82,11 @@ export default function ReminderPanel({
       ) : (
         <div className="space-y-3">
           {displayReminders.map((reminder) => (
-            <ReminderCard key={reminder.id || reminder.condition_key} reminder={reminder} />
+            <ReminderCard
+              key={reminder.id || reminder.condition_key}
+              reminder={reminder}
+              onSnoozed={onSnoozed}
+            />
           ))}
         </div>
       )}

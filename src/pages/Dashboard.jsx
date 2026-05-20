@@ -732,6 +732,7 @@ export default function Dashboard() {
               isLoading={remindersLoading}
               onShowAll={() => setDashboardMode('reminders_focus')}
               onMinimize={() => setDashboardMode('metrics_focus')}
+              onSnoozed={() => refetchReminders()}
             />
             <ActionCard
               title="הצעות ממתינות לתמחור"

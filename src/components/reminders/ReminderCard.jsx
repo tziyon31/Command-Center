@@ -1,8 +1,16 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Bell, ExternalLink } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { toast } from '@/components/ui/use-toast';
+import { snoozeReminder } from '@/lib/reminderEngine';
+import { Bell, Clock, ExternalLink } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const FREQUENCY_LABELS = {
@@ -12,6 +20,37 @@ const FREQUENCY_LABELS = {
   due_date_based: 'לפי תאריך יעד',
   custom: 'מותאם',
 };
+
+const SNOOZE_OPTIONS = [
+  {
+    id: 'later_today',
+    label: 'מאוחר יותר היום',
+    getSnoozedUntil: () => {
+      const date = new Date();
+      date.setHours(date.getHours() + 3);
+      return date;
+    },
+  },
+  {
+    id: 'tomorrow_morning',
+    label: 'מחר בבוקר',
+    getSnoozedUntil: () => {
+      const date = new Date();
+      date.setDate(date.getDate() + 1);
+      date.setHours(7, 0, 0, 0);
+      return date;
+    },
+  },
+  {
+    id: 'next_week',
+    label: 'בעוד שבוע',
+    getSnoozedUntil: () => {
+      const date = new Date();
+      date.setDate(date.getDate() + 7);
+      return date;
+    },
+  },
+];
 
 const formatShortDateTime = (value) => {
   if (!value) return null;
@@ -38,8 +77,9 @@ const getActiveDays = (activeSince) => {
   return Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
 };
 
-export default function ReminderCard({ reminder, className }) {
+export default function ReminderCard({ reminder, onSnoozed, className }) {
   const navigate = useNavigate();
+  const [isSnoozing, setIsSnoozing] = useState(false);
   const activeDays = getActiveDays(reminder.active_since);
   const frequencyLabel = FREQUENCY_LABELS[reminder.frequency] || reminder.frequency || 'יומי';
   const nextRemindAtLabel = formatShortDateTime(reminder.next_remind_at);
@@ -54,6 +94,29 @@ export default function ReminderCard({ reminder, className }) {
     }
 
     navigate(actionUrl.startsWith('/') ? actionUrl : `/${actionUrl}`);
+  };
+
+  const handleSnooze = async (option) => {
+    if (!reminder?.id || isSnoozing) return;
+
+    setIsSnoozing(true);
+
+    try {
+      const snoozedUntil = option.getSnoozedUntil().toISOString();
+      await snoozeReminder(reminder.id, snoozedUntil);
+
+      toast({
+        title: 'התזכורת נדחתה',
+        description: `${option.label} · עד ${formatShortDateTime(snoozedUntil)}`,
+      });
+
+      onSnoozed?.();
+    } catch (error) {
+      console.error('[ReminderCard] failed to snooze reminder', error);
+      alert('לא הצלחתי לדחות את התזכורת');
+    } finally {
+      setIsSnoozing(false);
+    }
   };
 
   return (
@@ -92,16 +155,43 @@ export default function ReminderCard({ reminder, className }) {
         )}
       </div>
 
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="self-start"
-        onClick={handleActionClick}
-      >
-        <ExternalLink className="w-3.5 h-3.5 ml-1.5" />
-        {reminder.action_label || 'פתח'}
-      </Button>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={handleActionClick}
+        >
+          <ExternalLink className="w-3.5 h-3.5 ml-1.5" />
+          {reminder.action_label || 'פתח'}
+        </Button>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={isSnoozing}
+              className="text-muted-foreground"
+            >
+              <Clock className="w-3.5 h-3.5 ml-1.5" />
+              {isSnoozing ? 'מדחה...' : 'דחה'}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="text-right">
+            {SNOOZE_OPTIONS.map((option) => (
+              <DropdownMenuItem
+                key={option.id}
+                disabled={isSnoozing}
+                onClick={() => handleSnooze(option)}
+              >
+                {option.label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </div>
   );
 }
