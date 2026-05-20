@@ -22,6 +22,7 @@ import { he } from 'date-fns/locale';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import QuoteBreakdownCard from '../components/dashboard/QuoteBreakdownCard.jsx';
 import TodayTasksCard from '../components/dashboard/TodayTasksCard.jsx';
+import { debugReminderUpsertSanityCheck } from '@/lib/reminderEngine';
 
 const OPEN_PROPOSAL_STATUSES = ['pricing', 'waiting'];
 const WON_PROPOSAL_STATUSES = ['signed'];
@@ -165,8 +166,31 @@ const isProjectEligibleForInactivityCheck = (project) => {
 export default function Dashboard() {
   const [quotePeriod, setQuotePeriod] = React.useState('year');
   const [collectionPeriod, setCollectionPeriod] = React.useState('year');
+  const [sanityCheckRunning, setSanityCheckRunning] = React.useState(false);
   const navigate = useNavigate();
   const collectionDueNowCardRef = useRef(null);
+
+  // TEMPORARY: remove after reminder engine sanity check is verified.
+  const handleRunReminderSanityCheck = async () => {
+    setSanityCheckRunning(true);
+
+    try {
+      const result = await debugReminderUpsertSanityCheck();
+      console.log('[ReminderSanityCheck]', result);
+      console.table(result.steps || []);
+
+      if (result.passed === true) {
+        alert('Reminder sanity check passed');
+      } else {
+        alert('Reminder sanity check failed - check console');
+      }
+    } catch (error) {
+      console.error('[ReminderSanityCheck]', error);
+      alert('Reminder sanity check failed - check console');
+    } finally {
+      setSanityCheckRunning(false);
+    }
+  };
 
   const { data: currentUser } = useQuery({
     queryKey: ['currentUser'],
@@ -498,6 +522,18 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50">
+      {import.meta.env.DEV && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="fixed bottom-4 left-4 z-50 text-xs shadow-md"
+          onClick={handleRunReminderSanityCheck}
+          disabled={sanityCheckRunning}
+        >
+          {sanityCheckRunning ? 'Running sanity check...' : 'Run Reminder Sanity Check'}
+        </Button>
+      )}
       <div className="max-w-[1600px] mx-auto px-8 py-12 space-y-16">
         {/* Header */}
         <div className="flex items-end justify-between">
