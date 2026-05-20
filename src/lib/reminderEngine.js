@@ -193,6 +193,59 @@ export function getVisibleReminders(reminders, now = new Date()) {
     .filter((reminder) => reminder.status === REMINDER_STATUS.ACTIVE);
 }
 
+const getDateKey = (value) => {
+  if (!value) return null;
+  const date = parseReminderDate(value);
+  if (!date) return null;
+  return date.toISOString().split('T')[0];
+};
+
+/**
+ * Sorts visible reminders: overdue, due today, no next_remind_at, then by active_since (oldest first).
+ */
+export function sortVisibleReminders(reminders, now = new Date()) {
+  if (!Array.isArray(reminders)) return [];
+
+  const todayKey = getDateKey(now);
+  const nowTime = toTimestamp(now);
+
+  const getSortBucket = (reminder) => {
+    const nextTime = toTimestamp(reminder.next_remind_at);
+
+    if (nextTime !== null) {
+      if (nextTime < nowTime) return 0;
+      if (getDateKey(reminder.next_remind_at) === todayKey) return 1;
+      return 3;
+    }
+
+    return 2;
+  };
+
+  return [...reminders].sort((left, right) => {
+    const bucketDiff = getSortBucket(left) - getSortBucket(right);
+    if (bucketDiff !== 0) return bucketDiff;
+
+    const leftActiveSince = toTimestamp(left.active_since) ?? 0;
+    const rightActiveSince = toTimestamp(right.active_since) ?? 0;
+    return leftActiveSince - rightActiveSince;
+  });
+}
+
+/**
+ * Loads reminders, persists expired snoozes, and returns visible sorted reminders.
+ */
+export async function loadVisibleReminders(now = new Date()) {
+  let reminders = await base44.entities.Reminder.list();
+  const summary = await normalizeAndPersistExpiredSnoozes(reminders, now);
+
+  if (summary.updated > 0) {
+    reminders = await base44.entities.Reminder.list();
+  }
+
+  const visible = getVisibleReminders(reminders, now);
+  return sortVisibleReminders(visible, now);
+}
+
 /**
  * Finds reminders with expired snooze and persists active state to the DB.
  * Idempotent: skips reminders already active with cleared snooze fields.

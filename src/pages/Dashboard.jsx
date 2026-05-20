@@ -22,7 +22,13 @@ import { he } from 'date-fns/locale';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import QuoteBreakdownCard from '../components/dashboard/QuoteBreakdownCard.jsx';
 import TodayTasksCard from '../components/dashboard/TodayTasksCard.jsx';
-import { debugReminderUpsertSanityCheck } from '@/lib/reminderEngine';
+import ReminderPanel from '../components/reminders/ReminderPanel.jsx';
+import {
+  debugReminderUpsertSanityCheck,
+  loadVisibleReminders,
+  upsertReminder,
+} from '@/lib/reminderEngine';
+import { cn } from '@/lib/utils';
 
 const OPEN_PROPOSAL_STATUSES = ['pricing', 'waiting'];
 const WON_PROPOSAL_STATUSES = ['signed'];
@@ -167,6 +173,8 @@ export default function Dashboard() {
   const [quotePeriod, setQuotePeriod] = React.useState('year');
   const [collectionPeriod, setCollectionPeriod] = React.useState('year');
   const [sanityCheckRunning, setSanityCheckRunning] = React.useState(false);
+  const [demoReminderCreating, setDemoReminderCreating] = React.useState(false);
+  const [dashboardMode, setDashboardMode] = React.useState('metrics_focus');
   const navigate = useNavigate();
   const collectionDueNowCardRef = useRef(null);
 
@@ -230,6 +238,44 @@ export default function Dashboard() {
   });
 
   const isTaskWorker = currentUser?.role === 'task_worker';
+  const canSeeFullDashboard = !isTaskWorker;
+
+  const {
+    data: visibleReminders = [],
+    isLoading: remindersLoading,
+    refetch: refetchReminders,
+  } = useQuery({
+    queryKey: ['reminders', 'visible'],
+    queryFn: () => loadVisibleReminders(),
+    enabled: canSeeFullDashboard && !!currentUser,
+  });
+
+  // TEMPORARY: remove after dashboard reminder display is verified.
+  const handleCreateDemoReminder = async () => {
+    setDemoReminderCreating(true);
+
+    try {
+      await upsertReminder({
+        title: 'תזכורת בדיקה לדשבורד',
+        description: 'זוהי תזכורת בדיקה זמנית להצגת ReminderPanel',
+        client_name: 'לקוח בדיקה',
+        project_name: 'פרויקט בדיקה',
+        source_type: 'debug',
+        source_id: 'dashboard-visible-demo',
+        condition_key: 'debug:dashboard-visible-demo',
+        action_url: '/Projects',
+        action_label: 'פתח פרויקטים',
+        frequency: 'daily',
+      }, { immediate: true });
+
+      await refetchReminders();
+    } catch (error) {
+      console.error('[Dashboard] Failed to create demo reminder', error);
+      alert('יצירת תזכורת בדיקה נכשלה - בדוק console');
+    } finally {
+      setDemoReminderCreating(false);
+    }
+  };
 
   const todayOpenTasks = useMemo(() => {
     const today = new Date().toISOString().split('T')[0];
@@ -522,17 +568,29 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50">
-      {/* TEMPORARY: visible in prod for sanity check — remove after verification */}
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="fixed bottom-4 left-4 z-50 text-xs shadow-md"
-        onClick={handleRunReminderSanityCheck}
-        disabled={sanityCheckRunning}
-      >
-        {sanityCheckRunning ? 'Running sanity check...' : 'Run Reminder Sanity Check'}
-      </Button>
+      {/* TEMPORARY: debug controls — remove after verification */}
+      <div className="fixed bottom-4 left-4 z-50 flex flex-col gap-2 items-start">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="text-xs shadow-md"
+          onClick={handleRunReminderSanityCheck}
+          disabled={sanityCheckRunning}
+        >
+          {sanityCheckRunning ? 'Running sanity check...' : 'Run Reminder Sanity Check'}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="text-xs shadow-md"
+          onClick={handleCreateDemoReminder}
+          disabled={demoReminderCreating}
+        >
+          {demoReminderCreating ? 'יוצר תזכורת...' : 'צור תזכורת בדיקה לתצוגה'}
+        </Button>
+      </div>
       <div className="max-w-[1600px] mx-auto px-8 py-12 space-y-16">
         {/* Header */}
         <div className="flex items-end justify-between">
@@ -554,12 +612,22 @@ export default function Dashboard() {
         </div>
 
         {/* 🔵 אזור 1 - בריאות עסקית */}
-        <div className="space-y-8">
+        <div className={cn('space-y-8', dashboardMode === 'reminders_focus' && 'space-y-4')}>
           <div>
-            <h2 className="text-3xl font-bold tracking-tight mb-2">בריאות עסקית</h2>
-            <p className="text-muted-foreground">המדדים המרכזיים של העסק</p>
+            <h2 className={cn(
+              'font-bold tracking-tight mb-2',
+              dashboardMode === 'reminders_focus' ? 'text-2xl' : 'text-3xl',
+            )}
+            >
+              בריאות עסקית
+            </h2>
+            <p className="text-muted-foreground text-sm">המדדים המרכזיים של העסק</p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
+          <div className={cn(
+            'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6',
+            dashboardMode === 'reminders_focus' && 'gap-4',
+          )}
+          >
             <div className="space-y-2">
               <BusinessHealthCard
                 title="גבייה רשומה"
@@ -646,12 +714,25 @@ export default function Dashboard() {
         </div>
 
         {/* 🟡 אזור 2 - דורש טיפול */}
-        <div className="space-y-8">
+        <div className={cn('space-y-8', dashboardMode === 'reminders_focus' && 'space-y-6')}>
           <div>
-            <h2 className="text-3xl font-bold tracking-tight mb-2">דורש טיפול</h2>
+            <h2 className="text-3xl font-bold tracking-tight mb-2">
+              דורש טיפול
+            </h2>
             <p className="text-muted-foreground">פעולות שדורשות תשומת לב מיידית</p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className={cn(
+            'grid grid-cols-1 md:grid-cols-2 gap-6',
+            dashboardMode === 'reminders_focus' && 'gap-4',
+          )}
+          >
+            <ReminderPanel
+              reminders={visibleReminders}
+              mode={dashboardMode}
+              isLoading={remindersLoading}
+              onShowAll={() => setDashboardMode('reminders_focus')}
+              onMinimize={() => setDashboardMode('metrics_focus')}
+            />
             <ActionCard
               title="הצעות ממתינות לתמחור"
               items={needsAttention.pricingProposals}
