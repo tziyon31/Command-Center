@@ -39,44 +39,83 @@ const assertFutureSnoozeDate = (snoozedUntil, now = new Date()) => {
 const persistReminderUpdate = (reminderId, patch) =>
   base44.entities.Reminder.update(reminderId, patch);
 
-const isSnoozeExpired = (reminder, now) => {
-  if (reminder?.status !== REMINDER_STATUS.SNOOZED) return false;
+const ACTIVE_SNOOZE_CLEAR_PATCH = {
+  status: REMINDER_STATUS.ACTIVE,
+  is_snoozed: false,
+  snoozed_until: '',
+};
+
+const emptyPersistSummary = () => ({
+  checked: 0,
+  expiredSnoozesFound: 0,
+  updated: 0,
+  errors: [],
+});
+
+const isTerminalReminderStatus = (status) =>
+  status === REMINDER_STATUS.RESOLVED || status === REMINDER_STATUS.CANCELLED;
+
+const isAlreadyActiveWithClearedSnooze = (reminder) =>
+  reminder?.status === REMINDER_STATUS.ACTIVE
+  && reminder?.is_snoozed === false
+  && !reminder?.snoozed_until;
+
+const hasExpiredSnooze = (reminder, now) => {
+  if (!reminder || isTerminalReminderStatus(reminder.status)) {
+    return false;
+  }
+
+  const isSnoozedState =
+    reminder.status === REMINDER_STATUS.SNOOZED
+    || reminder.is_snoozed === true;
+
+  if (!isSnoozedState || isAlreadyActiveWithClearedSnooze(reminder)) {
+    return false;
+  }
+
   const snoozeTime = toTimestamp(reminder.snoozed_until);
-  if (snoozeTime === null) return true;
-  return snoozeTime <= toTimestamp(now);
+  const nowTime = toTimestamp(now);
+  const hasFutureSnooze = snoozeTime !== null && snoozeTime > nowTime;
+
+  return !hasFutureSnooze;
 };
 
 /**
  * Returns a reminder with consistent status/snooze fields (does not persist).
+ * Terminal states (resolved/cancelled) always win over snooze flags.
  */
 export function normalizeReminderState(reminder, now = new Date()) {
   if (!reminder) return reminder;
 
-  let next = { ...reminder };
-
-  if (next.status === REMINDER_STATUS.SNOOZED && next.is_snoozed !== true) {
-    next = { ...next, is_snoozed: true };
-  }
-
-  if (next.is_snoozed === true && next.status !== REMINDER_STATUS.SNOOZED) {
-    next = { ...next, status: REMINDER_STATUS.SNOOZED };
-  }
-
-  if (next.status === REMINDER_STATUS.SNOOZED && isSnoozeExpired(next, now)) {
-    next = {
-      ...next,
-      status: REMINDER_STATUS.ACTIVE,
-      is_snoozed: false,
-      snoozed_until: '',
-    };
-  }
+  const next = { ...reminder };
 
   if (
     next.status === REMINDER_STATUS.RESOLVED
     || next.status === REMINDER_STATUS.CANCELLED
   ) {
-    next = {
+    return {
       ...next,
+      is_snoozed: false,
+      snoozed_until: '',
+    };
+  }
+
+  const snoozeTime = toTimestamp(next.snoozed_until);
+  const nowTime = toTimestamp(now);
+  const hasFutureSnooze = snoozeTime !== null && snoozeTime > nowTime;
+
+  if (next.status === REMINDER_STATUS.SNOOZED || next.is_snoozed === true) {
+    if (hasFutureSnooze) {
+      return {
+        ...next,
+        status: REMINDER_STATUS.SNOOZED,
+        is_snoozed: true,
+      };
+    }
+
+    return {
+      ...next,
+      status: REMINDER_STATUS.ACTIVE,
       is_snoozed: false,
       snoozed_until: '',
     };
@@ -141,12 +180,57 @@ export async function cancelReminder(reminderId, reason) {
 }
 
 /**
- * Reminders that should appear in the UI after state normalization.
+ * Reminders that should appear in the UI after state normalization (in-memory only).
  */
 export function getVisibleReminders(reminders, now = new Date()) {
   if (!Array.isArray(reminders)) return [];
 
   return reminders
     .map((reminder) => normalizeReminderState(reminder, now))
+    .filter(Boolean)
     .filter((reminder) => reminder.status === REMINDER_STATUS.ACTIVE);
+}
+
+/**
+ * Finds reminders with expired snooze and persists active state to the DB.
+ * Idempotent: skips reminders already active with cleared snooze fields.
+ */
+export async function normalizeAndPersistExpiredSnoozes(reminders, now = new Date()) {
+  if (!Array.isArray(reminders)) {
+    return emptyPersistSummary();
+  }
+
+  const summary = {
+    checked: reminders.length,
+    expiredSnoozesFound: 0,
+    updated: 0,
+    errors: [],
+  };
+
+  for (const reminder of reminders) {
+    if (!hasExpiredSnooze(reminder, now)) continue;
+
+    summary.expiredSnoozesFound += 1;
+
+    const reminderId = reminder?.id;
+    if (!reminderId) {
+      summary.errors.push({
+        reminderId: null,
+        error: 'reminder id is required',
+      });
+      continue;
+    }
+
+    try {
+      await persistReminderUpdate(reminderId, ACTIVE_SNOOZE_CLEAR_PATCH);
+      summary.updated += 1;
+    } catch (error) {
+      summary.errors.push({
+        reminderId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return summary;
 }
