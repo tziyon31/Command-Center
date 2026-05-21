@@ -8,7 +8,8 @@ import {
   FolderKanban,
   Sparkles,
   UserCog,
-  LogOut 
+  LogOut,
+  ClipboardList,
 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import { useQuery } from '@tanstack/react-query';
@@ -20,6 +21,10 @@ const resolveActiveNavPage = (currentPageName) => {
 
   if (currentPageName === 'ClientDetails') {
     return 'Clients';
+  }
+
+  if (currentPageName === 'InquiryForm') {
+    return 'Inquiries';
   }
 
   return currentPageName;
@@ -39,6 +44,7 @@ export default function Layout({ children, currentPageName }) {
   const allNavItems = [
     { name: 'Dashboard', label: 'דשבורד', icon: LayoutDashboard, roles: ['admin', 'office_manager', 'project_worker'] },
     { name: 'Clients', label: 'לקוחות', icon: Users, roles: ['admin', 'office_manager'] },
+    { name: 'Inquiries', label: 'פניות', icon: ClipboardList, roles: ['admin', 'office_manager'] },
     { name: 'Projects', label: 'פרויקטים', icon: FolderKanban, roles: ['admin', 'office_manager', 'project_worker'] },
     { name: 'Assistant', label: 'עוזר AI', icon: Sparkles, roles: ['admin', 'office_manager'] },
     { name: 'Users', label: 'משתמשים', icon: UserCog, roles: ['admin', 'office_manager'] },

@@ -50,6 +50,8 @@
 import Assistant from './pages/Assistant';
 import Clients from './pages/Clients';
 import Dashboard from './pages/Dashboard';
+import Inquiries from './pages/Inquiries';
+import InquiryForm from './pages/InquiryForm';
 import Projects from './pages/Projects';
 import Users from './pages/Users';
 import __Layout from './Layout.jsx';
@@ -59,6 +61,8 @@ export const PAGES = {
     "Assistant": Assistant,
     "Clients": Clients,
     "Dashboard": Dashboard,
+    "Inquiries": Inquiries,
+    "InquiryForm": InquiryForm,
     "Projects": Projects,
     "Users": Users,
 }
