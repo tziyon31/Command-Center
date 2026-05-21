@@ -25,9 +25,8 @@ import {
   datetimeLocalToIso,
   getDefaultFutureDatetimeValue,
   isFutureDatetimeLocal,
-  toDatetimeLocalValue,
 } from './reminderDateTime.js';
-import { Bell, Clock, ExternalLink, Pencil } from 'lucide-react';
+import { Clock, ExternalLink, Pencil } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const FREQUENCY_LABELS = {
@@ -78,7 +77,6 @@ const formatShortDateTime = (value) => {
   return new Intl.DateTimeFormat('he-IL', {
     day: '2-digit',
     month: '2-digit',
-    year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
   }).format(date);
@@ -169,49 +167,42 @@ export default function ReminderCard({ reminder, onSnoozed, className }) {
 
   return (
     <>
-      <div
+      <article
         className={cn(
-          'flex flex-col gap-3 p-4 rounded-lg border border-amber-200/80 bg-amber-50/40 text-right',
+          'h-auto w-full rounded-lg border border-slate-200/90 bg-slate-50/70 p-3 text-right shadow-sm',
           className,
         )}
+        dir="rtl"
       >
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex-1 min-w-0">
-            <div className="font-medium text-sm mb-1">{reminder.title}</div>
-            <div className="text-xs text-muted-foreground">{reminder.client_name}</div>
-            {reminder.project_name && (
-              <div className="text-xs text-muted-foreground mt-0.5">
-                פרויקט: {reminder.project_name}
-              </div>
-            )}
-          </div>
-          <Bell className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <Badge variant="outline" className="text-xs">
+        <div className="flex items-start gap-2">
+          <h4 className="min-w-0 flex-1 text-sm font-semibold leading-snug text-foreground">
+            {reminder.title}
+          </h4>
+          <Badge variant="outline" className="shrink-0 text-[10px] px-1.5 py-0 h-5">
             {frequencyLabel}
           </Badge>
-          {activeDays !== null && (
-            <Badge variant="secondary" className="text-xs">
-              פעילה {activeDays} ימים
-            </Badge>
-          )}
-          {nextRemindAtLabel && (
-            <Badge variant="outline" className="text-xs">
-              הבא: {nextRemindAtLabel}
-            </Badge>
+        </div>
+
+        <div className="mt-1.5 space-y-0.5 text-xs text-muted-foreground">
+          <p className="truncate">{reminder.client_name}</p>
+          {reminder.project_name && (
+            <p className="truncate">פרויקט: {reminder.project_name}</p>
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+          {activeDays !== null && <span>פעילה {activeDays} ימים</span>}
+          {nextRemindAtLabel && <span>הבא: {nextRemindAtLabel}</span>}
+        </div>
+
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
           <Button
             type="button"
-            variant="outline"
             size="sm"
+            className="h-7 px-2.5 text-xs"
             onClick={handleActionClick}
           >
-            <ExternalLink className="w-3.5 h-3.5 ml-1.5" />
+            <ExternalLink className="w-3 h-3 ml-1" />
             {reminder.action_label || 'פתח'}
           </Button>
 
@@ -219,12 +210,12 @@ export default function ReminderCard({ reminder, onSnoozed, className }) {
             <DropdownMenuTrigger asChild>
               <Button
                 type="button"
-                variant="ghost"
+                variant="outline"
                 size="sm"
                 disabled={isSnoozing}
-                className="text-muted-foreground"
+                className="h-7 px-2 text-xs text-muted-foreground"
               >
-                <Clock className="w-3.5 h-3.5 ml-1.5" />
+                <Clock className="w-3 h-3 ml-1" />
                 {isSnoozing ? 'מדחה...' : 'דחה'}
               </Button>
             </DropdownMenuTrigger>
@@ -254,15 +245,15 @@ export default function ReminderCard({ reminder, onSnoozed, className }) {
             type="button"
             variant="ghost"
             size="sm"
-            className="text-muted-foreground"
+            className="h-7 px-2 text-xs text-muted-foreground"
             onClick={() => setEditOpen(true)}
             disabled={isSnoozing}
           >
-            <Pencil className="w-3.5 h-3.5 ml-1.5" />
+            <Pencil className="w-3 h-3 ml-1" />
             ערוך
           </Button>
         </div>
-      </div>
+      </article>
 
       <ReminderEditDialog
         reminder={reminder}
@@ -287,7 +278,6 @@ export default function ReminderCard({ reminder, onSnoozed, className }) {
               type="datetime-local"
               value={customDateTimeValue}
               onChange={(event) => setCustomDateTimeValue(event.target.value)}
-              className="text-right"
               dir="ltr"
             />
           </div>

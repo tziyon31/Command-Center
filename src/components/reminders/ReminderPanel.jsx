@@ -48,13 +48,22 @@ export default function ReminderPanel({
   const isRemindersFocus = mode === 'reminders_focus';
 
   return (
-    <Card className={cn('p-6 md:col-span-2', mode === 'reminders_focus' && 'order-first', className)}>
-      <div className="flex items-start justify-between gap-4 mb-4">
-        <div className="flex items-center gap-2">
-          <Bell className="w-5 h-5 text-amber-600" />
-          <div>
-            <h3 className="text-lg font-semibold">תזכורות</h3>
-            <p className="text-sm text-muted-foreground">
+    <Card
+      className={cn(
+        'p-4 md:col-span-2 border-slate-200/90 shadow-sm',
+        isRemindersFocus && 'order-first',
+        className,
+      )}
+      dir="rtl"
+    >
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-slate-100">
+            <Bell className="w-4 h-4 text-slate-600" />
+          </div>
+          <div className="min-w-0">
+            <h3 className="text-base font-semibold leading-tight">תזכורות</h3>
+            <p className="text-xs text-muted-foreground">
               {totalValidCount > 0
                 ? `${totalValidCount} תזכורות לטיפול`
                 : 'אין תזכורות לטיפול כרגע'}
@@ -63,13 +72,13 @@ export default function ReminderPanel({
         </div>
 
         {isMetricsFocus && onShowAll && (
-          <Button type="button" variant="outline" size="sm" onClick={onShowAll}>
+          <Button type="button" variant="outline" size="sm" className="shrink-0 h-8 text-xs" onClick={onShowAll}>
             הצג את כל התזכורות
           </Button>
         )}
 
         {isRemindersFocus && onMinimize && (
-          <Button type="button" variant="outline" size="sm" onClick={onMinimize}>
+          <Button type="button" variant="outline" size="sm" className="shrink-0 h-8 text-xs" onClick={onMinimize}>
             מזער תזכורות
           </Button>
         )}
@@ -80,7 +89,13 @@ export default function ReminderPanel({
       ) : displayReminders.length === 0 ? (
         <p className="text-sm text-muted-foreground">אין תזכורות לטיפול כרגע</p>
       ) : (
-        <div className="space-y-3">
+        <div
+          className={cn(
+            'grid gap-3',
+            'grid-cols-1 md:grid-cols-2',
+            isRemindersFocus && 'xl:grid-cols-3',
+          )}
+        >
           {displayReminders.map((reminder) => (
             <ReminderCard
               key={reminder.id || reminder.condition_key}
