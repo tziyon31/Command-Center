@@ -1,0 +1,45 @@
+{
+  "name": "Inquiry",
+  "type": "object",
+  "properties": {
+    "client_name": {
+      "type": "string",
+      "description": "\u05e9\u05dd \u05d4\u05dc\u05e7\u05d5\u05d7 (\u05d7\u05d5\u05d1\u05d4 \u05d1\u05d4\u05d2\u05e9\u05d4, \u05dc\u05d0 \u05d1\u05d8\u05d9\u05d5\u05d8\u05d4)"
+    },
+    "building_type": {
+      "type": "string",
+      "description": "\u05e1\u05d5\u05d2 \u05d4\u05d1\u05e0\u05d9\u05d9\u05df"
+    },
+    "area": {
+      "type": "number",
+      "description": "\u05e9\u05d8\u05d7 \u05d1\u05de\"\u05e8"
+    },
+    "cooling_tons": {
+      "type": "number",
+      "description": "\u05d8\u05d5\u05df \u05e7\u05d9\u05e8\u05d5\u05e8"
+    },
+    "details": {
+      "type": "string",
+      "description": "\u05e4\u05e8\u05d8\u05d9\u05dd \u05e0\u05d5\u05e1\u05e4\u05d9\u05dd (\u05d7\u05d5\u05d1\u05d4 \u05d1\u05d4\u05d2\u05e9\u05d4, \u05dc\u05d0 \u05d1\u05d8\u05d9\u05d5\u05d8\u05d4)"
+    },
+    "form_status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "submitted",
+        "cancelled"
+      ],
+      "default": "draft",
+      "description": "\u05e1\u05d8\u05d8\u05d5\u05e1 \u05d4\u05d8\u05d5\u05e4\u05e1"
+    },
+    "copied_to_ai_at": {
+      "type": "string",
+      "description": "\u05de\u05ea\u05d9 \u05d4\u05d5\u05e2\u05ea\u05e7 \u05dc-AI (ISO datetime string)"
+    },
+    "submitted_at": {
+      "type": "string",
+      "description": "\u05de\u05ea\u05d9 \u05d4\u05d5\u05d2\u05e9 (ISO datetime string)"
+    }
+  },
+  "required": []
+}
