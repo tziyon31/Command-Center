@@ -24,7 +24,7 @@ import QuoteBreakdownCard from '../components/dashboard/QuoteBreakdownCard.jsx';
 import TodayTasksCard from '../components/dashboard/TodayTasksCard.jsx';
 import ReminderPanel from '../components/reminders/ReminderPanel.jsx';
 import {
-  debugReminderUpsertSanityCheck,
+  debugReminderFoundationTest,
   loadVisibleReminders,
   upsertReminder,
 } from '@/lib/reminderEngine';
@@ -178,23 +178,23 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const collectionDueNowCardRef = useRef(null);
 
-  // TEMPORARY: remove after reminder engine sanity check is verified.
-  const handleRunReminderSanityCheck = async () => {
+  // TEMPORARY: remove after reminder foundation verification.
+  const handleRunReminderFoundationTest = async () => {
     setSanityCheckRunning(true);
 
     try {
-      const result = await debugReminderUpsertSanityCheck();
-      console.log('[ReminderSanityCheck]', result);
+      const result = await debugReminderFoundationTest();
+      console.log('[ReminderFoundationTest]', result);
       console.table(result.steps || []);
 
       if (result.passed === true) {
-        alert('Reminder sanity check passed');
+        alert('בדיקת Foundation תזכורות עברה בהצלחה');
       } else {
-        alert('Reminder sanity check failed - check console');
+        alert('בדיקת Foundation תזכורות נכשלה - בדוק console');
       }
     } catch (error) {
-      console.error('[ReminderSanityCheck]', error);
-      alert('Reminder sanity check failed - check console');
+      console.error('[ReminderFoundationTest]', error);
+      alert('בדיקת Foundation תזכורות נכשלה - בדוק console');
     } finally {
       setSanityCheckRunning(false);
     }
@@ -576,10 +576,10 @@ export default function Dashboard() {
           variant="outline"
           size="sm"
           className="text-xs shadow-md"
-          onClick={handleRunReminderSanityCheck}
+          onClick={handleRunReminderFoundationTest}
           disabled={sanityCheckRunning}
         >
-          {sanityCheckRunning ? 'Running sanity check...' : 'Run Reminder Sanity Check'}
+          {sanityCheckRunning ? 'מריץ בדיקה...' : 'בדיקת Foundation תזכורות'}
         </Button>
         <Button
           type="button"

@@ -609,64 +609,265 @@ export async function ensureReminderForCondition(conditionIsTrue, reminderInput,
   return resolveReminderByConditionKey(conditionKey, 'condition_cleared');
 }
 
+const buildFoundationTestInput = (conditionKey) => ({
+  title: 'בדיקת Foundation תזכורות',
+  description: 'בדיקת מנוע תזכורות מלאה',
+  client_name: 'לקוח בדיקה',
+  project_name: 'פרויקט בדיקה',
+  source_type: 'debug',
+  source_id: 'foundation-test',
+  condition_key: conditionKey,
+  action_url: '/Projects',
+  action_label: 'פתח פרויקטים',
+  frequency: 'daily',
+});
+
 /**
- * Temporary sanity check for upsert/resolve/reactivate flows. Requires live Base44 access.
+ * Full Foundation layer test against live Base44. For developer debug only.
  */
-export async function debugReminderUpsertSanityCheck() {
+export async function debugReminderFoundationTest() {
   const timestamp = Date.now();
-  const conditionKey = `debug:test_condition:${timestamp}`;
-  const input = {
-    title: 'Debug Reminder',
-    description: 'Sanity check reminder',
-    client_name: 'Debug Client',
-    source_type: 'debug',
-    source_id: `debug-source-${timestamp}`,
-    condition_key: conditionKey,
-    action_url: '/debug',
+  const conditionKey = `debug:foundation:${timestamp}`;
+  const input = buildFoundationTestInput(conditionKey);
+  const steps = [];
+  const errors = [];
+  let passed = true;
+  let settingsOk = false;
+  let reminder = null;
+
+  const recordStep = (name, stepPassed, extra = {}) => {
+    steps.push({ name, passed: stepPassed, ...extra });
+    if (!stepPassed) passed = false;
   };
 
-  const results = [];
+  const recordError = (stepName, error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    errors.push({ step: stepName, error: message });
+    console.error('[ReminderFoundationTest]', stepName, error);
+  };
 
-  const created = await upsertReminder(input, { immediate: true });
-  results.push({ step: 'create', action: created.action });
+  const reloadReminder = async () => findReminderByConditionKey(conditionKey);
 
-  const updated = await upsertReminder(input, { immediate: true });
-  results.push({ step: 'update', action: updated.action });
+  const countDuplicates = async () => {
+    const reminders = await base44.entities.Reminder.list();
+    return reminders.filter((item) => item.condition_key === conditionKey).length;
+  };
 
-  const resolved = await resolveReminderByConditionKey(conditionKey);
-  results.push({ step: 'resolve', action: resolved.action });
+  // 1. ReminderSettings
+  try {
+    const settings = await getOrCreateReminderSettings();
+    const dailyTime = getDailyReminderTime(settings);
+    settingsOk = Boolean(dailyTime) && areDailyRemindersEnabled(settings);
+    recordStep('settings', settingsOk, {
+      settingsOk,
+      daily_reminder_time: dailyTime,
+      daily_reminders_enabled: settings?.daily_reminders_enabled,
+    });
+  } catch (error) {
+    recordStep('settings', false, { settingsOk: false });
+    recordError('settings', error);
+  }
 
-  const reactivated = await upsertReminder(input, { immediate: true });
-  results.push({
-    step: 'reactivate',
-    action: reactivated.action,
-    reactivation_count: reactivated.reminder?.reactivation_count,
-    status: reactivated.reminder?.status,
-  });
+  // 2. upsert create
+  try {
+    const created = await upsertReminder(input, { immediate: true });
+    reminder = created.reminder;
+    const stepPassed =
+      created.action === 'created'
+      && reminder?.status === REMINDER_STATUS.ACTIVE;
+    recordStep('created', stepPassed, {
+      action: created.action,
+      status: reminder?.status,
+    });
+  } catch (error) {
+    recordStep('created', false);
+    recordError('created', error);
+  }
 
-  await cancelReminder(reactivated.reminder.id);
+  // 3. duplicate prevention
+  try {
+    const updated = await upsertReminder(input, { immediate: true });
+    reminder = updated.reminder || reminder;
+    const duplicateCount = await countDuplicates();
+    const stepPassed = updated.action === 'updated' && duplicateCount === 1;
+    recordStep('duplicate_prevention', stepPassed, {
+      action: updated.action,
+      duplicateCount,
+    });
+  } catch (error) {
+    recordStep('duplicate_prevention', false);
+    recordError('duplicate_prevention', error);
+  }
 
-  const skipped = await upsertReminder(input, { immediate: true });
-  results.push({ step: 'cancelled_skip', action: skipped.action });
+  // 4. resolve
+  try {
+    const resolved = await resolveReminderByConditionKey(conditionKey);
+    reminder = resolved.reminder || await reloadReminder();
+    const stepPassed =
+      resolved.action === 'resolved'
+      && reminder?.status === REMINDER_STATUS.RESOLVED;
+    recordStep('resolved', stepPassed, {
+      action: resolved.action,
+      status: reminder?.status,
+    });
+  } catch (error) {
+    recordStep('resolved', false);
+    recordError('resolved', error);
+  }
 
-  const reminders = await base44.entities.Reminder.list();
-  const duplicates = reminders.filter((reminder) => reminder.condition_key === conditionKey);
+  // 5. reactivation
+  try {
+    const reactivated = await upsertReminder(input, { immediate: true });
+    reminder = reactivated.reminder;
+    const stepPassed =
+      reactivated.action === 'reactivated'
+      && reminder?.status === REMINDER_STATUS.ACTIVE
+      && Number(reminder?.reactivation_count) >= 1;
+    recordStep('reactivated', stepPassed, {
+      action: reactivated.action,
+      status: reminder?.status,
+      reactivation_count: reminder?.reactivation_count,
+    });
+  } catch (error) {
+    recordStep('reactivated', false);
+    recordError('reactivated', error);
+  }
 
-  const passed =
-    created.action === 'created'
-    && updated.action === 'updated'
-    && resolved.action === 'resolved'
-    && reactivated.action === 'reactivated'
-    && reactivated.reminder?.status === REMINDER_STATUS.ACTIVE
-    && Number(reactivated.reminder?.reactivation_count) >= 1
-    && skipped.action === 'skipped_cancelled'
-    && duplicates.length === 1;
+  // 6. snooze
+  try {
+    if (!reminder?.id) throw new Error('reminder id is missing');
+
+    const futureIso = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    await snoozeReminder(reminder.id, futureIso);
+    reminder = await reloadReminder();
+
+    const snoozeTime = toTimestamp(reminder?.snoozed_until);
+    const stepPassed =
+      reminder?.status === REMINDER_STATUS.SNOOZED
+      && reminder?.is_snoozed === true
+      && snoozeTime !== null
+      && snoozeTime > Date.now();
+
+    recordStep('snoozed', stepPassed, {
+      status: reminder?.status,
+      is_snoozed: reminder?.is_snoozed,
+      snoozed_until: reminder?.snoozed_until,
+    });
+  } catch (error) {
+    recordStep('snoozed', false);
+    recordError('snoozed', error);
+  }
+
+  // 7. hidden while snoozed
+  try {
+    const reminders = await base44.entities.Reminder.list();
+    const visible = getVisibleReminders(reminders);
+    const isHidden = !visible.some((item) => item.condition_key === conditionKey);
+    recordStep('hidden_while_snoozed', isHidden, {
+      visibleCount: visible.length,
+    });
+  } catch (error) {
+    recordStep('hidden_while_snoozed', false);
+    recordError('hidden_while_snoozed', error);
+  }
+
+  // 8. expired snooze persisted as active
+  try {
+    if (!reminder?.id) throw new Error('reminder id is missing');
+
+    const expiredSnoozedUntil = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    await base44.entities.Reminder.update(reminder.id, {
+      status: REMINDER_STATUS.SNOOZED,
+      is_snoozed: true,
+      snoozed_until: expiredSnoozedUntil,
+    });
+
+    const remindersBefore = await base44.entities.Reminder.list();
+    const summary = await normalizeAndPersistExpiredSnoozes(remindersBefore);
+    reminder = await reloadReminder();
+
+    const stepPassed =
+      summary.updated >= 1
+      && reminder?.status === REMINDER_STATUS.ACTIVE
+      && reminder?.is_snoozed === false
+      && !reminder?.snoozed_until;
+
+    recordStep('expired_snooze_reactivated', stepPassed, {
+      updated: summary.updated,
+      status: reminder?.status,
+      is_snoozed: reminder?.is_snoozed,
+      snoozed_until: reminder?.snoozed_until,
+    });
+  } catch (error) {
+    recordStep('expired_snooze_reactivated', false);
+    recordError('expired_snooze_reactivated', error);
+  }
+
+  // 9. updateReminderSchedule
+  try {
+    if (!reminder?.id) throw new Error('reminder id is missing');
+
+    const futureNextRemindAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+    await updateReminderSchedule(reminder.id, {
+      frequency: 'weekly',
+      next_remind_at: futureNextRemindAt,
+    });
+    reminder = await reloadReminder();
+
+    let invalidRejected = false;
+    try {
+      await updateReminderSchedule(reminder.id, { condition_key: 'bad' });
+    } catch (invalidError) {
+      invalidRejected = String(invalidError?.message || '').includes('Invalid schedule field');
+    }
+
+    const stepPassed =
+      reminder?.frequency === 'weekly'
+      && Boolean(reminder?.next_remind_at)
+      && invalidRejected;
+
+    recordStep('schedule_update', stepPassed, {
+      frequency: reminder?.frequency,
+      next_remind_at: reminder?.next_remind_at,
+      invalidRejected,
+      scheduleTestSkipped: false,
+    });
+  } catch (error) {
+    recordStep('schedule_update', false, { scheduleTestSkipped: false });
+    recordError('schedule_update', error);
+  }
+
+  // 10. cancel + skipped_cancelled
+  try {
+    if (!reminder?.id) throw new Error('reminder id is missing');
+
+    await cancelReminder(reminder.id, 'foundation_test_done');
+    const skipped = await upsertReminder(input, { immediate: true });
+    reminder = skipped.reminder || await reloadReminder();
+
+    const stepPassed =
+      skipped.action === 'skipped_cancelled'
+      && reminder?.status === REMINDER_STATUS.CANCELLED;
+
+    recordStep('cancelled_skip', stepPassed, {
+      action: skipped.action,
+      status: reminder?.status,
+    });
+  } catch (error) {
+    recordStep('cancelled_skip', false);
+    recordError('cancelled_skip', error);
+  }
 
   return {
-    conditionKey,
-    results,
-    steps: results,
-    duplicateCount: duplicates.length,
     passed,
+    conditionKey,
+    settingsOk,
+    steps,
+    errors,
   };
+}
+
+/** @deprecated Use debugReminderFoundationTest */
+export async function debugReminderUpsertSanityCheck() {
+  return debugReminderFoundationTest();
 }
