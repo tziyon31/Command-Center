@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
 import { createPageUrl } from '@/utils';
 import { Button } from '@/components/ui/button';
@@ -9,6 +9,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { ArrowRight } from 'lucide-react';
+
+const AUTOSAVE_DEBOUNCE_MS = 1000;
 
 const EMPTY_FORM = {
   client_name: '',
@@ -32,75 +34,172 @@ const toOptionalNumber = (value) => {
   return Number.isFinite(num) ? num : undefined;
 };
 
+const buildFieldSnapshot = (data) => {
+  const area = toOptionalNumber(data.area);
+  const coolingTons = toOptionalNumber(data.cooling_tons);
+
+  return {
+    client_name: (data.client_name || '').trim(),
+    building_type: (data.building_type || '').trim(),
+    details: (data.details || '').trim(),
+    area: area ?? null,
+    cooling_tons: coolingTons ?? null,
+  };
+};
+
+const snapshotsEqual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+const buildAutosavePayload = (data, { isSubmitted }) => {
+  const snapshot = buildFieldSnapshot(data);
+  const payload = {
+    client_name: snapshot.client_name,
+    building_type: snapshot.building_type,
+    details: snapshot.details,
+  };
+
+  if (snapshot.area !== null) payload.area = snapshot.area;
+  if (snapshot.cooling_tons !== null) payload.cooling_tons = snapshot.cooling_tons;
+
+  if (!isSubmitted) {
+    payload.form_status = 'draft';
+  }
+
+  return payload;
+};
+
+const SAVE_STATUS_LABELS = {
+  idle: null,
+  saving: 'שומר...',
+  saved: 'נשמר',
+  error: 'השמירה נכשלה',
+};
+
 export default function InquiryForm() {
   const urlParams = new URLSearchParams(window.location.search);
-  const inquiryId = urlParams.get('id');
-  const isEditMode = Boolean(inquiryId);
+  const initialInquiryId = urlParams.get('id');
 
-  const [formData, setFormData] = useState(EMPTY_FORM);
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
 
+  const [formData, setFormData] = useState(EMPTY_FORM);
+  const [currentInquiryId, setCurrentInquiryId] = useState(initialInquiryId);
+  const [formStatus, setFormStatus] = useState(null);
+  const [saveStatus, setSaveStatus] = useState('idle');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const lastSavedSnapshotRef = useRef(buildFieldSnapshot(EMPTY_FORM));
+  const skipAutosaveRef = useRef(false);
+  const saveDraftNowRef = useRef(null);
+
+  const isEditMode = Boolean(currentInquiryId);
+
   const { data: inquiry, isLoading } = useQuery({
-    queryKey: ['inquiry', inquiryId],
+    queryKey: ['inquiry', currentInquiryId],
     queryFn: async () => {
-      const results = await base44.entities.Inquiry.filter({ id: inquiryId });
+      const results = await base44.entities.Inquiry.filter({ id: currentInquiryId });
       return results?.[0] || null;
     },
     enabled: isEditMode,
   });
 
   useEffect(() => {
-    if (inquiry) {
-      setFormData(inquiryToForm(inquiry));
-    }
+    if (!inquiry) return;
+
+    const nextForm = inquiryToForm(inquiry);
+    setFormData(nextForm);
+    lastSavedSnapshotRef.current = buildFieldSnapshot(nextForm);
+    setFormStatus(inquiry.form_status || 'draft');
+    skipAutosaveRef.current = true;
   }, [inquiry]);
 
-  const saveMutation = useMutation({
-    mutationFn: async (payload) => {
-      if (isEditMode) {
-        return base44.entities.Inquiry.update(inquiryId, payload);
+  const saveDraftNow = useCallback(
+    async ({ isManual = false } = {}) => {
+      if (isSubmitting) return;
+
+      const snapshot = buildFieldSnapshot(formData);
+      if (snapshotsEqual(snapshot, lastSavedSnapshotRef.current)) {
+        return;
       }
 
-      return base44.entities.Inquiry.create(payload);
-    },
-    onSuccess: (savedInquiry) => {
-      queryClient.invalidateQueries(['inquiries']);
+      const isSubmitted = formStatus === 'submitted';
+      const payload = buildAutosavePayload(formData, { isSubmitted });
 
-      if (!isEditMode && savedInquiry?.id) {
-        window.location.href = createPageUrl(`InquiryForm?id=${savedInquiry.id}`);
+      setSaveStatus('saving');
+
+      try {
+        let savedInquiry;
+
+        if (currentInquiryId) {
+          savedInquiry = await base44.entities.Inquiry.update(currentInquiryId, payload);
+        } else {
+          savedInquiry = await base44.entities.Inquiry.create(payload);
+          const newId = savedInquiry?.id;
+
+          if (newId) {
+            setCurrentInquiryId(newId);
+            setFormStatus('draft');
+            navigate(createPageUrl(`InquiryForm?id=${newId}`), { replace: true });
+          }
+        }
+
+        const resolvedInquiryId = currentInquiryId || savedInquiry?.id;
+
+        lastSavedSnapshotRef.current = snapshot;
+        setSaveStatus('saved');
+        queryClient.invalidateQueries(['inquiries']);
+
+        if (resolvedInquiryId) {
+          queryClient.invalidateQueries(['inquiry', resolvedInquiryId]);
+        }
+
+        if (isManual) {
+          alert('הטיוטה נשמרה');
+        }
+      } catch (error) {
+        console.error('[InquiryForm] failed to save draft', error);
+        setSaveStatus('error');
+
+        if (isManual) {
+          alert('שמירת הטיוטה נכשלה');
+        }
       }
     },
-  });
+    [
+      formData,
+      formStatus,
+      currentInquiryId,
+      isSubmitting,
+      navigate,
+      queryClient,
+    ],
+  );
+
+  saveDraftNowRef.current = saveDraftNow;
+
+  useEffect(() => {
+    if (isLoading || isSubmitting) return;
+
+    if (skipAutosaveRef.current) {
+      skipAutosaveRef.current = false;
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      saveDraftNowRef.current?.();
+    }, AUTOSAVE_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [formData, isLoading, isSubmitting]);
 
   const handleFieldChange = (field, value) => {
     setFormData((current) => ({ ...current, [field]: value }));
-  };
-
-  const buildDraftPayload = () => {
-    const payload = {
-      client_name: formData.client_name.trim(),
-      building_type: formData.building_type.trim(),
-      details: formData.details.trim(),
-      form_status: 'draft',
-    };
-
-    const area = toOptionalNumber(formData.area);
-    const coolingTons = toOptionalNumber(formData.cooling_tons);
-
-    if (area !== undefined) payload.area = area;
-    if (coolingTons !== undefined) payload.cooling_tons = coolingTons;
-
-    return payload;
-  };
-
-  const handleSaveDraft = async () => {
-    try {
-      await saveMutation.mutateAsync(buildDraftPayload());
-      alert('הטיוטה נשמרה');
-    } catch (error) {
-      console.error('[InquiryForm] failed to save draft', error);
-      alert('שמירת הטיוטה נכשלה');
+    if (saveStatus === 'saved' || saveStatus === 'error') {
+      setSaveStatus('idle');
     }
+  };
+
+  const handleSaveDraft = () => {
+    saveDraftNow({ isManual: true });
   };
 
   const handleSubmitForm = async () => {
@@ -112,25 +211,52 @@ export default function InquiryForm() {
       return;
     }
 
+    setIsSubmitting(true);
+    setSaveStatus('saving');
+
     try {
-      await saveMutation.mutateAsync({
-        ...buildDraftPayload(),
+      const snapshot = buildFieldSnapshot(formData);
+      const payload = {
+        ...buildAutosavePayload(formData, { isSubmitted: false }),
         client_name: clientName,
         details,
         form_status: 'submitted',
         submitted_at: new Date().toISOString(),
-      });
+      };
+
+      let savedInquiry;
+
+      if (currentInquiryId) {
+        savedInquiry = await base44.entities.Inquiry.update(currentInquiryId, payload);
+      } else {
+        savedInquiry = await base44.entities.Inquiry.create(payload);
+        const newId = savedInquiry?.id;
+
+        if (newId) {
+          setCurrentInquiryId(newId);
+          navigate(createPageUrl(`InquiryForm?id=${newId}`), { replace: true });
+        }
+      }
+
+      lastSavedSnapshotRef.current = snapshot;
+      setFormStatus('submitted');
+      setSaveStatus('saved');
+      queryClient.invalidateQueries(['inquiries']);
+      queryClient.invalidateQueries(['inquiry', currentInquiryId || savedInquiry?.id]);
 
       alert('הטופס הוגש בהצלחה');
-      queryClient.invalidateQueries(['inquiry', inquiryId]);
     } catch (error) {
       console.error('[InquiryForm] failed to submit form', error);
+      setSaveStatus('error');
       alert('הגשת הטופס נכשלה');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  const isSaving = saveMutation.isPending;
-  const isSubmitted = inquiry?.form_status === 'submitted';
+  const isSaving = saveStatus === 'saving' || isSubmitting;
+  const isSubmitted = formStatus === 'submitted';
+  const saveStatusLabel = SAVE_STATUS_LABELS[saveStatus];
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50" dir="rtl">
@@ -224,7 +350,7 @@ export default function InquiryForm() {
                     onClick={handleSaveDraft}
                     disabled={isSaving}
                   >
-                    {isSaving ? 'שומר...' : 'שמור טיוטה'}
+                    שמור טיוטה
                   </Button>
 
                   <Button
@@ -234,11 +360,22 @@ export default function InquiryForm() {
                   >
                     הגשת טופס
                   </Button>
+
+                  {saveStatusLabel && (
+                    <span
+                      className={`text-sm ${
+                        saveStatus === 'error' ? 'text-destructive' : 'text-muted-foreground'
+                      }`}
+                      aria-live="polite"
+                    >
+                      {saveStatusLabel}
+                    </span>
+                  )}
                 </div>
 
                 {isSubmitted && (
                   <p className="text-xs text-muted-foreground">
-                    הפנייה כבר הוגשה. ניתן לערוך ולשמור טיוטה, אך הגשה חוזרת חסומה בשלב זה.
+                    הפנייה כבר הוגשה. ניתן לערוך ולשמור שינויים, אך הגשה חוזרת חסומה בשלב זה.
                   </p>
                 )}
               </>
