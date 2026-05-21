@@ -23,11 +23,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import QuoteBreakdownCard from '../components/dashboard/QuoteBreakdownCard.jsx';
 import TodayTasksCard from '../components/dashboard/TodayTasksCard.jsx';
 import ReminderPanel from '../components/reminders/ReminderPanel.jsx';
-import {
-  debugReminderFoundationTest,
-  loadVisibleReminders,
-  upsertReminder,
-} from '@/lib/reminderEngine';
+import { loadVisibleReminders } from '@/lib/reminderEngine';
 import { cn } from '@/lib/utils';
 
 const OPEN_PROPOSAL_STATUSES = ['pricing', 'waiting'];
@@ -172,33 +168,9 @@ const isProjectEligibleForInactivityCheck = (project) => {
 export default function Dashboard() {
   const [quotePeriod, setQuotePeriod] = React.useState('year');
   const [collectionPeriod, setCollectionPeriod] = React.useState('year');
-  const [sanityCheckRunning, setSanityCheckRunning] = React.useState(false);
-  const [demoReminderCreating, setDemoReminderCreating] = React.useState(false);
   const [dashboardMode, setDashboardMode] = React.useState('metrics_focus');
   const navigate = useNavigate();
   const collectionDueNowCardRef = useRef(null);
-
-  // TEMPORARY: remove after reminder foundation verification.
-  const handleRunReminderFoundationTest = async () => {
-    setSanityCheckRunning(true);
-
-    try {
-      const result = await debugReminderFoundationTest();
-      console.log('[ReminderFoundationTest]', result);
-      console.table(result.steps || []);
-
-      if (result.passed === true) {
-        alert('בדיקת Foundation תזכורות עברה בהצלחה');
-      } else {
-        alert('בדיקת Foundation תזכורות נכשלה - בדוק console');
-      }
-    } catch (error) {
-      console.error('[ReminderFoundationTest]', error);
-      alert('בדיקת Foundation תזכורות נכשלה - בדוק console');
-    } finally {
-      setSanityCheckRunning(false);
-    }
-  };
 
   const { data: currentUser } = useQuery({
     queryKey: ['currentUser'],
@@ -249,34 +221,6 @@ export default function Dashboard() {
     queryFn: () => loadVisibleReminders(),
     enabled: canSeeFullDashboard && !!currentUser,
   });
-
-  // TEMPORARY: remove after dashboard reminder display is verified.
-  const handleCreateDemoReminder = async () => {
-    setDemoReminderCreating(true);
-
-    try {
-      const uniqueId = Date.now();
-      await upsertReminder({
-        title: `תזכורת בדיקה #${uniqueId}`,
-        description: 'זוהי תזכורת בדיקה זמנית להצגת ReminderPanel',
-        client_name: 'לקוח בדיקה',
-        project_name: 'פרויקט בדיקה',
-        source_type: 'debug',
-        source_id: `dashboard-visible-demo-${uniqueId}`,
-        condition_key: `debug:dashboard-visible-demo:${uniqueId}`,
-        action_url: '/Projects',
-        action_label: 'פתח פרויקטים',
-        frequency: 'daily',
-      }, { immediate: true });
-
-      await refetchReminders();
-    } catch (error) {
-      console.error('[Dashboard] Failed to create demo reminder', error);
-      alert('יצירת תזכורת בדיקה נכשלה - בדוק console');
-    } finally {
-      setDemoReminderCreating(false);
-    }
-  };
 
   const todayOpenTasks = useMemo(() => {
     const today = new Date().toISOString().split('T')[0];
@@ -569,29 +513,6 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50">
-      {/* TEMPORARY: debug controls — remove after verification */}
-      <div className="fixed bottom-4 left-4 z-50 flex flex-col gap-2 items-start">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="text-xs shadow-md"
-          onClick={handleRunReminderFoundationTest}
-          disabled={sanityCheckRunning}
-        >
-          {sanityCheckRunning ? 'מריץ בדיקה...' : 'בדיקת Foundation תזכורות'}
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="text-xs shadow-md"
-          onClick={handleCreateDemoReminder}
-          disabled={demoReminderCreating}
-        >
-          {demoReminderCreating ? 'יוצר תזכורת...' : 'צור תזכורת בדיקה לתצוגה'}
-        </Button>
-      </div>
       <div className="max-w-[1600px] mx-auto px-8 py-12 space-y-16">
         {/* Header */}
         <div className="flex items-end justify-between">
