@@ -20,7 +20,14 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/components/ui/use-toast';
 import { snoozeReminder } from '@/lib/reminderEngine';
-import { Bell, Clock, ExternalLink } from 'lucide-react';
+import ReminderEditDialog from './ReminderEditDialog.jsx';
+import {
+  datetimeLocalToIso,
+  getDefaultFutureDatetimeValue,
+  isFutureDatetimeLocal,
+  toDatetimeLocalValue,
+} from './reminderDateTime.js';
+import { Bell, Clock, ExternalLink, Pencil } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const FREQUENCY_LABELS = {
@@ -62,19 +69,6 @@ const SNOOZE_OPTIONS = [
   },
 ];
 
-const toDatetimeLocalValue = (date) => {
-  const pad = (value) => String(value).padStart(2, '0');
-
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-};
-
-const getDefaultCustomSnoozeValue = () => {
-  const date = new Date();
-  date.setDate(date.getDate() + 1);
-  date.setHours(7, 0, 0, 0);
-  return toDatetimeLocalValue(date);
-};
-
 const formatShortDateTime = (value) => {
   if (!value) return null;
 
@@ -104,7 +98,8 @@ export default function ReminderCard({ reminder, onSnoozed, className }) {
   const navigate = useNavigate();
   const [isSnoozing, setIsSnoozing] = useState(false);
   const [customSnoozeOpen, setCustomSnoozeOpen] = useState(false);
-  const [customDateTimeValue, setCustomDateTimeValue] = useState(getDefaultCustomSnoozeValue);
+  const [editOpen, setEditOpen] = useState(false);
+  const [customDateTimeValue, setCustomDateTimeValue] = useState(getDefaultFutureDatetimeValue);
   const activeDays = getActiveDays(reminder.active_since);
   const frequencyLabel = FREQUENCY_LABELS[reminder.frequency] || reminder.frequency || 'יומי';
   const nextRemindAtLabel = formatShortDateTime(reminder.next_remind_at);
@@ -153,25 +148,18 @@ export default function ReminderCard({ reminder, onSnoozed, className }) {
   };
 
   const openCustomSnoozeDialog = () => {
-    setCustomDateTimeValue(getDefaultCustomSnoozeValue());
+    setCustomDateTimeValue(getDefaultFutureDatetimeValue());
     setCustomSnoozeOpen(true);
   };
 
   const handleCustomSnooze = async () => {
-    if (!customDateTimeValue) {
-      alert('יש לבחור זמן עתידי לתזכורת');
-      return;
-    }
-
-    const selectedDate = new Date(customDateTimeValue);
-    if (Number.isNaN(selectedDate.getTime()) || selectedDate.getTime() <= Date.now()) {
+    if (!isFutureDatetimeLocal(customDateTimeValue)) {
       alert('יש לבחור זמן עתידי לתזכורת');
       return;
     }
 
     try {
-      const snoozedUntil = selectedDate.toISOString();
-      await applySnooze(snoozedUntil, 'בחר תאריך ושעה');
+      await applySnooze(datetimeLocalToIso(customDateTimeValue), 'בחר תאריך ושעה');
       setCustomSnoozeOpen(false);
     } catch (error) {
       console.error('[ReminderCard] failed to custom snooze reminder', error);
@@ -261,8 +249,27 @@ export default function ReminderCard({ reminder, onSnoozed, className }) {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground"
+            onClick={() => setEditOpen(true)}
+            disabled={isSnoozing}
+          >
+            <Pencil className="w-3.5 h-3.5 ml-1.5" />
+            ערוך
+          </Button>
         </div>
       </div>
+
+      <ReminderEditDialog
+        reminder={reminder}
+        open={editOpen}
+        onClose={() => setEditOpen(false)}
+        onUpdated={onSnoozed}
+      />
 
       <Dialog open={customSnoozeOpen} onOpenChange={setCustomSnoozeOpen}>
         <DialogContent className="max-w-sm text-right" dir="rtl">

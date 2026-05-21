@@ -255,14 +255,15 @@ export default function Dashboard() {
     setDemoReminderCreating(true);
 
     try {
+      const uniqueId = Date.now();
       await upsertReminder({
-        title: 'תזכורת בדיקה לדשבורד',
+        title: `תזכורת בדיקה #${uniqueId}`,
         description: 'זוהי תזכורת בדיקה זמנית להצגת ReminderPanel',
         client_name: 'לקוח בדיקה',
         project_name: 'פרויקט בדיקה',
         source_type: 'debug',
-        source_id: 'dashboard-visible-demo',
-        condition_key: 'debug:dashboard-visible-demo',
+        source_id: `dashboard-visible-demo-${uniqueId}`,
+        condition_key: `debug:dashboard-visible-demo:${uniqueId}`,
         action_url: '/Projects',
         action_label: 'פתח פרויקטים',
         frequency: 'daily',

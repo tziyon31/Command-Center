@@ -181,6 +181,63 @@ export async function cancelReminder(reminderId, reason) {
   });
 }
 
+const ALLOWED_SCHEDULE_FIELDS = new Set(['frequency', 'next_remind_at', 'default_time']);
+const VALID_REMINDER_FREQUENCIES = new Set([
+  'immediate',
+  'daily',
+  'weekly',
+  'due_date_based',
+  'custom',
+]);
+
+const assertFutureScheduleDate = (value, fieldName) => {
+  const timestamp = toTimestamp(value);
+  if (timestamp === null) {
+    throw new Error(`${fieldName} must be a valid future date`);
+  }
+  if (timestamp <= Date.now()) {
+    throw new Error(`${fieldName} must be in the future`);
+  }
+};
+
+export async function updateReminderSchedule(reminderId, schedulePatch) {
+  assertReminderId(reminderId);
+
+  if (!schedulePatch || typeof schedulePatch !== 'object') {
+    throw new Error('schedulePatch is required');
+  }
+
+  const allowedPatch = {};
+
+  for (const field of Object.keys(schedulePatch)) {
+    if (!ALLOWED_SCHEDULE_FIELDS.has(field)) {
+      throw new Error(`Invalid schedule field: ${field}`);
+    }
+  }
+
+  if (schedulePatch.frequency !== undefined) {
+    if (!VALID_REMINDER_FREQUENCIES.has(schedulePatch.frequency)) {
+      throw new Error(`Invalid frequency: ${schedulePatch.frequency}`);
+    }
+    allowedPatch.frequency = schedulePatch.frequency;
+  }
+
+  if (schedulePatch.next_remind_at !== undefined) {
+    assertFutureScheduleDate(schedulePatch.next_remind_at, 'next_remind_at');
+    allowedPatch.next_remind_at = new Date(schedulePatch.next_remind_at).toISOString();
+  }
+
+  if (schedulePatch.default_time !== undefined) {
+    allowedPatch.default_time = String(schedulePatch.default_time).trim();
+  }
+
+  if (Object.keys(allowedPatch).length === 0) {
+    throw new Error('schedulePatch must include at least one allowed field');
+  }
+
+  return persistReminderUpdate(reminderId, allowedPatch);
+}
+
 /**
  * Reminders that should appear in the UI after state normalization (in-memory only).
  */
