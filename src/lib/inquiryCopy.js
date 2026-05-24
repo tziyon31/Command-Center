@@ -1,3 +1,5 @@
+import { base44 } from '@/api/base44Client';
+
 const displayValue = (value) => {
   if (value === '' || value === null || value === undefined) return '-';
   const text = String(value).trim();
@@ -21,6 +23,14 @@ ${details}
 נתח את הפנייה, זהה מידע חסר, וסכם אילו צעדים נדרשים להמשך טיפול.`;
 };
 
+export const inquiryToCopyFormData = (inquiry) => ({
+  client_name: inquiry?.client_name || '',
+  building_type: inquiry?.building_type || '',
+  area: inquiry?.area ?? '',
+  cooling_tons: inquiry?.cooling_tons ?? '',
+  details: inquiry?.details || '',
+});
+
 export const formatCopiedAt = (value) => {
   if (!value) return null;
 
@@ -42,4 +52,24 @@ export const copyTextToClipboard = async (text) => {
   }
 
   await navigator.clipboard.writeText(text);
+};
+
+export const markInquiryCopiedToAi = async (inquiryId) => {
+  const copiedAt = new Date().toISOString();
+  await base44.entities.Inquiry.update(inquiryId, { copied_to_ai_at: copiedAt });
+  return copiedAt;
+};
+
+/**
+ * Copies inquiry fields to clipboard and updates copied_to_ai_at only.
+ * @returns {string} ISO timestamp written to copied_to_ai_at
+ */
+export const copyInquiryFieldsToClipboard = async (formData, inquiryId) => {
+  if (!inquiryId) {
+    throw new Error('Inquiry id is required to copy');
+  }
+
+  const text = buildInquiryCopyText(formData);
+  await copyTextToClipboard(text);
+  return markInquiryCopiedToAi(inquiryId);
 };

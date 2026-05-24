@@ -1,13 +1,17 @@
 import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
 import { createPageUrl } from '@/utils';
 import {
   deleteInquiry,
+  INQUIRY_DELETE_BUTTON_CLASS,
   INQUIRY_DELETE_CONFIRM_MESSAGE,
   isInquiryVisibleInList,
 } from '@/lib/inquiryDelete';
+import {
+  copyInquiryFieldsToClipboard,
+  inquiryToCopyFormData,
+} from '@/lib/inquiryCopy';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
@@ -26,6 +30,8 @@ const FORM_STATUS_LABELS = {
   submitted: 'הוגש',
   cancelled: 'בוטל',
 };
+
+const COPY_SUCCESS_MESSAGE = 'הפנייה הועתקה ללוח';
 
 const formatDateTime = (value) => {
   if (!value) return '-';
@@ -53,6 +59,8 @@ const sortInquiries = (inquiries) => {
 export default function Inquiries() {
   const queryClient = useQueryClient();
   const [deletingId, setDeletingId] = useState(null);
+  const [copyingId, setCopyingId] = useState(null);
+  const [copyFeedback, setCopyFeedback] = useState(null);
 
   const { data: inquiries = [], isLoading } = useQuery({
     queryKey: ['inquiries'],
@@ -85,6 +93,23 @@ export default function Inquiries() {
     }
   };
 
+  const handleCopyInquiry = async (inquiry) => {
+    setCopyingId(inquiry.id);
+    setCopyFeedback(null);
+
+    try {
+      await copyInquiryFieldsToClipboard(inquiryToCopyFormData(inquiry), inquiry.id);
+      setCopyFeedback(COPY_SUCCESS_MESSAGE);
+      queryClient.invalidateQueries({ queryKey: ['inquiries'] });
+      queryClient.invalidateQueries({ queryKey: ['inquiry', inquiry.id] });
+    } catch (error) {
+      console.error('[Inquiries] failed to copy inquiry', error);
+      alert('לא הצלחתי להעתיק את הפנייה');
+    } finally {
+      setCopyingId(null);
+    }
+  };
+
   const rows = useMemo(() => inquiries, [inquiries]);
 
   return (
@@ -103,6 +128,12 @@ export default function Inquiries() {
           </Link>
         </div>
 
+        {copyFeedback && (
+          <p className="text-sm text-muted-foreground" aria-live="polite">
+            {copyFeedback}
+          </p>
+        )}
+
         <Card>
           <CardContent className="p-0">
             {isLoading ? (
@@ -118,7 +149,7 @@ export default function Inquiries() {
                     <TableHead className="text-right">סטטוס</TableHead>
                     <TableHead className="text-right">נוצר</TableHead>
                     <TableHead className="text-right">עודכן</TableHead>
-                    <TableHead className="text-right w-[180px]">פעולות</TableHead>
+                    <TableHead className="text-right w-[240px]">פעולות</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -144,9 +175,19 @@ export default function Inquiries() {
                           </Link>
                           <Button
                             type="button"
-                            variant="destructive"
+                            variant="outline"
                             size="sm"
-                            disabled={deletingId === inquiry.id}
+                            disabled={copyingId === inquiry.id || deletingId === inquiry.id}
+                            onClick={() => handleCopyInquiry(inquiry)}
+                          >
+                            {copyingId === inquiry.id ? 'מעתיק...' : 'העתק'}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className={INQUIRY_DELETE_BUTTON_CLASS}
+                            disabled={deletingId === inquiry.id || copyingId === inquiry.id}
                             onClick={() => handleDeleteInquiry(inquiry.id)}
                           >
                             {deletingId === inquiry.id ? 'מוחק...' : 'מחק'}
