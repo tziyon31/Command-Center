@@ -23,8 +23,6 @@ import {
   findClientBySourceInquiryId,
   findProjectBySourceInquiryId,
   loadInquiryById,
-  openOrCreateClientFromInquiry,
-  openOrCreateProjectFromInquiry,
 } from '@/lib/inquiryContinuation';
 
 const AUTOSAVE_DEBOUNCE_MS = 1000;
@@ -350,7 +348,7 @@ export default function InquiryForm() {
       const prepared = await prepareInquiryForContinuation();
 
       if (prepared.error === 'client_name') {
-        alert('יש למלא שם לקוח לפני פתיחת לקוח');
+        alert('יש למלא שם לקוח לפני פתיחת טופס לקוח');
         return;
       }
 
@@ -359,24 +357,20 @@ export default function InquiryForm() {
         return;
       }
 
-      const { client, created } = await openOrCreateClientFromInquiry(prepared.inquiry);
+      const existingClient = await findClientBySourceInquiryId(prepared.inquiry.id);
 
-      queryClient.invalidateQueries({ queryKey: ['client-by-inquiry', prepared.inquiry.id] });
-      queryClient.invalidateQueries({ queryKey: ['clients'] });
-
-      if (client?.id) {
-        if (created) {
-          alert('הלקוח נוצר בהצלחה');
-        }
-        navigate(createPageUrl(`ClientDetails?id=${client.id}`));
+      if (existingClient?.id) {
+        navigate(createPageUrl(`ClientDetails?id=${existingClient.id}`));
         return;
       }
 
-      alert('הלקוח נוצר');
-      navigate(createPageUrl('Clients'));
+      const clientName = encodeURIComponent(prepared.inquiry.client_name.trim());
+      navigate(createPageUrl(
+        `ClientForm?source_inquiry_id=${prepared.inquiry.id}&name=${clientName}`
+      ));
     } catch (error) {
-      console.error('[InquiryForm] failed to open client from inquiry', error);
-      alert('לא הצלחנו לפתוח או ליצור לקוח מהפנייה');
+      console.error('[InquiryForm] failed to open client form from inquiry', error);
+      alert('לא הצלחנו לפתוח את טופס הלקוח');
     } finally {
       setIsOpeningClient(false);
     }
@@ -389,7 +383,7 @@ export default function InquiryForm() {
       const prepared = await prepareInquiryForContinuation();
 
       if (prepared.error === 'client_name') {
-        alert('יש למלא שם לקוח לפני פתיחת פרויקט');
+        alert('יש למלא שם לקוח לפני פתיחת טופס פרויקט');
         return;
       }
 
@@ -398,30 +392,22 @@ export default function InquiryForm() {
         return;
       }
 
-      const {
-        project,
-        createdProject,
-        createdClient,
-      } = await openOrCreateProjectFromInquiry(prepared.inquiry);
+      const existingProject = await findProjectBySourceInquiryId(prepared.inquiry.id);
 
-      queryClient.invalidateQueries({ queryKey: ['project-by-inquiry', prepared.inquiry.id] });
-      queryClient.invalidateQueries({ queryKey: ['client-by-inquiry', prepared.inquiry.id] });
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
-      queryClient.invalidateQueries({ queryKey: ['clients'] });
-
-      if (project?.id) {
-        if (createdProject || createdClient) {
-          alert('הפרויקט נוצר בהצלחה');
-        }
-        navigate(createPageUrl(`ProjectDetails?id=${project.id}`));
+      if (existingProject?.id) {
+        navigate(createPageUrl(`ProjectDetails?id=${existingProject.id}`));
         return;
       }
 
-      alert('הפרויקט נוצר');
-      navigate(createPageUrl('Projects'));
+      const clientName = encodeURIComponent(prepared.inquiry.client_name.trim());
+      const projectName = clientName;
+
+      navigate(createPageUrl(
+        `ProjectDetails?source_inquiry_id=${prepared.inquiry.id}&client_name=${clientName}&project_name=${projectName}&form_status=draft`
+      ));
     } catch (error) {
-      console.error('[InquiryForm] failed to open project from inquiry', error);
-      alert('לא הצלחנו לפתוח או ליצור פרויקט מהפנייה');
+      console.error('[InquiryForm] failed to open project form from inquiry', error);
+      alert('לא הצלחנו לפתוח את טופס הפרויקט');
     } finally {
       setIsOpeningProject(false);
     }
@@ -663,9 +649,9 @@ export default function InquiryForm() {
                       disabled={isSaving}
                     >
                       {isOpeningProject
-                        ? 'פותח פרויקט...'
+                        ? 'פותח...'
                         : linkedProject
-                          ? 'פתח פרויקט'
+                          ? 'פתח פרויקט קיים'
                           : 'פתח פרויקט מהפנייה'}
                     </Button>
                   </div>

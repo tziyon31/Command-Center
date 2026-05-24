@@ -49,6 +49,7 @@
  */
 import Assistant from './pages/Assistant';
 import Clients from './pages/Clients';
+import ClientForm from './pages/ClientForm';
 import Dashboard from './pages/Dashboard';
 import Inquiries from './pages/Inquiries';
 import InquiryForm from './pages/InquiryForm';
@@ -60,6 +61,7 @@ import __Layout from './Layout.jsx';
 export const PAGES = {
     "Assistant": Assistant,
     "Clients": Clients,
+    "ClientForm": ClientForm,
     "Dashboard": Dashboard,
     "Inquiries": Inquiries,
     "InquiryForm": InquiryForm,

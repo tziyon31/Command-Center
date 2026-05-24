@@ -20,7 +20,7 @@ const resolveActiveNavPage = (currentPageName) => {
     return 'Projects';
   }
 
-  if (currentPageName === 'ClientDetails') {
+  if (currentPageName === 'ClientDetails' || currentPageName === 'ClientForm') {
     return 'Clients';
   }
 

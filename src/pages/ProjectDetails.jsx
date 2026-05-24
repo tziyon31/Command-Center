@@ -121,6 +121,31 @@ const projectToFormData = (project) => ({
   notes: project?.notes || '',
 });
 
+const readSearchParam = (params, key) => {
+  const value = params.get(key);
+  if (!value) return '';
+
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+};
+
+const buildProjectCreateFormFromParams = (params) => projectToFormData({
+  name: readSearchParam(params, 'project_name') || readSearchParam(params, 'client_name'),
+  status: 'pricing',
+  year: new Date().getFullYear(),
+  total_amount: 0,
+});
+
+const buildProjectCreatePayload = (formData, { sourceInquiryId, formStatus }) => ({
+  ...buildProjectUpdatePayload(formData),
+  form_status: formStatus || 'draft',
+  source_inquiry_id: sourceInquiryId,
+  collected_amount: 0,
+});
+
 const buildProjectUpdatePayload = (formData) => ({
   client_id: formData.client_id || '',
   bid_number: formData.bid_number.trim(),
@@ -147,8 +172,15 @@ export default function ProjectDetails() {
   const location = useLocation();
   const params = new URLSearchParams(location.search);
   const projectId = params.get('id');
+  const sourceInquiryId = params.get('source_inquiry_id') || '';
+  const createFormStatus = params.get('form_status') || 'draft';
+  const isCreateFromInquiry = !projectId && Boolean(sourceInquiryId);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [createFormData, setCreateFormData] = useState(() => (
+    isCreateFromInquiry ? buildProjectCreateFormFromParams(params) : null
+  ));
+  const [isSavingCreate, setIsSavingCreate] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [editFormData, setEditFormData] = useState(null);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
@@ -178,7 +210,7 @@ export default function ProjectDetails() {
       const projects = await base44.entities.Project.list();
       return projects.find((item) => item.id === projectId) || null;
     },
-    enabled: !!projectId,
+    enabled: Boolean(projectId),
   });
 
   const { data: clients = [] } = useQuery({
@@ -200,6 +232,38 @@ export default function ProjectDetails() {
     setCollectionNote(project.collection_due_note || '');
     setCollectionTargetDate(getCollectionTargetDateForInput(project));
   }, [isCollectionDialogOpen, project]);
+
+  const handleSaveProjectCreate = async (event) => {
+    event.preventDefault();
+
+    if (!createFormData || !sourceInquiryId) return;
+
+    const name = createFormData.name.trim();
+    if (!name) {
+      alert('יש למלא שם פרויקט');
+      return;
+    }
+
+    setIsSavingCreate(true);
+
+    try {
+      const project = await base44.entities.Project.create(
+        buildProjectCreatePayload(createFormData, {
+          sourceInquiryId,
+          formStatus: createFormStatus,
+        })
+      );
+
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['project-by-inquiry', sourceInquiryId] });
+      navigate(createPageUrl(`ProjectDetails?id=${project.id}`));
+    } catch (error) {
+      console.error('[Project] failed to create project', error);
+      alert('לא הצלחנו לשמור את הפרויקט');
+    } finally {
+      setIsSavingCreate(false);
+    }
+  };
 
   const handleEditDialogOpenChange = (open) => {
     setIsEditDialogOpen(open);
@@ -264,6 +328,162 @@ export default function ProjectDetails() {
       setCollectionTargetDate('');
     }
   };
+
+  if (isCreateFromInquiry && createFormData) {
+    return (
+      <div className="min-h-screen bg-slate-50 p-6">
+        <div className="max-w-[1100px] mx-auto space-y-6">
+          <Button asChild variant="ghost" size="sm" className="gap-1">
+            <Link to={createPageUrl('Projects')}>
+              <ArrowRight className="w-4 h-4" />
+              חזרה לפרויקטים
+            </Link>
+          </Button>
+
+          <Card className="border-0 shadow-sm">
+            <CardHeader>
+              <CardTitle>פרויקט חדש מהפנייה</CardTitle>
+              <CardDescription>
+                {readSearchParam(params, 'client_name')
+                  ? `לקוח מהפנייה: ${readSearchParam(params, 'client_name')}`
+                  : 'מלא את פרטי הפרויקט ושמור ליצירה.'}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleSaveProjectCreate} className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>מספר BID</Label>
+                    <Input
+                      value={createFormData.bid_number}
+                      onChange={(e) => setCreateFormData({ ...createFormData, bid_number: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>מספר עבודה</Label>
+                    <Input
+                      value={createFormData.work_number}
+                      onChange={(e) => setCreateFormData({ ...createFormData, work_number: e.target.value })}
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>שם הפרויקט *</Label>
+                    <Input
+                      value={createFormData.name}
+                      onChange={(e) => setCreateFormData({ ...createFormData, name: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>עיר</Label>
+                    <Input
+                      value={createFormData.city}
+                      onChange={(e) => setCreateFormData({ ...createFormData, city: e.target.value })}
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>סוג פרויקט</Label>
+                    <Input
+                      value={createFormData.project_type}
+                      onChange={(e) => setCreateFormData({ ...createFormData, project_type: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>שטח / יח&quot;ד</Label>
+                    <Input
+                      value={createFormData.area}
+                      onChange={(e) => setCreateFormData({ ...createFormData, area: e.target.value })}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>תיאור</Label>
+                  <Textarea
+                    value={createFormData.description}
+                    onChange={(e) => setCreateFormData({ ...createFormData, description: e.target.value })}
+                    rows={2}
+                  />
+                </div>
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label>סטטוס</Label>
+                    <Select
+                      value={createFormData.status}
+                      onValueChange={(value) => setCreateFormData({ ...createFormData, status: value })}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="pricing">בתמחור</SelectItem>
+                        <SelectItem value="waiting">ממתין</SelectItem>
+                        <SelectItem value="signed">התקבלה</SelectItem>
+                        <SelectItem value="execution">בעבודה</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>שכ&quot;ט ₪</Label>
+                    <Input
+                      type="number"
+                      value={createFormData.total_amount}
+                      onChange={(e) => setCreateFormData({
+                        ...createFormData,
+                        total_amount: parseFloat(e.target.value) || 0,
+                      })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>שנה</Label>
+                    <Input
+                      type="number"
+                      value={createFormData.year}
+                      onChange={(e) => setCreateFormData({
+                        ...createFormData,
+                        year: parseInt(e.target.value, 10) || new Date().getFullYear(),
+                      })}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>לקוח</Label>
+                  <Select
+                    value={createFormData.client_id}
+                    onValueChange={(value) => setCreateFormData({ ...createFormData, client_id: value })}
+                  >
+                    <SelectTrigger><SelectValue placeholder="בחר לקוח (אופציונלי)" /></SelectTrigger>
+                    <SelectContent>
+                      {clients.map((client) => (
+                        <SelectItem key={client.id} value={client.id}>{client.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>הערות</Label>
+                  <Textarea
+                    value={createFormData.notes}
+                    onChange={(e) => setCreateFormData({ ...createFormData, notes: e.target.value })}
+                    rows={2}
+                  />
+                </div>
+                <div className="flex justify-end gap-3 pt-4">
+                  <Button type="button" variant="outline" asChild disabled={isSavingCreate}>
+                    <Link to={createPageUrl('Projects')}>ביטול</Link>
+                  </Button>
+                  <Button type="submit" disabled={isSavingCreate}>
+                    {isSavingCreate ? 'שומר...' : 'שמור'}
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
 
   if (!projectId) {
     return (
