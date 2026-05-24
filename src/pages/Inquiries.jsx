@@ -6,7 +6,6 @@ import {
   deleteInquiry,
   INQUIRY_DELETE_BUTTON_CLASS,
   INQUIRY_DELETE_CONFIRM_MESSAGE,
-  isInquiryVisibleInList,
 } from '@/lib/inquiryDelete';
 import {
   copyInquiryFieldsToClipboard,
@@ -65,9 +64,11 @@ export default function Inquiries() {
   const { data: inquiries = [], isLoading } = useQuery({
     queryKey: ['inquiries'],
     queryFn: async () => {
-      const items = await base44.entities.Inquiry.list('-created_date');
-      return sortInquiries(items.filter(isInquiryVisibleInList));
+      const items = await base44.entities.Inquiry.list();
+      return sortInquiries(items);
     },
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
 
   const deleteMutation = useMutation({
