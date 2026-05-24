@@ -11,11 +11,11 @@ import { Textarea } from '@/components/ui/textarea';
 import { ArrowRight } from 'lucide-react';
 import {
   deleteInquiry,
-  INQUIRY_DELETE_BUTTON_CLASS,
   INQUIRY_DELETE_CONFIRM_MESSAGE,
 } from '@/lib/inquiryDelete';
 import {
-  copyInquiryFieldsToClipboard,
+  buildInquiryCopyText,
+  copyTextToClipboard,
   formatCopiedAt,
 } from '@/lib/inquiryCopy';
 
@@ -289,7 +289,11 @@ export default function InquiryForm() {
         throw new Error('Inquiry was not saved before copy');
       }
 
-      const copiedAt = await copyInquiryFieldsToClipboard(formData, inquiryId);
+      const text = buildInquiryCopyText(formData);
+      await copyTextToClipboard(text);
+
+      const copiedAt = new Date().toISOString();
+      await base44.entities.Inquiry.update(inquiryId, { copied_to_ai_at: copiedAt });
 
       setCopiedToAiAt(copiedAt);
       setCopyFeedback('הפנייה הועתקה ללוח');
@@ -505,9 +509,9 @@ export default function InquiryForm() {
                   {currentInquiryId && (
                     <Button
                       type="button"
-                      variant="outline"
+                      variant="destructive"
                       size="sm"
-                      className={`h-7 px-2 text-xs ${INQUIRY_DELETE_BUTTON_CLASS}`}
+                      className="h-7 px-2 text-xs"
                       onClick={handleDeleteInquiry}
                       disabled={isSaving}
                     >

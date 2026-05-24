@@ -20,7 +20,3 @@ export async function deleteInquiry(inquiryId) {
 }
 
 export const isInquiryVisibleInList = (inquiry) => inquiry?.form_status !== 'cancelled';
-
-/** Secondary destructive style — white background, red text and border. */
-export const INQUIRY_DELETE_BUTTON_CLASS =
-  'bg-white text-destructive border border-destructive hover:bg-red-50 hover:text-destructive hover:border-destructive';
