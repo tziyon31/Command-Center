@@ -24,6 +24,7 @@ import QuoteBreakdownCard from '../components/dashboard/QuoteBreakdownCard.jsx';
 import TodayTasksCard from '../components/dashboard/TodayTasksCard.jsx';
 import ReminderPanel from '../components/reminders/ReminderPanel.jsx';
 import { loadVisibleReminders } from '@/lib/reminderEngine';
+import { runInquiryReminderRulesForAll } from '@/lib/inquiryReminderRules';
 import { cn } from '@/lib/utils';
 
 const OPEN_PROPOSAL_STATUSES = ['pricing', 'waiting'];
@@ -218,7 +219,10 @@ export default function Dashboard() {
     refetch: refetchReminders,
   } = useQuery({
     queryKey: ['reminders', 'visible'],
-    queryFn: () => loadVisibleReminders(),
+    queryFn: async () => {
+      await runInquiryReminderRulesForAll();
+      return loadVisibleReminders();
+    },
     enabled: canSeeFullDashboard && !!currentUser,
   });
 

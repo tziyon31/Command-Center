@@ -18,6 +18,8 @@ import {
   copyTextToClipboard,
   formatCopiedAt,
 } from '@/lib/inquiryCopy';
+import { runInquiryReminderRulesForInquiry } from '@/lib/inquiryReminderRules';
+import { runInquiryReminderRulesForInquiryId } from '@/lib/inquiryReminderRules';
 
 const AUTOSAVE_DEBOUNCE_MS = 1000;
 
@@ -74,6 +76,21 @@ const buildAutosavePayload = (data, { isSubmitted }) => {
   }
 
   return payload;
+};
+
+const syncInquiryReminderRules = async (inquiryId) => {
+  if (!inquiryId) return;
+
+  try {
+    const results = await base44.entities.Inquiry.filter({ id: inquiryId });
+    const inquiry = results?.[0];
+
+    if (inquiry) {
+      await runInquiryReminderRulesForInquiry(inquiry);
+    }
+  } catch (error) {
+    console.error('[InquiryForm] failed to run inquiry reminder rules', error);
+  }
 };
 
 const SAVE_STATUS_LABELS = {
@@ -208,6 +225,8 @@ export default function InquiryForm() {
         if (isManual) {
           alert('הטיוטה נשמרה');
         }
+
+        await syncInquiryReminderRules(resolvedInquiryId);
 
         return resolvedInquiryId;
       } catch (error) {
@@ -372,7 +391,10 @@ export default function InquiryForm() {
       setFormStatus('submitted');
       setSaveStatus('saved');
       queryClient.invalidateQueries(['inquiries']);
-      queryClient.invalidateQueries(['inquiry', inquiryId || savedInquiry?.id]);
+      const submittedInquiryId = inquiryId || savedInquiry?.id;
+      queryClient.invalidateQueries(['inquiry', submittedInquiryId]);
+
+      await syncInquiryReminderRules(submittedInquiryId);
 
       alert('הטופס הוגש בהצלחה');
     } catch (error) {
