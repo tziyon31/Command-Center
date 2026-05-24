@@ -19,6 +19,13 @@ import {
   formatCopiedAt,
 } from '@/lib/inquiryCopy';
 import { runInquiryReminderRulesForInquiry } from '@/lib/inquiryReminderRules';
+import {
+  findClientBySourceInquiryId,
+  findProjectBySourceInquiryId,
+  loadInquiryById,
+  openOrCreateClientFromInquiry,
+  openOrCreateProjectFromInquiry,
+} from '@/lib/inquiryContinuation';
 
 const AUTOSAVE_DEBOUNCE_MS = 1000;
 
@@ -115,6 +122,8 @@ export default function InquiryForm() {
   const [isCopying, setIsCopying] = useState(false);
   const [copiedToAiAt, setCopiedToAiAt] = useState(null);
   const [copyFeedback, setCopyFeedback] = useState(null);
+  const [isOpeningClient, setIsOpeningClient] = useState(false);
+  const [isOpeningProject, setIsOpeningProject] = useState(false);
 
   const lastSavedSnapshotRef = useRef(buildFieldSnapshot(EMPTY_FORM));
   const skipAutosaveRef = useRef(false);
@@ -136,6 +145,18 @@ export default function InquiryForm() {
       return results?.[0] || null;
     },
     enabled: isEditMode,
+  });
+
+  const { data: linkedClient = null } = useQuery({
+    queryKey: ['client-by-inquiry', currentInquiryId],
+    queryFn: () => findClientBySourceInquiryId(currentInquiryId),
+    enabled: Boolean(currentInquiryId),
+  });
+
+  const { data: linkedProject = null } = useQuery({
+    queryKey: ['project-by-inquiry', currentInquiryId],
+    queryFn: () => findProjectBySourceInquiryId(currentInquiryId),
+    enabled: Boolean(currentInquiryId),
   });
 
   useEffect(() => {
@@ -296,6 +317,116 @@ export default function InquiryForm() {
     return inquiryId;
   };
 
+  const prepareInquiryForContinuation = async () => {
+    const clientName = formData.client_name.trim();
+
+    if (!clientName) {
+      return { error: 'client_name' };
+    }
+
+    let inquiryId = currentInquiryIdRef.current;
+
+    if (!inquiryId) {
+      inquiryId = await saveDraftNow({ forceSave: true });
+    }
+
+    if (!inquiryId) {
+      return { error: 'no_inquiry_id' };
+    }
+
+    const loadedInquiry = await loadInquiryById(inquiryId);
+
+    if (!loadedInquiry) {
+      return { error: 'inquiry_not_found' };
+    }
+
+    return { inquiry: loadedInquiry };
+  };
+
+  const handleOpenClientFromInquiry = async () => {
+    setIsOpeningClient(true);
+
+    try {
+      const prepared = await prepareInquiryForContinuation();
+
+      if (prepared.error === 'client_name') {
+        alert('יש למלא שם לקוח לפני פתיחת לקוח');
+        return;
+      }
+
+      if (prepared.error) {
+        alert('לא הצלחנו לטעון את הפנייה. נסה לשמור טיוטה ולנסות שוב.');
+        return;
+      }
+
+      const { client, created } = await openOrCreateClientFromInquiry(prepared.inquiry);
+
+      queryClient.invalidateQueries({ queryKey: ['client-by-inquiry', prepared.inquiry.id] });
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
+
+      if (client?.id) {
+        if (created) {
+          alert('הלקוח נוצר בהצלחה');
+        }
+        navigate(createPageUrl(`ClientDetails?id=${client.id}`));
+        return;
+      }
+
+      alert('הלקוח נוצר');
+      navigate(createPageUrl('Clients'));
+    } catch (error) {
+      console.error('[InquiryForm] failed to open client from inquiry', error);
+      alert('לא הצלחנו לפתוח או ליצור לקוח מהפנייה');
+    } finally {
+      setIsOpeningClient(false);
+    }
+  };
+
+  const handleOpenProjectFromInquiry = async () => {
+    setIsOpeningProject(true);
+
+    try {
+      const prepared = await prepareInquiryForContinuation();
+
+      if (prepared.error === 'client_name') {
+        alert('יש למלא שם לקוח לפני פתיחת פרויקט');
+        return;
+      }
+
+      if (prepared.error) {
+        alert('לא הצלחנו לטעון את הפנייה. נסה לשמור טיוטה ולנסות שוב.');
+        return;
+      }
+
+      const {
+        project,
+        createdProject,
+        createdClient,
+      } = await openOrCreateProjectFromInquiry(prepared.inquiry);
+
+      queryClient.invalidateQueries({ queryKey: ['project-by-inquiry', prepared.inquiry.id] });
+      queryClient.invalidateQueries({ queryKey: ['client-by-inquiry', prepared.inquiry.id] });
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
+
+      if (project?.id) {
+        if (createdProject || createdClient) {
+          alert('הפרויקט נוצר בהצלחה');
+        }
+        navigate(createPageUrl(`ProjectDetails?id=${project.id}`));
+        return;
+      }
+
+      alert('הפרויקט נוצר');
+      navigate(createPageUrl('Projects'));
+    } catch (error) {
+      console.error('[InquiryForm] failed to open project from inquiry', error);
+      alert('לא הצלחנו לפתוח או ליצור פרויקט מהפנייה');
+    } finally {
+      setIsOpeningProject(false);
+    }
+  };
+
   const handleCopyInquiry = async () => {
     setIsCopying(true);
     setCopyFeedback(null);
@@ -405,7 +536,13 @@ export default function InquiryForm() {
     }
   };
 
-  const isSaving = saveStatus === 'saving' || isSubmitting || isDeleting || isCopying;
+  const isSaving =
+    saveStatus === 'saving' ||
+    isSubmitting ||
+    isDeleting ||
+    isCopying ||
+    isOpeningClient ||
+    isOpeningProject;
   const isSubmitted = formStatus === 'submitted';
   const saveStatusLabel = SAVE_STATUS_LABELS[saveStatus];
   const copiedAtLabel = formatCopiedAt(copiedToAiAt);
@@ -498,6 +635,40 @@ export default function InquiryForm() {
                     onChange={(event) => handleFieldChange('details', event.target.value)}
                     disabled={isSaving}
                   />
+                </div>
+
+                <div className="rounded-md border p-4 space-y-3">
+                  <h3 className="text-sm font-semibold">המשך טיפול</h3>
+                  <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+                    {linkedClient && <span>לקוח נוצר</span>}
+                    {linkedProject && <span>פרויקט נוצר</span>}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleOpenClientFromInquiry}
+                      disabled={isSaving}
+                    >
+                      {isOpeningClient
+                        ? 'פותח לקוח...'
+                        : linkedClient
+                          ? 'פתח לקוח'
+                          : 'פתח לקוח מהפנייה'}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleOpenProjectFromInquiry}
+                      disabled={isSaving}
+                    >
+                      {isOpeningProject
+                        ? 'פותח פרויקט...'
+                        : linkedProject
+                          ? 'פתח פרויקט'
+                          : 'פתח פרויקט מהפנייה'}
+                    </Button>
+                  </div>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 pt-2">
