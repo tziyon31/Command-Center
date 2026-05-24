@@ -8,6 +8,7 @@ import {
   INQUIRY_DELETE_CONFIRM_MESSAGE,
   isInquiryVisibleInList,
 } from '@/lib/inquiryDelete';
+import { buildInquiryCopyText, copyTextToClipboard } from '@/lib/inquiryCopy';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
@@ -42,6 +43,16 @@ const formatDateTime = (value) => {
   }).format(date);
 };
 
+const COPY_SUCCESS_MESSAGE = 'הפנייה הועתקה ללוח';
+
+const inquiryRowToCopyFields = (inquiry) => ({
+  client_name: inquiry?.client_name || '',
+  building_type: inquiry?.building_type || '',
+  area: inquiry?.area ?? '',
+  cooling_tons: inquiry?.cooling_tons ?? '',
+  details: inquiry?.details || '',
+});
+
 const sortInquiries = (inquiries) => {
   return [...inquiries].sort((left, right) => {
     const leftTime = new Date(left.created_date || left.updated_date || 0).getTime();
@@ -53,6 +64,8 @@ const sortInquiries = (inquiries) => {
 export default function Inquiries() {
   const queryClient = useQueryClient();
   const [deletingId, setDeletingId] = useState(null);
+  const [copyingId, setCopyingId] = useState(null);
+  const [copyFeedback, setCopyFeedback] = useState(null);
 
   const { data: inquiries = [], isLoading } = useQuery({
     queryKey: ['inquiries'],
@@ -68,6 +81,26 @@ export default function Inquiries() {
       queryClient.invalidateQueries({ queryKey: ['inquiries'] });
     },
   });
+
+  const handleCopyInquiry = async (inquiry) => {
+    setCopyingId(inquiry.id);
+    setCopyFeedback(null);
+
+    try {
+      const text = buildInquiryCopyText(inquiryRowToCopyFields(inquiry));
+      await copyTextToClipboard(text);
+      await base44.entities.Inquiry.update(inquiry.id, {
+        copied_to_ai_at: new Date().toISOString(),
+      });
+      setCopyFeedback(COPY_SUCCESS_MESSAGE);
+      queryClient.invalidateQueries({ queryKey: ['inquiries'] });
+    } catch (error) {
+      console.error('[Inquiries] failed to copy inquiry', error);
+      alert('לא הצלחתי להעתיק את הפנייה');
+    } finally {
+      setCopyingId(null);
+    }
+  };
 
   const handleDeleteInquiry = async (inquiryId) => {
     const confirmed = window.confirm(INQUIRY_DELETE_CONFIRM_MESSAGE);
@@ -103,6 +136,12 @@ export default function Inquiries() {
           </Link>
         </div>
 
+        {copyFeedback && (
+          <p className="text-sm text-muted-foreground" aria-live="polite">
+            {copyFeedback}
+          </p>
+        )}
+
         <Card>
           <CardContent className="p-0">
             {isLoading ? (
@@ -118,7 +157,7 @@ export default function Inquiries() {
                     <TableHead className="text-right">סטטוס</TableHead>
                     <TableHead className="text-right">נוצר</TableHead>
                     <TableHead className="text-right">עודכן</TableHead>
-                    <TableHead className="text-right w-[180px]">פעולות</TableHead>
+                    <TableHead className="text-right w-[240px]">פעולות</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -144,9 +183,18 @@ export default function Inquiries() {
                           </Link>
                           <Button
                             type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={copyingId === inquiry.id || deletingId === inquiry.id}
+                            onClick={() => handleCopyInquiry(inquiry)}
+                          >
+                            {copyingId === inquiry.id ? 'מעתיק...' : 'העתק'}
+                          </Button>
+                          <Button
+                            type="button"
                             variant="destructive"
                             size="sm"
-                            disabled={deletingId === inquiry.id}
+                            disabled={deletingId === inquiry.id || copyingId === inquiry.id}
                             onClick={() => handleDeleteInquiry(inquiry.id)}
                           >
                             {deletingId === inquiry.id ? 'מוחק...' : 'מחק'}
