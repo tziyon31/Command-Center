@@ -1,0 +1,67 @@
+{
+  "name": "Client",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "\u05e9\u05dd \u05d4\u05dc\u05e7\u05d5\u05d7"
+    },
+    "email": {
+      "type": "string",
+      "format": "email",
+      "description": "\u05db\u05ea\u05d5\u05d1\u05ea \u05de\u05d9\u05d9\u05dc"
+    },
+    "phone": {
+      "type": "string",
+      "description": "\u05d8\u05dc\u05e4\u05d5\u05df"
+    },
+    "company": {
+      "type": "string",
+      "description": "\u05e9\u05dd \u05d4\u05d7\u05d1\u05e8\u05d4"
+    },
+    "business_number": {
+      "type": "string",
+      "description": "\u05de\u05e1\u05e4\u05e8 \u05e2\u05e1\u05e7"
+    },
+    "address": {
+      "type": "string",
+      "description": "\u05db\u05ea\u05d5\u05d1\u05ea"
+    },
+    "notes": {
+      "type": "string",
+      "description": "\u05d4\u05e2\u05e8\u05d5\u05ea"
+    },
+    "rating": {
+      "type": "string",
+      "enum": [
+        "A",
+        "B",
+        "C"
+      ],
+      "default": "B",
+      "description": "\u05d3\u05d9\u05e8\u05d5\u05d2 \u05dc\u05e7\u05d5\u05d7"
+    },
+    "document_count": {
+      "type": "number",
+      "default": 0,
+      "description": "\u05db\u05de\u05d5\u05ea \u05de\u05e1\u05de\u05db\u05d9\u05dd"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "completed",
+        "archived"
+      ],
+      "default": "completed",
+      "description": "\u05e1\u05d8\u05d8\u05d5\u05e1 \u05dc\u05e7\u05d5\u05d7"
+    },
+    "source_inquiry_id": {
+      "type": "string",
+      "description": "\u05de\u05d6\u05d4\u05d4 \u05e4\u05e0\u05d9\u05d9\u05d4 \u05e9\u05de\u05de\u05e0\u05d4 \u05e0\u05d5\u05e6\u05e8 \u05d4\u05dc\u05e7\u05d5\u05d7"
+    }
+  },
+  "required": [
+    "name"
+  ]
+}
