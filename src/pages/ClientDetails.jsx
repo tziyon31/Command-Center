@@ -1,6 +1,6 @@
-import React, { useMemo } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import React, { useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,11 @@ import {
 } from 'lucide-react';
 import { subDays } from 'date-fns';
 import { createPageUrl } from '@/utils';
+import {
+  CLIENT_DELETE_BUTTON_CLASS,
+  CLIENT_DELETE_CONFIRM_MESSAGE,
+  deleteClient,
+} from '@/lib/clientDelete';
 
 const formatMoney = (value) =>
   new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(Number(value) || 0);
@@ -27,6 +32,9 @@ const STATUS_LABELS = {
 export default function ClientDetails() {
   const urlParams = new URLSearchParams(window.location.search);
   const clientId = urlParams.get('id');
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ['client-details', clientId],
@@ -147,6 +155,27 @@ export default function ClientDetails() {
 
   const { client, projects, invoices, quotes, tasks } = data;
 
+  const handleDeleteClient = async () => {
+    if (!clientId) return;
+
+    const confirmed = window.confirm(CLIENT_DELETE_CONFIRM_MESSAGE);
+    if (!confirmed) return;
+
+    setIsDeleting(true);
+
+    try {
+      await deleteClient(clientId);
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
+      queryClient.removeQueries({ queryKey: ['client-details', clientId] });
+      navigate(createPageUrl('Clients'));
+    } catch (error) {
+      console.error('[Client] failed to delete client', error);
+      alert('לא הצלחתי למחוק את הלקוח');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 p-6 space-y-6 max-w-[1400px] mx-auto">
 
@@ -168,7 +197,7 @@ export default function ClientDetails() {
 
       <Card className="border-0 shadow-sm">
         <CardContent className="p-6">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+          <div className="flex flex-col md:flex-row md:items-start justify-between gap-4 mb-6">
             <div>
               <div className="flex items-center gap-3 flex-wrap">
                 <h1 className="text-3xl font-bold">{client.company || client.name}</h1>
@@ -186,6 +215,16 @@ export default function ClientDetails() {
                 {client.address && <span className="flex items-center gap-1"><MapPin className="w-4 h-4" />{client.address}</span>}
               </div>
             </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className={`h-6 px-1.5 text-[10px] leading-none shrink-0 ${CLIENT_DELETE_BUTTON_CLASS}`}
+              disabled={isDeleting}
+              onClick={handleDeleteClient}
+            >
+              {isDeleting ? 'מוחק...' : 'מחק'}
+            </Button>
           </div>
 
           {/* KPI Row */}
