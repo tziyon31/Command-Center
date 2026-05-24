@@ -76,8 +76,6 @@ const buildAutosavePayload = (data, { isSubmitted }) => {
   return payload;
 };
 
-const resolveInquiryId = (inquiry) => inquiry?.id ?? inquiry?._id ?? null;
-
 const SAVE_STATUS_LABELS = {
   idle: null,
   saving: 'שומר...',
@@ -185,31 +183,27 @@ export default function InquiryForm() {
 
         if (inquiryId) {
           savedInquiry = await base44.entities.Inquiry.update(inquiryId, payload);
-          resolvedInquiryId = inquiryId;
         } else {
           createInFlightRef.current = true;
           savedInquiry = await base44.entities.Inquiry.create(payload);
-          const newId = resolveInquiryId(savedInquiry);
+          const newId = savedInquiry?.id;
 
-          if (!newId) {
-            throw new Error('Inquiry.create did not return an id');
+          if (newId) {
+            currentInquiryIdRef.current = newId;
+            resolvedInquiryId = newId;
+            setCurrentInquiryId(newId);
+            setFormStatus('draft');
+            navigate(createPageUrl(`InquiryForm?id=${newId}`), { replace: true });
           }
-
-          currentInquiryIdRef.current = newId;
-          resolvedInquiryId = newId;
-          setCurrentInquiryId(newId);
-          setFormStatus('draft');
-          navigate(createPageUrl(`InquiryForm?id=${newId}`), { replace: true });
-        }
-
-        if (!resolvedInquiryId) {
-          throw new Error('Inquiry save did not resolve an id');
         }
 
         lastSavedSnapshotRef.current = snapshot;
         setSaveStatus('saved');
-        await queryClient.invalidateQueries({ queryKey: ['inquiries'] });
-        await queryClient.invalidateQueries({ queryKey: ['inquiry', resolvedInquiryId] });
+        queryClient.invalidateQueries(['inquiries']);
+
+        if (resolvedInquiryId) {
+          queryClient.invalidateQueries(['inquiry', resolvedInquiryId]);
+        }
 
         if (isManual) {
           alert('הטיוטה נשמרה');
@@ -299,8 +293,8 @@ export default function InquiryForm() {
 
       setCopiedToAiAt(copiedAt);
       setCopyFeedback('הפנייה הועתקה ללוח');
-      await queryClient.invalidateQueries({ queryKey: ['inquiries'] });
-      await queryClient.invalidateQueries({ queryKey: ['inquiry', inquiryId] });
+      queryClient.invalidateQueries({ queryKey: ['inquiries'] });
+      queryClient.invalidateQueries({ queryKey: ['inquiry', inquiryId] });
     } catch (error) {
       console.error('[InquiryForm] failed to copy inquiry', error);
       alert('לא הצלחתי להעתיק את הפנייה');
@@ -320,7 +314,7 @@ export default function InquiryForm() {
 
     try {
       await deleteInquiry(inquiryId);
-      await queryClient.invalidateQueries({ queryKey: ['inquiries'] });
+      queryClient.invalidateQueries({ queryKey: ['inquiries'] });
       queryClient.removeQueries({ queryKey: ['inquiry', inquiryId] });
       navigate(createPageUrl('Inquiries'));
     } catch (error) {
@@ -361,27 +355,20 @@ export default function InquiryForm() {
       } else {
         createInFlightRef.current = true;
         savedInquiry = await base44.entities.Inquiry.create(payload);
-        const newId = resolveInquiryId(savedInquiry);
+        const newId = savedInquiry?.id;
 
-        if (!newId) {
-          throw new Error('Inquiry.create did not return an id');
+        if (newId) {
+          currentInquiryIdRef.current = newId;
+          setCurrentInquiryId(newId);
+          navigate(createPageUrl(`InquiryForm?id=${newId}`), { replace: true });
         }
-
-        currentInquiryIdRef.current = newId;
-        setCurrentInquiryId(newId);
-        navigate(createPageUrl(`InquiryForm?id=${newId}`), { replace: true });
-      }
-
-      const resolvedSubmitId = inquiryId || resolveInquiryId(savedInquiry);
-      if (!resolvedSubmitId) {
-        throw new Error('Inquiry submit did not resolve an id');
       }
 
       lastSavedSnapshotRef.current = snapshot;
       setFormStatus('submitted');
       setSaveStatus('saved');
-      await queryClient.invalidateQueries({ queryKey: ['inquiries'] });
-      await queryClient.invalidateQueries({ queryKey: ['inquiry', resolvedSubmitId] });
+      queryClient.invalidateQueries(['inquiries']);
+      queryClient.invalidateQueries(['inquiry', inquiryId || savedInquiry?.id]);
 
       alert('הטופס הוגש בהצלחה');
     } catch (error) {
