@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import { createPageUrl } from '@/utils';
@@ -23,6 +23,19 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  PROJECT_DELETE_BUTTON_CLASS,
+  PROJECT_DELETE_CONFIRM_MESSAGE,
+  deleteProject,
+} from '@/lib/projectDelete';
 
 const toNumber = (value) => {
   const num = Number(value);
@@ -93,6 +106,36 @@ const getCollectionTargetDateForInput = (project) => {
   return toDateInputValue(project.collection_due_target_date);
 };
 
+const projectToFormData = (project) => ({
+  client_id: project?.client_id || '',
+  bid_number: project?.bid_number || '',
+  work_number: project?.work_number || '',
+  name: project?.name || '',
+  city: project?.city || '',
+  project_type: project?.project_type || '',
+  area: project?.area || '',
+  description: project?.description || '',
+  status: project?.status || 'pricing',
+  total_amount: project?.total_amount ?? 0,
+  year: project?.year ?? new Date().getFullYear(),
+  notes: project?.notes || '',
+});
+
+const buildProjectUpdatePayload = (formData) => ({
+  client_id: formData.client_id || '',
+  bid_number: formData.bid_number.trim(),
+  work_number: formData.work_number.trim(),
+  name: formData.name.trim(),
+  city: formData.city.trim(),
+  project_type: formData.project_type.trim(),
+  area: formData.area.trim(),
+  description: formData.description.trim(),
+  status: formData.status,
+  total_amount: toNumber(formData.total_amount),
+  year: toNumber(formData.year) || new Date().getFullYear(),
+  notes: formData.notes.trim(),
+});
+
 const DetailField = ({ label, children }) => (
   <div className="space-y-1">
     <div className="text-xs text-muted-foreground">{label}</div>
@@ -104,7 +147,12 @@ export default function ProjectDetails() {
   const location = useLocation();
   const params = new URLSearchParams(location.search);
   const projectId = params.get('id');
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [editFormData, setEditFormData] = useState(null);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [isCollectionDialogOpen, setIsCollectionDialogOpen] = useState(false);
   const [collectionAmount, setCollectionAmount] = useState('');
   const [collectionNote, setCollectionNote] = useState('');
@@ -133,6 +181,16 @@ export default function ProjectDetails() {
     enabled: !!projectId,
   });
 
+  const { data: clients = [] } = useQuery({
+    queryKey: ['clients'],
+    queryFn: () => base44.entities.Client.list(),
+  });
+
+  useEffect(() => {
+    if (!isEditDialogOpen || !project) return;
+    setEditFormData(projectToFormData(project));
+  }, [isEditDialogOpen, project]);
+
   useEffect(() => {
     if (!isCollectionDialogOpen || !project) return;
 
@@ -142,6 +200,60 @@ export default function ProjectDetails() {
     setCollectionNote(project.collection_due_note || '');
     setCollectionTargetDate(getCollectionTargetDateForInput(project));
   }, [isCollectionDialogOpen, project]);
+
+  const handleEditDialogOpenChange = (open) => {
+    setIsEditDialogOpen(open);
+    if (!open) {
+      setEditFormData(null);
+    }
+  };
+
+  const handleSaveProjectEdit = async (event) => {
+    event.preventDefault();
+
+    if (!project?.id || !editFormData) return;
+
+    const name = editFormData.name.trim();
+    if (!name) {
+      alert('יש למלא שם פרויקט');
+      return;
+    }
+
+    setIsSavingEdit(true);
+
+    try {
+      await base44.entities.Project.update(project.id, buildProjectUpdatePayload(editFormData));
+      queryClient.invalidateQueries({ queryKey: ['project', project.id] });
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      setIsEditDialogOpen(false);
+    } catch (error) {
+      console.error('[Project] failed to update project', error);
+      alert('לא הצלחתי לשמור את הפרויקט');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const handleDeleteProject = async () => {
+    if (!project?.id) return;
+
+    const confirmed = window.confirm(PROJECT_DELETE_CONFIRM_MESSAGE);
+    if (!confirmed) return;
+
+    setIsDeleting(true);
+
+    try {
+      await deleteProject(project.id);
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.removeQueries({ queryKey: ['project', project.id] });
+      navigate(createPageUrl('Projects'));
+    } catch (error) {
+      console.error('[Project] failed to delete project', error);
+      alert('לא הצלחתי למחוק את הפרויקט');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   const handleCollectionDialogOpenChange = (open) => {
     setIsCollectionDialogOpen(open);
@@ -369,7 +481,7 @@ export default function ProjectDetails() {
 
         <Card className="border-0 shadow-sm">
           <CardContent className="p-6">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
               <div className="space-y-2">
                 <div className="flex items-center gap-3 flex-wrap">
                   <h1 className="text-3xl font-bold">{project.name || 'פרויקט ללא שם'}</h1>
@@ -377,12 +489,26 @@ export default function ProjectDetails() {
                 </div>
                 <p className="text-sm text-muted-foreground">פרטי פרויקט בסיסיים</p>
               </div>
-              <Button asChild variant="outline">
-                <Link to={createPageUrl('Projects')}>
-                  <ArrowRight className="w-4 h-4 ml-2" />
-                  חזרה לפרויקטים
-                </Link>
-              </Button>
+              <div className="flex items-center gap-2 shrink-0">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={isDeleting || isSavingEdit}
+                  onClick={() => setIsEditDialogOpen(true)}
+                >
+                  עריכה
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className={`h-6 px-1.5 text-[10px] leading-none ${PROJECT_DELETE_BUTTON_CLASS}`}
+                  disabled={isDeleting || isSavingEdit}
+                  onClick={handleDeleteProject}
+                >
+                  {isDeleting ? 'מוחק...' : 'מחק'}
+                </Button>
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -575,6 +701,160 @@ export default function ProjectDetails() {
                 {isSavingCollection ? 'שומר...' : 'שמור'}
               </Button>
             </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={isEditDialogOpen} onOpenChange={handleEditDialogOpenChange}>
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>עריכת פרויקט</DialogTitle>
+              <DialogDescription>עדכון פרטי הפרויקט הבסיסיים.</DialogDescription>
+            </DialogHeader>
+            {editFormData && (
+              <form onSubmit={handleSaveProjectEdit} className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>מספר BID</Label>
+                    <Input
+                      value={editFormData.bid_number}
+                      onChange={(e) => setEditFormData({ ...editFormData, bid_number: e.target.value })}
+                      placeholder="00055"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>מספר עבודה</Label>
+                    <Input
+                      value={editFormData.work_number}
+                      onChange={(e) => setEditFormData({ ...editFormData, work_number: e.target.value })}
+                      placeholder="1055"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>שם הפרויקט *</Label>
+                    <Input
+                      value={editFormData.name}
+                      onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>עיר</Label>
+                    <Input
+                      value={editFormData.city}
+                      onChange={(e) => setEditFormData({ ...editFormData, city: e.target.value })}
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>סוג פרויקט</Label>
+                    <Input
+                      value={editFormData.project_type}
+                      onChange={(e) => setEditFormData({ ...editFormData, project_type: e.target.value })}
+                      placeholder="מגורים / מסחר / ציבורי..."
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>שטח / יח&quot;ד</Label>
+                    <Input
+                      value={editFormData.area}
+                      onChange={(e) => setEditFormData({ ...editFormData, area: e.target.value })}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>תיאור</Label>
+                  <Textarea
+                    value={editFormData.description}
+                    onChange={(e) => setEditFormData({ ...editFormData, description: e.target.value })}
+                    rows={2}
+                  />
+                </div>
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label>סטטוס</Label>
+                    <Select
+                      value={editFormData.status}
+                      onValueChange={(value) => setEditFormData({ ...editFormData, status: value })}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="lead">ליד</SelectItem>
+                        <SelectItem value="pricing">בתמחור</SelectItem>
+                        <SelectItem value="waiting">ממתין</SelectItem>
+                        <SelectItem value="signed">התקבלה</SelectItem>
+                        <SelectItem value="planning">בתכנון</SelectItem>
+                        <SelectItem value="submission">בהגשה</SelectItem>
+                        <SelectItem value="execution">בעבודה</SelectItem>
+                        <SelectItem value="completed">בוצע</SelectItem>
+                        <SelectItem value="collection_completed">גבייה הושלמה</SelectItem>
+                        <SelectItem value="cancelled">בוטלה</SelectItem>
+                        <SelectItem value="rejected">לא התקבלה</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>שכ&quot;ט ₪</Label>
+                    <Input
+                      type="number"
+                      value={editFormData.total_amount}
+                      onChange={(e) => setEditFormData({
+                        ...editFormData,
+                        total_amount: parseFloat(e.target.value) || 0,
+                      })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>שנה</Label>
+                    <Input
+                      type="number"
+                      value={editFormData.year}
+                      onChange={(e) => setEditFormData({
+                        ...editFormData,
+                        year: parseInt(e.target.value, 10) || new Date().getFullYear(),
+                      })}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>לקוח</Label>
+                  <Select
+                    value={editFormData.client_id}
+                    onValueChange={(value) => setEditFormData({ ...editFormData, client_id: value })}
+                  >
+                    <SelectTrigger><SelectValue placeholder="בחר לקוח (אופציונלי)" /></SelectTrigger>
+                    <SelectContent>
+                      {clients.map((client) => (
+                        <SelectItem key={client.id} value={client.id}>{client.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>הערות</Label>
+                  <Textarea
+                    value={editFormData.notes}
+                    onChange={(e) => setEditFormData({ ...editFormData, notes: e.target.value })}
+                    rows={2}
+                  />
+                </div>
+                <DialogFooter>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => handleEditDialogOpenChange(false)}
+                    disabled={isSavingEdit}
+                  >
+                    ביטול
+                  </Button>
+                  <Button type="submit" disabled={isSavingEdit}>
+                    {isSavingEdit ? 'שומר...' : 'שמור'}
+                  </Button>
+                </DialogFooter>
+              </form>
+            )}
           </DialogContent>
         </Dialog>
       </div>
