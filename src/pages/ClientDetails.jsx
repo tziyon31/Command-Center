@@ -18,6 +18,7 @@ import {
   CLIENT_DELETE_CONFIRM_MESSAGE,
   deleteClient,
 } from '@/lib/clientDelete';
+import ClientContinueToProject from '@/components/workflow/ClientContinueToProject';
 
 const formatMoney = (value) =>
   new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(Number(value) || 0);
@@ -243,6 +244,13 @@ export default function ClientDetails() {
           )}
         </CardContent>
       </Card>
+
+      <ClientContinueToProject
+        clientId={client.id}
+        clientName={client.name}
+        sourceInquiryId={client.source_inquiry_id}
+        existingProjects={projects}
+      />
 
       {/* ATTENTION ALERTS */}
       {summary?.attentionItems.length > 0 && (

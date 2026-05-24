@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { ArrowRight } from 'lucide-react';
+import ClientContinueToProject from '@/components/workflow/ClientContinueToProject';
 
 const EMPTY_FORM = {
   name: '',
@@ -168,6 +169,11 @@ export default function ClientForm() {
                   rows={3}
                 />
               </div>
+              <ClientContinueToProject
+                clientName={formData.name}
+                sourceInquiryId={sourceInquiryId}
+              />
+
               <div className="flex justify-end gap-3 pt-4">
                 <Button type="button" variant="outline" asChild disabled={isSaving}>
                   <Link to={createPageUrl('Clients')}>ביטול</Link>

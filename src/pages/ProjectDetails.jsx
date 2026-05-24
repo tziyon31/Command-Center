@@ -36,6 +36,7 @@ import {
   PROJECT_DELETE_CONFIRM_MESSAGE,
   deleteProject,
 } from '@/lib/projectDelete';
+import ProjectClientWorkflow from '@/components/workflow/ProjectClientWorkflow';
 
 const toNumber = (value) => {
   const num = Number(value);
@@ -134,15 +135,23 @@ const readSearchParam = (params, key) => {
 
 const buildProjectCreateFormFromParams = (params) => projectToFormData({
   name: readSearchParam(params, 'project_name') || readSearchParam(params, 'client_name'),
+  client_id: params.get('client_id') || '',
   status: 'pricing',
   year: new Date().getFullYear(),
   total_amount: 0,
 });
 
+const hasProjectCreatePrefill = (params) => (
+  Boolean(params.get('source_inquiry_id'))
+  || Boolean(params.get('client_id'))
+  || Boolean(readSearchParam(params, 'client_name'))
+  || Boolean(readSearchParam(params, 'project_name'))
+);
+
 const buildProjectCreatePayload = (formData, { sourceInquiryId, formStatus }) => ({
   ...buildProjectUpdatePayload(formData),
   form_status: formStatus || 'draft',
-  source_inquiry_id: sourceInquiryId,
+  ...(sourceInquiryId ? { source_inquiry_id: sourceInquiryId } : {}),
   collected_amount: 0,
 });
 
@@ -174,11 +183,12 @@ export default function ProjectDetails() {
   const projectId = params.get('id');
   const sourceInquiryId = params.get('source_inquiry_id') || '';
   const createFormStatus = params.get('form_status') || 'draft';
-  const isCreateFromInquiry = !projectId && Boolean(sourceInquiryId);
+  const isCreateMode = !projectId && hasProjectCreatePrefill(params);
+  const [clientNameHint] = useState(() => readSearchParam(params, 'client_name'));
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [createFormData, setCreateFormData] = useState(() => (
-    isCreateFromInquiry ? buildProjectCreateFormFromParams(params) : null
+    isCreateMode ? buildProjectCreateFormFromParams(params) : null
   ));
   const [isSavingCreate, setIsSavingCreate] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
@@ -329,7 +339,16 @@ export default function ProjectDetails() {
     }
   };
 
-  if (isCreateFromInquiry && createFormData) {
+  const resolveClientNameForWorkflow = (formClientId, nameHint) => {
+    if (formClientId) {
+      const linked = clients.find((client) => client.id === formClientId);
+      if (linked?.name) return linked.name;
+    }
+
+    return nameHint || '';
+  };
+
+  if (isCreateMode && createFormData) {
     return (
       <div className="min-h-screen bg-slate-50 p-6">
         <div className="max-w-[1100px] mx-auto space-y-6">
@@ -342,10 +361,10 @@ export default function ProjectDetails() {
 
           <Card className="border-0 shadow-sm">
             <CardHeader>
-              <CardTitle>פרויקט חדש מהפנייה</CardTitle>
+              <CardTitle>פרויקט חדש</CardTitle>
               <CardDescription>
-                {readSearchParam(params, 'client_name')
-                  ? `לקוח מהפנייה: ${readSearchParam(params, 'client_name')}`
+                {clientNameHint
+                  ? `לקוח: ${clientNameHint}`
                   : 'מלא את פרטי הפרויקט ושמור ליצירה.'}
               </CardDescription>
             </CardHeader>
@@ -461,6 +480,12 @@ export default function ProjectDetails() {
                     </SelectContent>
                   </Select>
                 </div>
+                <ProjectClientWorkflow
+                  clientId={createFormData.client_id}
+                  clientName={resolveClientNameForWorkflow(createFormData.client_id, clientNameHint)}
+                  sourceInquiryId={sourceInquiryId}
+                  clients={clients}
+                />
                 <div className="space-y-2">
                   <Label>הערות</Label>
                   <Textarea
@@ -749,6 +774,13 @@ export default function ProjectDetails() {
             <DetailField label="תאריך עדכון">{formatDate(project.updated_date)}</DetailField>
           </CardContent>
         </Card>
+
+        <ProjectClientWorkflow
+          clientId={project.client_id}
+          clientName={resolveClientNameForWorkflow(project.client_id, project.name)}
+          sourceInquiryId={project.source_inquiry_id}
+          clients={clients}
+        />
 
         <Card className="border-0 shadow-sm">
           <CardHeader>
@@ -1052,6 +1084,15 @@ export default function ProjectDetails() {
                     </SelectContent>
                   </Select>
                 </div>
+                <ProjectClientWorkflow
+                  clientId={editFormData.client_id}
+                  clientName={resolveClientNameForWorkflow(
+                    editFormData.client_id,
+                    project?.name
+                  )}
+                  sourceInquiryId={project?.source_inquiry_id}
+                  clients={clients}
+                />
                 <div className="space-y-2">
                   <Label>הערות</Label>
                   <Textarea
