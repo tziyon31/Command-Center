@@ -13,6 +13,11 @@ import {
   deleteInquiry,
   INQUIRY_DELETE_CONFIRM_MESSAGE,
 } from '@/lib/inquiryDelete';
+import {
+  buildInquiryCopyText,
+  copyTextToClipboard,
+  formatCopiedAt,
+} from '@/lib/inquiryCopy';
 
 const AUTOSAVE_DEBOUNCE_MS = 1000;
 
@@ -91,6 +96,9 @@ export default function InquiryForm() {
   const [saveStatus, setSaveStatus] = useState('idle');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isCopying, setIsCopying] = useState(false);
+  const [copiedToAiAt, setCopiedToAiAt] = useState(null);
+  const [copyFeedback, setCopyFeedback] = useState(null);
 
   const lastSavedSnapshotRef = useRef(buildFieldSnapshot(EMPTY_FORM));
   const skipAutosaveRef = useRef(false);
@@ -121,24 +129,49 @@ export default function InquiryForm() {
     setFormData(nextForm);
     lastSavedSnapshotRef.current = buildFieldSnapshot(nextForm);
     setFormStatus(inquiry.form_status || 'draft');
+    setCopiedToAiAt(inquiry.copied_to_ai_at || null);
     skipAutosaveRef.current = true;
   }, [inquiry]);
 
+  const waitForSaveToFinish = async () => {
+    const maxAttempts = 200;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      if (!saveInFlightRef.current && !createInFlightRef.current) {
+        return;
+      }
+
+      await new Promise((resolve) => window.setTimeout(resolve, 50));
+    }
+
+    throw new Error('Timed out waiting for draft save');
+  };
+
   const saveDraftNow = useCallback(
-    async ({ isManual = false } = {}) => {
-      if (isSubmitting || saveInFlightRef.current) return;
+    async ({ isManual = false, forceSave = false } = {}) => {
+      if (isSubmitting) return currentInquiryIdRef.current;
+      if (saveInFlightRef.current) {
+        await waitForSaveToFinish();
+        return currentInquiryIdRef.current;
+      }
 
       const snapshot = buildFieldSnapshot(formData);
-      if (snapshotsEqual(snapshot, lastSavedSnapshotRef.current)) {
-        return;
+      const inquiryId = currentInquiryIdRef.current;
+
+      if (!forceSave && snapshotsEqual(snapshot, lastSavedSnapshotRef.current)) {
+        return inquiryId;
+      }
+
+      if (!inquiryId && !forceSave && snapshotsEqual(snapshot, buildFieldSnapshot(EMPTY_FORM))) {
+        return null;
       }
 
       const isSubmitted = formStatus === 'submitted';
       const payload = buildAutosavePayload(formData, { isSubmitted });
-      const inquiryId = currentInquiryIdRef.current;
 
       if (!inquiryId && createInFlightRef.current) {
-        return;
+        await waitForSaveToFinish();
+        return currentInquiryIdRef.current;
       }
 
       saveInFlightRef.current = true;
@@ -175,6 +208,8 @@ export default function InquiryForm() {
         if (isManual) {
           alert('הטיוטה נשמרה');
         }
+
+        return resolvedInquiryId;
       } catch (error) {
         console.error('[InquiryForm] failed to save draft', error);
         setSaveStatus('error');
@@ -182,6 +217,8 @@ export default function InquiryForm() {
         if (isManual) {
           alert('שמירת הטיוטה נכשלה');
         }
+
+        throw error;
       } finally {
         saveInFlightRef.current = false;
         createInFlightRef.current = false;
@@ -222,6 +259,52 @@ export default function InquiryForm() {
 
   const handleSaveDraft = () => {
     saveDraftNow({ isManual: true });
+  };
+
+  const ensureInquirySavedForCopy = async () => {
+    await waitForSaveToFinish();
+
+    let inquiryId = currentInquiryIdRef.current;
+
+    if (!inquiryId) {
+      inquiryId = await saveDraftNow({ forceSave: true });
+    } else {
+      const snapshot = buildFieldSnapshot(formData);
+      if (!snapshotsEqual(snapshot, lastSavedSnapshotRef.current)) {
+        inquiryId = await saveDraftNow();
+      }
+    }
+
+    return inquiryId;
+  };
+
+  const handleCopyInquiry = async () => {
+    setIsCopying(true);
+    setCopyFeedback(null);
+
+    try {
+      const inquiryId = await ensureInquirySavedForCopy();
+
+      if (!inquiryId) {
+        throw new Error('Inquiry was not saved before copy');
+      }
+
+      const text = buildInquiryCopyText(formData);
+      await copyTextToClipboard(text);
+
+      const copiedAt = new Date().toISOString();
+      await base44.entities.Inquiry.update(inquiryId, { copied_to_ai_at: copiedAt });
+
+      setCopiedToAiAt(copiedAt);
+      setCopyFeedback('הפנייה הועתקה ללוח');
+      queryClient.invalidateQueries({ queryKey: ['inquiries'] });
+      queryClient.invalidateQueries({ queryKey: ['inquiry', inquiryId] });
+    } catch (error) {
+      console.error('[InquiryForm] failed to copy inquiry', error);
+      alert('לא הצלחתי להעתיק את הפנייה');
+    } finally {
+      setIsCopying(false);
+    }
   };
 
   const handleDeleteInquiry = async () => {
@@ -301,9 +384,10 @@ export default function InquiryForm() {
     }
   };
 
-  const isSaving = saveStatus === 'saving' || isSubmitting || isDeleting;
+  const isSaving = saveStatus === 'saving' || isSubmitting || isDeleting || isCopying;
   const isSubmitted = formStatus === 'submitted';
   const saveStatusLabel = SAVE_STATUS_LABELS[saveStatus];
+  const copiedAtLabel = formatCopiedAt(copiedToAiAt);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50" dir="rtl">
@@ -326,6 +410,11 @@ export default function InquiryForm() {
         <Card>
           <CardHeader>
             <CardTitle>פרטי הפנייה</CardTitle>
+            {copiedAtLabel && (
+              <p className="text-xs text-muted-foreground mt-1">
+                הועתק לאחרונה: {copiedAtLabel}
+              </p>
+            )}
           </CardHeader>
           <CardContent className="space-y-4">
             {isLoading ? (
@@ -408,15 +497,32 @@ export default function InquiryForm() {
                     הגשת טופס
                   </Button>
 
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={handleCopyInquiry}
+                    disabled={isSaving}
+                  >
+                    {isCopying ? 'מעתיק...' : 'העתק'}
+                  </Button>
+
                   {currentInquiryId && (
                     <Button
                       type="button"
                       variant="destructive"
+                      size="sm"
+                      className="h-7 px-2 text-xs"
                       onClick={handleDeleteInquiry}
                       disabled={isSaving}
                     >
                       {isDeleting ? 'מוחק...' : 'מחק פנייה'}
                     </Button>
+                  )}
+
+                  {copyFeedback && (
+                    <span className="text-sm text-muted-foreground" aria-live="polite">
+                      {copyFeedback}
+                    </span>
                   )}
 
                   {saveStatusLabel && (
