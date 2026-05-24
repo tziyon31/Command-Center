@@ -9,6 +9,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { ArrowRight } from 'lucide-react';
+import {
+  deleteInquiry,
+  INQUIRY_DELETE_CONFIRM_MESSAGE,
+} from '@/lib/inquiryDelete';
 
 const AUTOSAVE_DEBOUNCE_MS = 1000;
 
@@ -86,6 +90,7 @@ export default function InquiryForm() {
   const [formStatus, setFormStatus] = useState(null);
   const [saveStatus, setSaveStatus] = useState('idle');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const lastSavedSnapshotRef = useRef(buildFieldSnapshot(EMPTY_FORM));
   const skipAutosaveRef = useRef(false);
@@ -219,6 +224,28 @@ export default function InquiryForm() {
     saveDraftNow({ isManual: true });
   };
 
+  const handleDeleteInquiry = async () => {
+    const inquiryId = currentInquiryIdRef.current;
+    if (!inquiryId) return;
+
+    const confirmed = window.confirm(INQUIRY_DELETE_CONFIRM_MESSAGE);
+    if (!confirmed) return;
+
+    setIsDeleting(true);
+
+    try {
+      await deleteInquiry(inquiryId);
+      queryClient.invalidateQueries({ queryKey: ['inquiries'] });
+      queryClient.removeQueries({ queryKey: ['inquiry', inquiryId] });
+      navigate(createPageUrl('Inquiries'));
+    } catch (error) {
+      console.error('[Inquiry] failed to delete inquiry', error);
+      alert('לא הצלחתי למחוק את הפנייה');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const handleSubmitForm = async () => {
     const clientName = formData.client_name.trim();
     const details = formData.details.trim();
@@ -274,7 +301,7 @@ export default function InquiryForm() {
     }
   };
 
-  const isSaving = saveStatus === 'saving' || isSubmitting;
+  const isSaving = saveStatus === 'saving' || isSubmitting || isDeleting;
   const isSubmitted = formStatus === 'submitted';
   const saveStatusLabel = SAVE_STATUS_LABELS[saveStatus];
 
@@ -380,6 +407,17 @@ export default function InquiryForm() {
                   >
                     הגשת טופס
                   </Button>
+
+                  {currentInquiryId && (
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      onClick={handleDeleteInquiry}
+                      disabled={isSaving}
+                    >
+                      {isDeleting ? 'מוחק...' : 'מחק פנייה'}
+                    </Button>
+                  )}
 
                   {saveStatusLabel && (
                     <span

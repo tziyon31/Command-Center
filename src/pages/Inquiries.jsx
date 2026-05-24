@@ -1,8 +1,13 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
 import { createPageUrl } from '@/utils';
+import {
+  deleteInquiry,
+  INQUIRY_DELETE_CONFIRM_MESSAGE,
+  isInquiryVisibleInList,
+} from '@/lib/inquiryDelete';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
@@ -46,13 +51,39 @@ const sortInquiries = (inquiries) => {
 };
 
 export default function Inquiries() {
+  const queryClient = useQueryClient();
+  const [deletingId, setDeletingId] = useState(null);
+
   const { data: inquiries = [], isLoading } = useQuery({
     queryKey: ['inquiries'],
     queryFn: async () => {
       const items = await base44.entities.Inquiry.list('-created_date');
-      return sortInquiries(items);
+      return sortInquiries(items.filter(isInquiryVisibleInList));
     },
   });
+
+  const deleteMutation = useMutation({
+    mutationFn: deleteInquiry,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['inquiries'] });
+    },
+  });
+
+  const handleDeleteInquiry = async (inquiryId) => {
+    const confirmed = window.confirm(INQUIRY_DELETE_CONFIRM_MESSAGE);
+    if (!confirmed) return;
+
+    setDeletingId(inquiryId);
+
+    try {
+      await deleteMutation.mutateAsync(inquiryId);
+    } catch (error) {
+      console.error('[Inquiry] failed to delete inquiry', error);
+      alert('לא הצלחתי למחוק את הפנייה');
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   const rows = useMemo(() => inquiries, [inquiries]);
 
@@ -87,7 +118,7 @@ export default function Inquiries() {
                     <TableHead className="text-right">סטטוס</TableHead>
                     <TableHead className="text-right">נוצר</TableHead>
                     <TableHead className="text-right">עודכן</TableHead>
-                    <TableHead className="text-right w-[100px]">פעולה</TableHead>
+                    <TableHead className="text-right w-[180px]">פעולות</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -105,11 +136,22 @@ export default function Inquiries() {
                       <TableCell>{formatDateTime(inquiry.created_date)}</TableCell>
                       <TableCell>{formatDateTime(inquiry.updated_date)}</TableCell>
                       <TableCell>
-                        <Link to={createPageUrl(`InquiryForm?id=${inquiry.id}`)}>
-                          <Button type="button" variant="outline" size="sm">
-                            פתח
+                        <div className="flex items-center gap-2 justify-end">
+                          <Link to={createPageUrl(`InquiryForm?id=${inquiry.id}`)}>
+                            <Button type="button" variant="outline" size="sm">
+                              פתח
+                            </Button>
+                          </Link>
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            size="sm"
+                            disabled={deletingId === inquiry.id}
+                            onClick={() => handleDeleteInquiry(inquiry.id)}
+                          >
+                            {deletingId === inquiry.id ? 'מוחק...' : 'מחק'}
                           </Button>
-                        </Link>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
