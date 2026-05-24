@@ -90,6 +90,13 @@ export default function InquiryForm() {
   const lastSavedSnapshotRef = useRef(buildFieldSnapshot(EMPTY_FORM));
   const skipAutosaveRef = useRef(false);
   const saveDraftNowRef = useRef(null);
+  const currentInquiryIdRef = useRef(initialInquiryId);
+  const saveInFlightRef = useRef(false);
+  const createInFlightRef = useRef(false);
+
+  useEffect(() => {
+    currentInquiryIdRef.current = currentInquiryId;
+  }, [currentInquiryId]);
 
   const isEditMode = Boolean(currentInquiryId);
 
@@ -114,7 +121,7 @@ export default function InquiryForm() {
 
   const saveDraftNow = useCallback(
     async ({ isManual = false } = {}) => {
-      if (isSubmitting) return;
+      if (isSubmitting || saveInFlightRef.current) return;
 
       const snapshot = buildFieldSnapshot(formData);
       if (snapshotsEqual(snapshot, lastSavedSnapshotRef.current)) {
@@ -123,26 +130,34 @@ export default function InquiryForm() {
 
       const isSubmitted = formStatus === 'submitted';
       const payload = buildAutosavePayload(formData, { isSubmitted });
+      const inquiryId = currentInquiryIdRef.current;
 
+      if (!inquiryId && createInFlightRef.current) {
+        return;
+      }
+
+      saveInFlightRef.current = true;
       setSaveStatus('saving');
 
       try {
         let savedInquiry;
+        let resolvedInquiryId = inquiryId;
 
-        if (currentInquiryId) {
-          savedInquiry = await base44.entities.Inquiry.update(currentInquiryId, payload);
+        if (inquiryId) {
+          savedInquiry = await base44.entities.Inquiry.update(inquiryId, payload);
         } else {
+          createInFlightRef.current = true;
           savedInquiry = await base44.entities.Inquiry.create(payload);
           const newId = savedInquiry?.id;
 
           if (newId) {
+            currentInquiryIdRef.current = newId;
+            resolvedInquiryId = newId;
             setCurrentInquiryId(newId);
             setFormStatus('draft');
             navigate(createPageUrl(`InquiryForm?id=${newId}`), { replace: true });
           }
         }
-
-        const resolvedInquiryId = currentInquiryId || savedInquiry?.id;
 
         lastSavedSnapshotRef.current = snapshot;
         setSaveStatus('saved');
@@ -162,12 +177,14 @@ export default function InquiryForm() {
         if (isManual) {
           alert('שמירת הטיוטה נכשלה');
         }
+      } finally {
+        saveInFlightRef.current = false;
+        createInFlightRef.current = false;
       }
     },
     [
       formData,
       formStatus,
-      currentInquiryId,
       isSubmitting,
       navigate,
       queryClient,
@@ -225,14 +242,17 @@ export default function InquiryForm() {
       };
 
       let savedInquiry;
+      const inquiryId = currentInquiryIdRef.current;
 
-      if (currentInquiryId) {
-        savedInquiry = await base44.entities.Inquiry.update(currentInquiryId, payload);
+      if (inquiryId) {
+        savedInquiry = await base44.entities.Inquiry.update(inquiryId, payload);
       } else {
+        createInFlightRef.current = true;
         savedInquiry = await base44.entities.Inquiry.create(payload);
         const newId = savedInquiry?.id;
 
         if (newId) {
+          currentInquiryIdRef.current = newId;
           setCurrentInquiryId(newId);
           navigate(createPageUrl(`InquiryForm?id=${newId}`), { replace: true });
         }
@@ -242,7 +262,7 @@ export default function InquiryForm() {
       setFormStatus('submitted');
       setSaveStatus('saved');
       queryClient.invalidateQueries(['inquiries']);
-      queryClient.invalidateQueries(['inquiry', currentInquiryId || savedInquiry?.id]);
+      queryClient.invalidateQueries(['inquiry', inquiryId || savedInquiry?.id]);
 
       alert('הטופס הוגש בהצלחה');
     } catch (error) {
