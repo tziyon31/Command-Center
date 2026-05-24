@@ -19,7 +19,6 @@ import {
   formatCopiedAt,
 } from '@/lib/inquiryCopy';
 import { runInquiryReminderRulesForInquiry } from '@/lib/inquiryReminderRules';
-import { runInquiryReminderRulesForInquiryId } from '@/lib/inquiryReminderRules';
 
 const AUTOSAVE_DEBOUNCE_MS = 1000;
 
