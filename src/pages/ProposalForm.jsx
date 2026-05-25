@@ -22,6 +22,10 @@ import CreateClientDialog from '@/components/workflow/CreateClientDialog';
 import CreateProjectDialog from '@/components/workflow/CreateProjectDialog';
 import ProposalOpenSignedProposal from '@/components/workflow/ProposalOpenSignedProposal';
 import { formatProjectSelectLabel } from '@/lib/projectSelectLabel';
+import {
+  cancelRemindersForProposal,
+  runProposalReminderRulesForProposal,
+} from '@/lib/proposalReminderRules';
 
 const EMPTY_FORM = {
   client_id: '',
@@ -212,6 +216,17 @@ export default function ProposalForm() {
     };
   };
 
+  const syncProposalReminders = async (saved) => {
+    if (!saved?.id) return;
+
+    try {
+      await runProposalReminderRulesForProposal(saved);
+      queryClient.invalidateQueries({ queryKey: ['reminders'] });
+    } catch (error) {
+      console.error('[ProposalForm] failed to sync proposal reminder rules', error);
+    }
+  };
+
   const persistRecord = async (payload) => {
     if (recordId) {
       return base44.entities.Proposal.update(recordId, payload);
@@ -296,6 +311,7 @@ export default function ProposalForm() {
       setFormStatus(saved?.form_status || 'draft');
       queryClient.invalidateQueries({ queryKey: ['proposals'] });
       queryClient.invalidateQueries({ queryKey: ['proposal', recordId || saved?.id] });
+      await syncProposalReminders(saved);
       alert('הטיוטה נשמרה');
     } catch (error) {
       console.error('[ProposalForm] failed to save draft', error);
@@ -331,6 +347,7 @@ export default function ProposalForm() {
       }));
       queryClient.invalidateQueries({ queryKey: ['proposals'] });
       queryClient.invalidateQueries({ queryKey: ['proposal', recordId || saved?.id] });
+      await syncProposalReminders(saved);
       alert('הטופס הוגש בהצלחה');
     } catch (error) {
       console.error('[ProposalForm] failed to submit form', error);
@@ -350,6 +367,14 @@ export default function ProposalForm() {
 
     try {
       await base44.entities.Proposal.delete(recordId);
+
+      try {
+        await cancelRemindersForProposal(recordId);
+        queryClient.invalidateQueries({ queryKey: ['reminders'] });
+      } catch (error) {
+        console.error('[ProposalForm] failed to cancel proposal reminders', error);
+      }
+
       queryClient.invalidateQueries({ queryKey: ['proposals'] });
       navigate(createPageUrl('Proposals'));
     } catch (error) {

@@ -26,6 +26,7 @@ import ReminderPanel from '../components/reminders/ReminderPanel.jsx';
 import { loadVisibleReminders } from '@/lib/reminderEngine';
 import { runInquiryReminderRulesForAll } from '@/lib/inquiryReminderRules';
 import { runClientReminderRulesForAll } from '@/lib/clientReminderRules';
+import { runProposalReminderRulesForAll } from '@/lib/proposalReminderRules';
 import { cn } from '@/lib/utils';
 
 const OPEN_PROPOSAL_STATUSES = ['pricing', 'waiting'];
@@ -223,6 +224,13 @@ export default function Dashboard() {
     queryFn: async () => {
       await runInquiryReminderRulesForAll();
       await runClientReminderRulesForAll();
+
+      try {
+        await runProposalReminderRulesForAll();
+      } catch (error) {
+        console.error('[Dashboard] proposal reminder rules failed', error);
+      }
+
       return loadVisibleReminders();
     },
     enabled: canSeeFullDashboard && !!currentUser,
