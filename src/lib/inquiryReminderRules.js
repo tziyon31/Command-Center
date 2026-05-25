@@ -3,6 +3,10 @@ import {
   cancelOrphanRemindersForSourceType,
   ensureReminderForCondition,
 } from '@/lib/reminderEngine';
+import {
+  buildClientFormPageUrl,
+  buildProjectCreatePageUrl,
+} from '@/lib/workflowNavigation';
 
 export const INQUIRY_MISSING_FIELDS_CONDITION_PREFIX = 'inquiry_missing_fields:';
 export const INQUIRY_NEEDS_NEXT_STEP_CONDITION_PREFIX = 'inquiry_needs_next_step:';
@@ -71,9 +75,27 @@ const buildR1ReminderInput = (inquiry) => {
   };
 };
 
-const buildR2ReminderInput = (inquiry, state) => {
+const findInquiryLinkedClient = (inquiryId, cache = {}) => {
+  const clients = cache.clients ?? [];
+  return clients.find((client) => client.source_inquiry_id === inquiryId) || null;
+};
+
+const buildR2ReminderInput = (inquiry, state, cache = {}) => {
   const clientName = inquiry.client_name.trim();
   const isNeedsProject = state === 'needs_project';
+  const linkedClient = isNeedsProject ? findInquiryLinkedClient(inquiry.id, cache) : null;
+
+  const actionUrl = isNeedsProject
+    ? buildProjectCreatePageUrl({
+      clientId: linkedClient?.id,
+      clientName: linkedClient?.name || clientName,
+      projectName: clientName,
+      sourceInquiryId: inquiry.id,
+    })
+    : buildClientFormPageUrl({
+      name: clientName,
+      sourceInquiryId: inquiry.id,
+    });
 
   return {
     title: isNeedsProject
@@ -83,14 +105,14 @@ const buildR2ReminderInput = (inquiry, state) => {
       ? 'נפתח לקוח עבור הפנייה, אך עדיין לא נפתח פרויקט.'
       : 'הפנייה הוגשה, אך עדיין לא נפתח לקוח.',
     client_name: clientName,
-    client_id: '',
+    client_id: linkedClient?.id || '',
     project_name: '',
     project_id: '',
     source_type: 'inquiry',
     source_id: inquiry.id,
     condition_key: getInquiryNeedsNextStepConditionKey(inquiry.id),
-    action_url: `/InquiryForm?id=${inquiry.id}`,
-    action_label: 'פתח פנייה',
+    action_url: actionUrl,
+    action_label: isNeedsProject ? 'פתח פרויקט' : 'פתח לקוח',
     frequency: 'daily',
   };
 };
@@ -202,7 +224,7 @@ async function runR2ReminderRuleForInquiry(inquiry, cache = {}) {
   const r2State = await getR2ReminderState(inquiry, cache);
   const conditionIsTrue = r2State !== null;
   const reminderInput = conditionIsTrue
-    ? buildR2ReminderInput(inquiry, r2State)
+    ? buildR2ReminderInput(inquiry, r2State, cache)
     : { condition_key: conditionKey };
 
   const result = await ensureReminderForCondition(
