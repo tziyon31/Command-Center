@@ -83,7 +83,7 @@ export default function ProjectClientSection({
       size="sm"
       onClick={() => setIsCreateClientOpen(true)}
       disabled={disabled}
-      className="shrink-0"
+      className="shrink-0 whitespace-nowrap min-w-[5.5rem]"
     >
       {createButtonLabel}
     </Button>
@@ -105,8 +105,8 @@ export default function ProjectClientSection({
         <div className="space-y-2">
           <Label>לקוח *</Label>
           <p className="text-xs text-muted-foreground">לקוח משויך: {linkedClient.name}</p>
-          <div className="flex gap-2">
-            <div className="flex-1">{clientSelect}</div>
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 items-center">
+            {clientSelect}
             {createClientButton}
           </div>
           {createClientDialog}
@@ -130,8 +130,8 @@ export default function ProjectClientSection({
     return (
       <div className="space-y-2">
         <Label>לקוח *</Label>
-        <div className="flex gap-2">
-          <div className="flex-1">{clientSelect}</div>
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 items-center">
+          {clientSelect}
           {createClientButton}
         </div>
         {existingByName && (

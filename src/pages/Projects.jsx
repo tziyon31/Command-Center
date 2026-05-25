@@ -13,7 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Plus, Search } from 'lucide-react';
 import { assertProjectHasClientId } from '@/lib/projectValidation';
 import { runClientReminderRulesForClient } from '@/lib/clientReminderRules';
-import ProjectClientSection from '@/components/workflow/ProjectClientSection';
+import CreateClientDialog from '@/components/workflow/CreateClientDialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 const STATUS_LABELS = {
@@ -34,23 +34,27 @@ const STATUS_LABELS = {
 const ACTIVE_STATUSES = ['planning', 'submission', 'execution', 'completed', 'collection_completed', 'signed'];
 const PROPOSAL_STATUSES = ['lead', 'pricing', 'waiting', 'rejected', 'cancelled'];
 
+const EMPTY_PROJECT_FORM = {
+  client_id: '',
+  bid_number: '',
+  work_number: '',
+  name: '',
+  city: '',
+  project_type: '',
+  area: '',
+  description: '',
+  status: 'pricing',
+  total_amount: 0,
+  year: new Date().getFullYear(),
+  notes: '',
+  source_inquiry_id: '',
+};
+
 export default function Projects() {
   const [searchTerm, setSearchTerm] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [formData, setFormData] = useState({
-    client_id: '',
-    bid_number: '',
-    work_number: '',
-    name: '',
-    city: '',
-    project_type: '',
-    area: '',
-    description: '',
-    status: 'pricing',
-    total_amount: 0,
-    year: new Date().getFullYear(),
-    notes: ''
-  });
+  const [isCreateClientOpen, setIsCreateClientOpen] = useState(false);
+  const [formData, setFormData] = useState(EMPTY_PROJECT_FORM);
 
   const queryClient = useQueryClient();
 
@@ -79,7 +83,7 @@ export default function Projects() {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       queryClient.invalidateQueries({ queryKey: ['reminders'] });
       setDialogOpen(false);
-      setFormData({ client_id: '', bid_number: '', work_number: '', name: '', city: '', project_type: '', area: '', description: '', status: 'pricing', total_amount: 0, year: new Date().getFullYear(), notes: '' });
+      setFormData(EMPTY_PROJECT_FORM);
     },
   });
 
@@ -91,34 +95,37 @@ export default function Projects() {
     createMutation.mutate(formData);
   };
 
-  const handleProjectClientChange = (update) => {
+  const applyClientToProjectForm = (client) => {
+    if (!client?.id) return;
+
     setFormData((prev) => ({
       ...prev,
-      client_id: update.clientId,
-      name: update.fillProjectName && !prev.name?.trim() ? update.clientName : prev.name,
+      client_id: client.id,
+      name: prev.name?.trim() ? prev.name : client.name,
+      source_inquiry_id: prev.source_inquiry_id || client.source_inquiry_id || '',
     }));
     queryClient.invalidateQueries({ queryKey: ['clients'] });
+  };
+
+  const handleClientSelect = (selectedClientId) => {
+    const client = clients.find((item) => item.id === selectedClientId);
+    applyClientToProjectForm(client);
+  };
+
+  const handleNewClientCreated = (client) => {
+    applyClientToProjectForm(client);
+    setIsCreateClientOpen(false);
   };
 
   const handleDialogOpenChange = (open) => {
     setDialogOpen(open);
     if (!open) {
-      setFormData({
-        client_id: '',
-        bid_number: '',
-        work_number: '',
-        name: '',
-        city: '',
-        project_type: '',
-        area: '',
-        description: '',
-        status: 'pricing',
-        total_amount: 0,
-        year: new Date().getFullYear(),
-        notes: '',
-      });
+      setIsCreateClientOpen(false);
+      setFormData(EMPTY_PROJECT_FORM);
     }
   };
+
+  const linkedClient = clients.find((client) => client.id === formData.client_id);
 
   const filtered = projects.filter(p =>
     p.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -261,14 +268,49 @@ export default function Projects() {
                     <Input type="number" value={formData.year} onChange={(e) => setFormData({ ...formData, year: parseInt(e.target.value) || new Date().getFullYear() })} />
                   </div>
                 </div>
-                <ProjectClientSection
-                  clientId={formData.client_id}
-                  clients={clients}
-                  clientNameHint={formData.name}
-                  onClientChange={handleProjectClientChange}
-                  disabled={createMutation.isPending}
-                  compact
-                  createButtonLabel="לקוח חדש"
+                <div className="space-y-2">
+                  <Label htmlFor="project-client-select">לקוח *</Label>
+                  {linkedClient && (
+                    <p className="text-xs text-muted-foreground">
+                      לקוח משויך: {linkedClient.name}
+                    </p>
+                  )}
+                  <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 items-center">
+                    <Select
+                      value={formData.client_id || undefined}
+                      onValueChange={handleClientSelect}
+                      disabled={createMutation.isPending}
+                    >
+                      <SelectTrigger id="project-client-select" className="w-full">
+                        <SelectValue placeholder="בחר לקוח" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {clients.map((client) => (
+                          <SelectItem key={client.id} value={client.id}>
+                            {client.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0 whitespace-nowrap min-w-[5.5rem]"
+                      onClick={() => setIsCreateClientOpen(true)}
+                      disabled={createMutation.isPending}
+                      data-testid="project-modal-new-client-btn"
+                    >
+                      לקוח חדש
+                    </Button>
+                  </div>
+                </div>
+                <CreateClientDialog
+                  open={isCreateClientOpen}
+                  onOpenChange={setIsCreateClientOpen}
+                  initialName={formData.name}
+                  sourceInquiryId={formData.source_inquiry_id}
+                  onClientCreated={handleNewClientCreated}
                 />
                 <div className="space-y-2">
                   <Label>הערות</Label>
