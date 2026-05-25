@@ -36,7 +36,9 @@ import {
   PROJECT_DELETE_CONFIRM_MESSAGE,
   deleteProject,
 } from '@/lib/projectDelete';
-import ProjectClientWorkflow from '@/components/workflow/ProjectClientWorkflow';
+import ProjectClientSection from '@/components/workflow/ProjectClientSection';
+import { assertProjectHasClientId } from '@/lib/projectValidation';
+import { runClientReminderRulesForClient } from '@/lib/clientReminderRules';
 
 const toNumber = (value) => {
   const num = Number(value);
@@ -181,10 +183,12 @@ export default function ProjectDetails() {
   const location = useLocation();
   const params = new URLSearchParams(location.search);
   const projectId = params.get('id');
-  const sourceInquiryId = params.get('source_inquiry_id') || '';
   const createFormStatus = params.get('form_status') || 'draft';
   const isCreateMode = !projectId && hasProjectCreatePrefill(params);
   const [clientNameHint] = useState(() => readSearchParam(params, 'client_name'));
+  const [createSourceInquiryId, setCreateSourceInquiryId] = useState(
+    () => params.get('source_inquiry_id') || '',
+  );
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [createFormData, setCreateFormData] = useState(() => (
@@ -243,10 +247,47 @@ export default function ProjectDetails() {
     setCollectionTargetDate(getCollectionTargetDateForInput(project));
   }, [isCollectionDialogOpen, project]);
 
+  const applyProjectClientChange = ({ clientId, clientName, sourceInquiryId: nextSourceId, fillProjectName }, mode) => {
+    const applyToForm = (prev) => ({
+      ...prev,
+      client_id: clientId,
+      name: fillProjectName && !prev.name?.trim() && clientName
+        ? clientName
+        : prev.name,
+    });
+
+    if (mode === 'create') {
+      setCreateFormData((prev) => (prev ? applyToForm(prev) : prev));
+      if (nextSourceId) {
+        setCreateSourceInquiryId(nextSourceId);
+      }
+    } else {
+      setEditFormData((prev) => (prev ? applyToForm(prev) : prev));
+    }
+
+    queryClient.invalidateQueries({ queryKey: ['clients'] });
+  };
+
+  const syncClientReminderAfterProjectSave = async (clientId) => {
+    if (!clientId) return;
+
+    const client = clients.find((item) => item.id === clientId);
+    if (!client) return;
+
+    try {
+      await runClientReminderRulesForClient(client);
+      queryClient.invalidateQueries({ queryKey: ['reminders'] });
+    } catch (error) {
+      console.error('[Project] failed to run client reminder rules', error);
+    }
+  };
+
   const handleSaveProjectCreate = async (event) => {
     event.preventDefault();
 
-    if (!createFormData || !sourceInquiryId) return;
+    if (!createFormData) return;
+
+    if (!assertProjectHasClientId(createFormData.client_id)) return;
 
     const name = createFormData.name.trim();
     if (!name) {
@@ -259,13 +300,17 @@ export default function ProjectDetails() {
     try {
       const project = await base44.entities.Project.create(
         buildProjectCreatePayload(createFormData, {
-          sourceInquiryId,
+          sourceInquiryId: createSourceInquiryId,
           formStatus: createFormStatus,
         })
       );
 
+      await syncClientReminderAfterProjectSave(project.client_id);
+
       queryClient.invalidateQueries({ queryKey: ['projects'] });
-      queryClient.invalidateQueries({ queryKey: ['project-by-inquiry', sourceInquiryId] });
+      if (createSourceInquiryId) {
+        queryClient.invalidateQueries({ queryKey: ['project-by-inquiry', createSourceInquiryId] });
+      }
       navigate(createPageUrl(`ProjectDetails?id=${project.id}`));
     } catch (error) {
       console.error('[Project] failed to create project', error);
@@ -287,6 +332,8 @@ export default function ProjectDetails() {
 
     if (!project?.id || !editFormData) return;
 
+    if (!assertProjectHasClientId(editFormData.client_id)) return;
+
     const name = editFormData.name.trim();
     if (!name) {
       alert('יש למלא שם פרויקט');
@@ -297,6 +344,7 @@ export default function ProjectDetails() {
 
     try {
       await base44.entities.Project.update(project.id, buildProjectUpdatePayload(editFormData));
+      await syncClientReminderAfterProjectSave(editFormData.client_id);
       queryClient.invalidateQueries({ queryKey: ['project', project.id] });
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       setIsEditDialogOpen(false);
@@ -339,14 +387,14 @@ export default function ProjectDetails() {
     }
   };
 
-  const resolveClientNameForWorkflow = (formClientId, nameHint) => {
-    if (formClientId) {
-      const linked = clients.find((client) => client.id === formClientId);
-      if (linked?.name) return linked.name;
-    }
+  useEffect(() => {
+    if (!isCreateMode || !createFormData?.client_id || !clients.length) return;
 
-    return nameHint || '';
-  };
+    const linkedClient = clients.find((client) => client.id === createFormData.client_id);
+    if (linkedClient?.source_inquiry_id && !createSourceInquiryId) {
+      setCreateSourceInquiryId(linkedClient.source_inquiry_id);
+    }
+  }, [isCreateMode, createFormData?.client_id, clients, createSourceInquiryId]);
 
   if (isCreateMode && createFormData) {
     return (
@@ -466,25 +514,13 @@ export default function ProjectDetails() {
                     />
                   </div>
                 </div>
-                <div className="space-y-2">
-                  <Label>לקוח</Label>
-                  <Select
-                    value={createFormData.client_id}
-                    onValueChange={(value) => setCreateFormData({ ...createFormData, client_id: value })}
-                  >
-                    <SelectTrigger><SelectValue placeholder="בחר לקוח (אופציונלי)" /></SelectTrigger>
-                    <SelectContent>
-                      {clients.map((client) => (
-                        <SelectItem key={client.id} value={client.id}>{client.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <ProjectClientWorkflow
+                <ProjectClientSection
                   clientId={createFormData.client_id}
-                  clientName={resolveClientNameForWorkflow(createFormData.client_id, clientNameHint)}
-                  sourceInquiryId={sourceInquiryId}
                   clients={clients}
+                  clientNameHint={clientNameHint}
+                  sourceInquiryId={createSourceInquiryId}
+                  onClientChange={(update) => applyProjectClientChange(update, 'create')}
+                  disabled={isSavingCreate}
                 />
                 <div className="space-y-2">
                   <Label>הערות</Label>
@@ -498,7 +534,10 @@ export default function ProjectDetails() {
                   <Button type="button" variant="outline" asChild disabled={isSavingCreate}>
                     <Link to={createPageUrl('Projects')}>ביטול</Link>
                   </Button>
-                  <Button type="submit" disabled={isSavingCreate}>
+                  <Button
+                    type="submit"
+                    disabled={isSavingCreate || !createFormData.client_id}
+                  >
                     {isSavingCreate ? 'שומר...' : 'שמור'}
                   </Button>
                 </div>
@@ -775,12 +814,11 @@ export default function ProjectDetails() {
           </CardContent>
         </Card>
 
-        <ProjectClientWorkflow
-          clientId={project.client_id}
-          clientName={resolveClientNameForWorkflow(project.client_id, project.name)}
-          sourceInquiryId={project.source_inquiry_id}
-          clients={clients}
-        />
+        {!project.client_id && (
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            לפרויקט זה אין לקוח משויך. יש לערוך את הפרויקט ולשייך לקוח לפני המשך טיפול.
+          </div>
+        )}
 
         <Card className="border-0 shadow-sm">
           <CardHeader>
@@ -1070,28 +1108,13 @@ export default function ProjectDetails() {
                     />
                   </div>
                 </div>
-                <div className="space-y-2">
-                  <Label>לקוח</Label>
-                  <Select
-                    value={editFormData.client_id}
-                    onValueChange={(value) => setEditFormData({ ...editFormData, client_id: value })}
-                  >
-                    <SelectTrigger><SelectValue placeholder="בחר לקוח (אופציונלי)" /></SelectTrigger>
-                    <SelectContent>
-                      {clients.map((client) => (
-                        <SelectItem key={client.id} value={client.id}>{client.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <ProjectClientWorkflow
+                <ProjectClientSection
                   clientId={editFormData.client_id}
-                  clientName={resolveClientNameForWorkflow(
-                    editFormData.client_id,
-                    project?.name
-                  )}
-                  sourceInquiryId={project?.source_inquiry_id}
                   clients={clients}
+                  clientNameHint={project?.name || clientNameHint}
+                  sourceInquiryId={project?.source_inquiry_id || createSourceInquiryId}
+                  onClientChange={(update) => applyProjectClientChange(update, 'edit')}
+                  disabled={isSavingEdit}
                 />
                 <div className="space-y-2">
                   <Label>הערות</Label>
@@ -1110,7 +1133,10 @@ export default function ProjectDetails() {
                   >
                     ביטול
                   </Button>
-                  <Button type="submit" disabled={isSavingEdit}>
+                  <Button
+                    type="submit"
+                    disabled={isSavingEdit || !editFormData.client_id}
+                  >
                     {isSavingEdit ? 'שומר...' : 'שמור'}
                   </Button>
                 </DialogFooter>

@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/select';
 import { ArrowRight } from 'lucide-react';
 import ClientContinueToProject from '@/components/workflow/ClientContinueToProject';
+import { runClientReminderRulesForClient } from '@/lib/clientReminderRules';
 
 const EMPTY_FORM = {
   name: '',
@@ -75,6 +76,12 @@ export default function ClientForm() {
 
       const client = await base44.entities.Client.create(payload);
       setSavedClientId(client.id);
+
+      try {
+        await runClientReminderRulesForClient(client);
+      } catch (rulesError) {
+        console.error('[ClientForm] failed to run client reminder rules', rulesError);
+      }
     } catch (error) {
       console.error('[ClientForm] failed to create client', error);
       alert('לא הצלחנו לשמור את הלקוח');

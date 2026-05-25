@@ -11,6 +11,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Plus, Search } from 'lucide-react';
+import { assertProjectHasClientId } from '@/lib/projectValidation';
+import { runClientReminderRulesForClient } from '@/lib/clientReminderRules';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 const STATUS_LABELS = {
@@ -63,16 +65,40 @@ export default function Projects() {
 
   const createMutation = useMutation({
     mutationFn: (data) => base44.entities.Project.create(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['projects']);
+    onSuccess: async (project) => {
+      const client = clients.find((item) => item.id === project?.client_id);
+      if (client) {
+        try {
+          await runClientReminderRulesForClient(client);
+        } catch (error) {
+          console.error('[Projects] failed to run client reminder rules', error);
+        }
+      }
+
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['reminders'] });
       setDialogOpen(false);
       setFormData({ client_id: '', bid_number: '', work_number: '', name: '', city: '', project_type: '', area: '', description: '', status: 'pricing', total_amount: 0, year: new Date().getFullYear(), notes: '' });
-    }
+    },
   });
 
   const handleSubmit = (e) => {
     e.preventDefault();
+
+    if (!assertProjectHasClientId(formData.client_id)) return;
+
     createMutation.mutate(formData);
+  };
+
+  const handleClientSelect = (clientId) => {
+    const client = clients.find((item) => item.id === clientId);
+    if (!client) return;
+
+    setFormData((prev) => ({
+      ...prev,
+      client_id: client.id,
+      name: prev.name?.trim() ? prev.name : client.name,
+    }));
   };
 
   const filtered = projects.filter(p =>
@@ -217,9 +243,9 @@ export default function Projects() {
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <Label>לקוח</Label>
-                  <Select value={formData.client_id} onValueChange={(value) => setFormData({ ...formData, client_id: value })}>
-                    <SelectTrigger><SelectValue placeholder="בחר לקוח (אופציונלי)" /></SelectTrigger>
+                  <Label>לקוח *</Label>
+                  <Select value={formData.client_id} onValueChange={handleClientSelect}>
+                    <SelectTrigger><SelectValue placeholder="בחר לקוח" /></SelectTrigger>
                     <SelectContent>
                       {clients.map(client => (
                         <SelectItem key={client.id} value={client.id}>{client.name}</SelectItem>
@@ -233,7 +259,7 @@ export default function Projects() {
                 </div>
                 <div className="flex justify-end gap-3 pt-4">
                   <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>ביטול</Button>
-                  <Button type="submit">שמור</Button>
+                  <Button type="submit" disabled={!formData.client_id}>שמור</Button>
                 </div>
               </form>
             </DialogContent>
