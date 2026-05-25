@@ -40,6 +40,7 @@ import ProjectClientSection from '@/components/workflow/ProjectClientSection';
 import ProjectCreateFormFields from '@/components/workflow/ProjectCreateFormFields';
 import { assertProjectHasClientId } from '@/lib/projectValidation';
 import { runClientReminderRulesForClient } from '@/lib/clientReminderRules';
+import { runProposalReminderRulesForProject } from '@/lib/proposalReminderRules';
 import { buildProjectCreateFormFromSearchParams } from '@/lib/projectDefaults';
 import { buildProjectCreatePayloadFromForm } from '@/lib/projectCreatePayload';
 import { buildProposalFormPageUrl, buildSignedProposalFormPageUrl } from '@/lib/workflowNavigation';
@@ -315,6 +316,17 @@ export default function ProjectDetails() {
       );
 
       await syncClientReminderAfterProjectSave(project.client_id);
+
+      try {
+        const proposals = await base44.entities.Proposal.list();
+        await runProposalReminderRulesForProject(project, {
+          clients,
+          proposals,
+        });
+        queryClient.invalidateQueries({ queryKey: ['reminders'] });
+      } catch (error) {
+        console.error('[Project] failed to run P2 proposal reminder rule', error);
+      }
 
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       if (createSourceInquiryId) {

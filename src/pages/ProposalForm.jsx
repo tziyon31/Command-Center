@@ -22,6 +22,12 @@ import CreateClientDialog from '@/components/workflow/CreateClientDialog';
 import CreateProjectDialog from '@/components/workflow/CreateProjectDialog';
 import ProposalOpenSignedProposal from '@/components/workflow/ProposalOpenSignedProposal';
 import { formatProjectSelectLabel } from '@/lib/projectSelectLabel';
+import {
+  cancelRemindersForProposal,
+  runProposalReminderRulesForProject,
+  runProposalSourceReminderRulesForAll,
+  syncProposalReminderRulesAfterSave,
+} from '@/lib/proposalReminderRules';
 
 const EMPTY_FORM = {
   client_id: '',
@@ -174,6 +180,9 @@ export default function ProposalForm() {
     queryFn: () => base44.entities.Project.list('-created_date'),
   });
 
+  const clientList = Array.isArray(clients) ? clients : [];
+  const projectList = Array.isArray(projects) ? projects : [];
+
   useEffect(() => {
     if (!record) return;
 
@@ -182,27 +191,38 @@ export default function ProposalForm() {
   }, [record]);
 
   const filteredProjects = useMemo(() => {
-    const list = Array.isArray(projects) ? projects : [];
-    if (!formData.client_id) return list;
+    if (!formData.client_id) return projectList;
 
-    return list.filter((project) => project.client_id === formData.client_id);
-  }, [projects, formData.client_id]);
+    return projectList.filter((project) => project.client_id === formData.client_id);
+  }, [projectList, formData.client_id]);
 
   const selectedProjectLabel = useMemo(() => {
     if (!formData.project_id) return null;
 
-    const list = Array.isArray(projects) ? projects : [];
-    const project = list.find((item) => item.id === formData.project_id);
+    const project = projectList.find((item) => item.id === formData.project_id);
     if (project) return formatProjectSelectLabel(project);
 
     return formData.project_name?.trim() || null;
-  }, [projects, formData.project_id, formData.project_name]);
+  }, [projectList, formData.project_id, formData.project_name]);
+
+  const syncRemindersAfterProposalChange = async (saved, { deleted = false } = {}) => {
+    try {
+      if (deleted && recordId) {
+        await cancelRemindersForProposal(recordId);
+        await runProposalSourceReminderRulesForAll();
+      } else if (saved?.id) {
+        await syncProposalReminderRulesAfterSave(saved);
+      }
+      queryClient.invalidateQueries({ queryKey: ['reminders'] });
+    } catch (error) {
+      console.error('[ProposalForm] failed to sync proposal reminder rules', error);
+    }
+  };
 
   const clearProjectIfNotForClient = (prev, clientId) => {
     if (!prev.project_id) return prev;
 
-    const list = Array.isArray(projects) ? projects : [];
-    const selectedProject = list.find((project) => project.id === prev.project_id);
+    const selectedProject = projectList.find((project) => project.id === prev.project_id);
     if (selectedProject && selectedProject.client_id === clientId) return prev;
 
     return {
@@ -229,7 +249,7 @@ export default function ProposalForm() {
   };
 
   const handleClientSelect = (selectedClientId) => {
-    const client = clients.find((item) => item.id === selectedClientId);
+    const client = clientList.find((item) => item.id === selectedClientId);
     if (!client) return;
 
     setFormData((prev) => clearProjectIfNotForClient({
@@ -252,10 +272,10 @@ export default function ProposalForm() {
   };
 
   const handleProjectSelect = (selectedProjectId) => {
-    const project = projects.find((item) => item.id === selectedProjectId);
+    const project = projectList.find((item) => item.id === selectedProjectId);
     if (!project) return;
 
-    const linkedClient = clients.find((client) => client.id === project.client_id);
+    const linkedClient = clientList.find((client) => client.id === project.client_id);
 
     setFormData((prev) => ({
       ...prev,
@@ -272,6 +292,17 @@ export default function ProposalForm() {
 
   const handleNewProjectCreated = async (project, client) => {
     await queryClient.invalidateQueries({ queryKey: ['projects'] });
+
+    try {
+      const proposals = await base44.entities.Proposal.list();
+      await runProposalReminderRulesForProject(project, {
+        clients: clientList,
+        proposals,
+      });
+      queryClient.invalidateQueries({ queryKey: ['reminders'] });
+    } catch (error) {
+      console.error('[ProposalForm] failed to run P2 reminder rule for new project', error);
+    }
 
     setFormData((prev) => ({
       ...prev,
@@ -296,6 +327,7 @@ export default function ProposalForm() {
       setFormStatus(saved?.form_status || 'draft');
       queryClient.invalidateQueries({ queryKey: ['proposals'] });
       queryClient.invalidateQueries({ queryKey: ['proposal', recordId || saved?.id] });
+      await syncRemindersAfterProposalChange(saved);
       alert('הטיוטה נשמרה');
     } catch (error) {
       console.error('[ProposalForm] failed to save draft', error);
@@ -331,6 +363,7 @@ export default function ProposalForm() {
       }));
       queryClient.invalidateQueries({ queryKey: ['proposals'] });
       queryClient.invalidateQueries({ queryKey: ['proposal', recordId || saved?.id] });
+      await syncRemindersAfterProposalChange(saved);
       alert('הטופס הוגש בהצלחה');
     } catch (error) {
       console.error('[ProposalForm] failed to submit form', error);
@@ -415,7 +448,7 @@ export default function ProposalForm() {
                       <SelectValue placeholder="בחר לקוח קיים" />
                     </SelectTrigger>
                     <SelectContent>
-                      {clients.map((client) => (
+                      {clientList.map((client) => (
                         <SelectItem key={client.id} value={client.id}>
                           {client.name}
                         </SelectItem>
@@ -438,7 +471,7 @@ export default function ProposalForm() {
                   value={formData.client_name}
                   onChange={(e) => {
                     const nextName = e.target.value;
-                    const selectedClient = clients.find((client) => client.id === formData.client_id);
+                    const selectedClient = clientList.find((client) => client.id === formData.client_id);
 
                     setFormData({
                       ...formData,
@@ -488,7 +521,7 @@ export default function ProposalForm() {
                   value={formData.project_name}
                   onChange={(e) => {
                     const nextName = e.target.value;
-                    const selectedProject = projects.find((project) => project.id === formData.project_id);
+                    const selectedProject = projectList.find((project) => project.id === formData.project_id);
 
                     setFormData({
                       ...formData,
