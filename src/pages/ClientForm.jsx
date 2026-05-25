@@ -43,6 +43,7 @@ export default function ClientForm() {
   const navigate = useNavigate();
   const [{ sourceInquiryId, form: initialForm }] = useState(readPrefillFromSearch);
   const [formData, setFormData] = useState(initialForm);
+  const [savedClientId, setSavedClientId] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
 
   const handleSubmit = async (event) => {
@@ -73,7 +74,7 @@ export default function ClientForm() {
       }
 
       const client = await base44.entities.Client.create(payload);
-      navigate(createPageUrl(`ClientDetails?id=${client.id}`));
+      setSavedClientId(client.id);
     } catch (error) {
       console.error('[ClientForm] failed to create client', error);
       alert('לא הצלחנו לשמור את הלקוח');
@@ -169,11 +170,6 @@ export default function ClientForm() {
                   rows={3}
                 />
               </div>
-              <ClientContinueToProject
-                clientName={formData.name}
-                sourceInquiryId={sourceInquiryId}
-              />
-
               <div className="flex justify-end gap-3 pt-4">
                 <Button type="button" variant="outline" asChild disabled={isSaving}>
                   <Link to={createPageUrl('Clients')}>ביטול</Link>
@@ -182,6 +178,17 @@ export default function ClientForm() {
                   {isSaving ? 'שומר...' : 'שמור'}
                 </Button>
               </div>
+
+              <ClientContinueToProject
+                clientId={savedClientId}
+                clientName={formData.name}
+                sourceInquiryId={sourceInquiryId}
+                statusMessage={
+                  savedClientId
+                    ? 'הלקוח נשמר, ניתן להמשיך לפתיחת פרויקט.'
+                    : 'יש לשמור את הלקוח לפני פתיחת פרויקט.'
+                }
+              />
             </form>
           </CardContent>
         </Card>

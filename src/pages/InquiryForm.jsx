@@ -342,6 +342,11 @@ export default function InquiryForm() {
   };
 
   const handleOpenClientFromInquiry = async () => {
+    if (formStatus !== 'submitted') {
+      alert('יש להגיש את הפנייה לפני פתיחת לקוח');
+      return;
+    }
+
     setIsOpeningClient(true);
 
     try {
@@ -377,6 +382,11 @@ export default function InquiryForm() {
   };
 
   const handleOpenProjectFromInquiry = async () => {
+    if (formStatus !== 'submitted') {
+      alert('יש להגיש את הפנייה לפני פתיחת פרויקט');
+      return;
+    }
+
     setIsOpeningProject(true);
 
     try {
@@ -624,40 +634,6 @@ export default function InquiryForm() {
                   />
                 </div>
 
-                <div className="rounded-md border p-4 space-y-3">
-                  <h3 className="text-sm font-semibold">המשך טיפול</h3>
-                  <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-                    {linkedClient && <span>לקוח נוצר</span>}
-                    {linkedProject && <span>פרויקט נוצר</span>}
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={handleOpenClientFromInquiry}
-                      disabled={isSaving}
-                    >
-                      {isOpeningClient
-                        ? 'פותח לקוח...'
-                        : linkedClient
-                          ? 'פתח לקוח'
-                          : 'פתח לקוח מהפנייה'}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={handleOpenProjectFromInquiry}
-                      disabled={isSaving}
-                    >
-                      {isOpeningProject
-                        ? 'פותח...'
-                        : linkedProject
-                          ? 'פתח פרויקט קיים'
-                          : 'פתח פרויקט מהפנייה'}
-                    </Button>
-                  </div>
-                </div>
-
                 <div className="flex flex-wrap items-center gap-2 pt-2">
                   <Button
                     type="button"
@@ -721,6 +697,45 @@ export default function InquiryForm() {
                     הפנייה כבר הוגשה. ניתן לערוך ולשמור שינויים, אך הגשה חוזרת חסומה בשלב זה.
                   </p>
                 )}
+
+                <div className="rounded-md border p-4 space-y-3">
+                  <h3 className="text-sm font-semibold">המשך טיפול</h3>
+                  <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+                    {linkedClient && <span>לקוח נוצר</span>}
+                    {linkedProject && <span>פרויקט נוצר</span>}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {isSubmitted
+                      ? 'הפנייה הוגשה, ניתן להמשיך טיפול.'
+                      : 'יש להגיש את הפנייה לפני פתיחת לקוח או פרויקט.'}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleOpenClientFromInquiry}
+                      disabled={isSaving || !isSubmitted}
+                    >
+                      {isOpeningClient
+                        ? 'פותח...'
+                        : linkedClient
+                          ? 'פתח לקוח קיים'
+                          : 'פתח לקוח'}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleOpenProjectFromInquiry}
+                      disabled={isSaving || !isSubmitted}
+                    >
+                      {isOpeningProject
+                        ? 'פותח...'
+                        : linkedProject
+                          ? 'פתח פרויקט קיים'
+                          : 'פתח פרויקט מהפנייה'}
+                    </Button>
+                  </div>
+                </div>
               </>
             )}
           </CardContent>

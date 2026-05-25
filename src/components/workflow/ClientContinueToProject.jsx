@@ -14,25 +14,30 @@ export default function ClientContinueToProject({
   clientName,
   sourceInquiryId,
   existingProjects,
+  disabled = false,
+  statusMessage,
 }) {
   const navigate = useNavigate();
   const trimmedName = (clientName || '').trim();
+  const canOpenProject = Boolean(clientId) && !disabled;
 
-  const shouldLoadProjects = existingProjects === undefined;
+  const shouldLoadProjects = existingProjects === undefined && Boolean(clientId);
 
   const { data: allProjects = [] } = useQuery({
     queryKey: ['projects'],
     queryFn: () => base44.entities.Project.list(),
-    enabled: shouldLoadProjects && Boolean(trimmedName || clientId),
+    enabled: shouldLoadProjects,
   });
 
   const projects = shouldLoadProjects
     ? getProjectsForClient(allProjects, {
-    clientId,
-    clientName: trimmedName,
-  })
+      clientId,
+      clientName: trimmedName,
+    })
     : existingProjects;
-  const projectsSuffix = formatExistingProjectsSuffix(projects);
+  const projectsSuffix = canOpenProject
+    ? formatExistingProjectsSuffix(projects)
+    : '';
 
   const handleOpenProject = () => {
     if (!clientId) {
@@ -51,7 +56,15 @@ export default function ClientContinueToProject({
   return (
     <div className="rounded-md border p-4 space-y-3">
       <h3 className="text-sm font-semibold">המשך טיפול</h3>
-      <Button type="button" variant="outline" onClick={handleOpenProject}>
+      {statusMessage && (
+        <p className="text-xs text-muted-foreground">{statusMessage}</p>
+      )}
+      <Button
+        type="button"
+        variant="outline"
+        onClick={handleOpenProject}
+        disabled={!canOpenProject}
+      >
         פתח פרויקט ללקוח{projectsSuffix}
       </Button>
     </div>
