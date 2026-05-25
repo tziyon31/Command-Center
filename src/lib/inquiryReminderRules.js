@@ -31,17 +31,25 @@ const shouldHaveR1Reminder = (inquiry) => {
   return inquiry.form_status !== 'submitted' || isDetailsMissing(inquiry);
 };
 
-const shouldHaveR2Reminder = async (inquiry, cache = {}) => {
+/** @returns {'needs_client' | 'needs_project' | null} */
+const getR2ReminderState = async (inquiry, cache = {}) => {
   if (!inquiry?.id || !hasClientName(inquiry)) {
-    return false;
+    return null;
   }
 
   if (inquiry.form_status !== 'submitted') {
-    return false;
+    return null;
   }
 
-  const hasContinuation = await hasInquiryNextStep(inquiry.id, cache);
-  return !hasContinuation;
+  if (await hasInquiryProject(inquiry.id, cache)) {
+    return null;
+  }
+
+  if (!(await hasInquiryClient(inquiry.id, cache))) {
+    return 'needs_client';
+  }
+
+  return 'needs_project';
 };
 
 const buildR1ReminderInput = (inquiry) => {
@@ -63,12 +71,17 @@ const buildR1ReminderInput = (inquiry) => {
   };
 };
 
-const buildR2ReminderInput = (inquiry) => {
+const buildR2ReminderInput = (inquiry, state) => {
   const clientName = inquiry.client_name.trim();
+  const isNeedsProject = state === 'needs_project';
 
   return {
-    title: `לפתוח המשך תהליך עבור ${clientName}`,
-    description: 'הפנייה הוגשה, אך עדיין לא נפתח לה לקוח או פרויקט.',
+    title: isNeedsProject
+      ? `לפתוח פרויקט עבור ${clientName}`
+      : `לפתוח לקוח עבור ${clientName}`,
+    description: isNeedsProject
+      ? 'נפתח לקוח עבור הפנייה, אך עדיין לא נפתח פרויקט.'
+      : 'הפנייה הוגשה, אך עדיין לא נפתח לקוח.',
     client_name: clientName,
     client_id: '',
     project_name: '',
@@ -105,19 +118,18 @@ const tallyRuleResult = (summary, ruleResult) => {
   }
 };
 
-/**
- * Returns true when a Client or Project is linked to the inquiry via source_inquiry_id.
- */
-export async function hasInquiryNextStep(inquiryId, cache = {}) {
+export async function hasInquiryClient(inquiryId, cache = {}) {
   if (!inquiryId) return false;
 
   const clients = cache.clients ?? await base44.entities.Client.list();
+  return clients.some((client) => client.source_inquiry_id === inquiryId);
+}
+
+export async function hasInquiryProject(inquiryId, cache = {}) {
+  if (!inquiryId) return false;
+
   const projects = cache.projects ?? await base44.entities.Project.list();
-
-  const hasLinkedClient = clients.some((client) => client.source_inquiry_id === inquiryId);
-  const hasLinkedProject = projects.some((project) => project.source_inquiry_id === inquiryId);
-
-  return hasLinkedClient || hasLinkedProject;
+  return projects.some((project) => project.source_inquiry_id === inquiryId);
 }
 
 /**
@@ -163,7 +175,7 @@ async function runR1ReminderRuleForInquiry(inquiry) {
 }
 
 /**
- * R2: remind to open client/project continuation after inquiry was submitted.
+ * R2: remind to open client or project after inquiry was submitted.
  */
 async function runR2ReminderRuleForInquiry(inquiry, cache = {}) {
   if (!inquiry?.id) {
@@ -187,9 +199,10 @@ async function runR2ReminderRuleForInquiry(inquiry, cache = {}) {
     };
   }
 
-  const conditionIsTrue = await shouldHaveR2Reminder(inquiry, cache);
+  const r2State = await getR2ReminderState(inquiry, cache);
+  const conditionIsTrue = r2State !== null;
   const reminderInput = conditionIsTrue
-    ? buildR2ReminderInput(inquiry)
+    ? buildR2ReminderInput(inquiry, r2State)
     : { condition_key: conditionKey };
 
   const result = await ensureReminderForCondition(
@@ -203,6 +216,7 @@ async function runR2ReminderRuleForInquiry(inquiry, cache = {}) {
     action: classifyRuleAction(result),
     conditionKey,
     rule: 'r2',
+    r2State,
   };
 }
 
