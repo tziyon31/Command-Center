@@ -39,6 +39,7 @@ import {
 import ProjectClientSection from '@/components/workflow/ProjectClientSection';
 import { assertProjectHasClientId } from '@/lib/projectValidation';
 import { runClientReminderRulesForClient } from '@/lib/clientReminderRules';
+import { buildProjectCreateFormFromSearchParams } from '@/lib/projectDefaults';
 import { buildProposalFormPageUrl, buildSignedProposalFormPageUrl } from '@/lib/workflowNavigation';
 
 const toNumber = (value) => {
@@ -136,14 +137,6 @@ const readSearchParam = (params, key) => {
   }
 };
 
-const buildProjectCreateFormFromParams = (params) => projectToFormData({
-  name: readSearchParam(params, 'project_name') || readSearchParam(params, 'client_name'),
-  client_id: params.get('client_id') || '',
-  status: 'pricing',
-  year: new Date().getFullYear(),
-  total_amount: 0,
-});
-
 const hasProjectCreatePrefill = (params) => (
   Boolean(params.get('source_inquiry_id'))
   || Boolean(params.get('client_id'))
@@ -192,9 +185,7 @@ export default function ProjectDetails() {
   );
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [createFormData, setCreateFormData] = useState(() => (
-    isCreateMode ? buildProjectCreateFormFromParams(params) : null
-  ));
+  const [createFormData, setCreateFormData] = useState(null);
   const [isSavingCreate, setIsSavingCreate] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [editFormData, setEditFormData] = useState(null);
@@ -232,6 +223,21 @@ export default function ProjectDetails() {
     queryKey: ['clients'],
     queryFn: () => base44.entities.Client.list(),
   });
+
+  const { data: allProjects = [] } = useQuery({
+    queryKey: ['projects'],
+    queryFn: () => base44.entities.Project.list('-year'),
+    enabled: isCreateMode,
+  });
+
+  useEffect(() => {
+    if (!isCreateMode) {
+      setCreateFormData(null);
+      return;
+    }
+
+    setCreateFormData(buildProjectCreateFormFromSearchParams(params, allProjects));
+  }, [isCreateMode, allProjects, location.search]);
 
   useEffect(() => {
     if (!isEditDialogOpen || !project) return;
@@ -396,6 +402,16 @@ export default function ProjectDetails() {
       setCreateSourceInquiryId(linkedClient.source_inquiry_id);
     }
   }, [isCreateMode, createFormData?.client_id, clients, createSourceInquiryId]);
+
+  if (isCreateMode && !createFormData) {
+    return (
+      <div className="min-h-screen bg-slate-50 p-6">
+        <div className="max-w-[1100px] mx-auto">
+          <p className="text-sm text-muted-foreground">טוען טופס פרויקט...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (isCreateMode && createFormData) {
     return (

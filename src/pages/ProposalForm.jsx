@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
@@ -10,8 +10,17 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { ArrowRight } from 'lucide-react';
-import ProposalContinueTreatment from '@/components/workflow/ProposalContinueTreatment';
+import CreateClientDialog from '@/components/workflow/CreateClientDialog';
+import CreateProjectDialog from '@/components/workflow/CreateProjectDialog';
+import ProposalOpenSignedProposal from '@/components/workflow/ProposalOpenSignedProposal';
 
 const EMPTY_FORM = {
   client_id: '',
@@ -100,6 +109,10 @@ const canSubmitForm = (formData) => (
   && formData.proposal_sent_to_client === true
 );
 
+const applySourceInquiryId = (currentValue, nextValue) => (
+  currentValue?.trim() ? currentValue : (nextValue || '')
+);
+
 export default function ProposalForm() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -114,6 +127,8 @@ export default function ProposalForm() {
   const [isSaving, setIsSaving] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isCreateClientOpen, setIsCreateClientOpen] = useState(false);
+  const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
 
   const isEditMode = Boolean(recordId);
   const isSubmitted = formStatus === 'submitted';
@@ -128,12 +143,29 @@ export default function ProposalForm() {
     enabled: isEditMode,
   });
 
+  const { data: clients = [] } = useQuery({
+    queryKey: ['clients'],
+    queryFn: () => base44.entities.Client.list(),
+  });
+
+  const { data: projects = [] } = useQuery({
+    queryKey: ['projects'],
+    queryFn: () => base44.entities.Project.list('-created_date'),
+  });
+
   useEffect(() => {
     if (!record) return;
 
     setFormData(proposalToForm(record));
     setFormStatus(record.form_status || 'draft');
   }, [record]);
+
+  const filteredProjects = useMemo(() => {
+    if (!formData.client_id) return projects;
+
+    const byClient = projects.filter((project) => project.client_id === formData.client_id);
+    return byClient.length ? byClient : projects;
+  }, [projects, formData.client_id]);
 
   const persistRecord = async (payload) => {
     if (recordId) {
@@ -149,6 +181,64 @@ export default function ProposalForm() {
     }
 
     return created;
+  };
+
+  const handleClientSelect = (selectedClientId) => {
+    const client = clients.find((item) => item.id === selectedClientId);
+    if (!client) return;
+
+    setFormData((prev) => ({
+      ...prev,
+      client_id: client.id,
+      client_name: client.name,
+      source_inquiry_id: applySourceInquiryId(prev.source_inquiry_id, client.source_inquiry_id),
+    }));
+  };
+
+  const handleNewClientCreated = (client) => {
+    setFormData((prev) => ({
+      ...prev,
+      client_id: client.id,
+      client_name: client.name,
+      source_inquiry_id: applySourceInquiryId(prev.source_inquiry_id, client.source_inquiry_id),
+    }));
+    queryClient.invalidateQueries({ queryKey: ['clients'] });
+    setIsCreateClientOpen(false);
+  };
+
+  const handleProjectSelect = (selectedProjectId) => {
+    const project = projects.find((item) => item.id === selectedProjectId);
+    if (!project) return;
+
+    const linkedClient = clients.find((client) => client.id === project.client_id);
+
+    setFormData((prev) => ({
+      ...prev,
+      project_id: project.id,
+      project_name: project.name || prev.project_name,
+      client_id: project.client_id || prev.client_id,
+      client_name: linkedClient?.name || prev.client_name,
+      source_inquiry_id: applySourceInquiryId(
+        prev.source_inquiry_id,
+        project.source_inquiry_id || linkedClient?.source_inquiry_id,
+      ),
+    }));
+  };
+
+  const handleNewProjectCreated = (project, client) => {
+    setFormData((prev) => ({
+      ...prev,
+      project_id: project.id,
+      project_name: project.name || prev.project_name,
+      client_id: project.client_id || prev.client_id,
+      client_name: client?.name || prev.client_name,
+      source_inquiry_id: applySourceInquiryId(
+        prev.source_inquiry_id,
+        project.source_inquiry_id || client?.source_inquiry_id,
+      ),
+    }));
+    queryClient.invalidateQueries({ queryKey: ['projects'] });
+    setIsCreateProjectOpen(false);
   };
 
   const handleSaveDraft = async (event) => {
@@ -274,40 +364,123 @@ export default function ProposalForm() {
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSaveDraft} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="client_name">שם לקוח</Label>
-                  <Input
-                    id="client_name"
-                    value={formData.client_name}
-                    onChange={(e) => setFormData({ ...formData, client_name: e.target.value })}
+              <div className="space-y-2">
+                <Label htmlFor="proposal-client-select">לקוח</Label>
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 items-center">
+                  <Select
+                    value={formData.client_id || undefined}
+                    onValueChange={handleClientSelect}
                     disabled={isBusy || isSubmitted}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="project_name">שם פרויקט</Label>
-                  <Input
-                    id="project_name"
-                    value={formData.project_name}
-                    onChange={(e) => setFormData({ ...formData, project_name: e.target.value })}
+                  >
+                    <SelectTrigger id="proposal-client-select">
+                      <SelectValue placeholder="בחר לקוח קיים" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {clients.map((client) => (
+                        <SelectItem key={client.id} value={client.id}>
+                          {client.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0 whitespace-nowrap"
+                    onClick={() => setIsCreateClientOpen(true)}
                     disabled={isBusy || isSubmitted}
-                  />
+                  >
+                    לקוח חדש
+                  </Button>
                 </div>
+                <Input
+                  id="client_name"
+                  value={formData.client_name}
+                  onChange={(e) => {
+                    const nextName = e.target.value;
+                    const selectedClient = clients.find((client) => client.id === formData.client_id);
+
+                    setFormData({
+                      ...formData,
+                      client_name: nextName,
+                      client_id: selectedClient?.name === nextName ? formData.client_id : '',
+                    });
+                  }}
+                  disabled={isBusy || isSubmitted}
+                  placeholder="שם לקוח (ניתן להקליד ידנית)"
+                />
               </div>
 
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id="proposal_sent_to_client"
-                  checked={formData.proposal_sent_to_client}
-                  onCheckedChange={(checked) => setFormData({
-                    ...formData,
-                    proposal_sent_to_client: checked === true,
-                  })}
+              <div className="space-y-2">
+                <Label htmlFor="proposal-project-select">פרויקט</Label>
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 items-center">
+                  <Select
+                    value={formData.project_id || undefined}
+                    onValueChange={handleProjectSelect}
+                    disabled={isBusy || isSubmitted}
+                  >
+                    <SelectTrigger id="proposal-project-select">
+                      <SelectValue placeholder="בחר פרויקט קיים" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {filteredProjects.map((project) => (
+                        <SelectItem key={project.id} value={project.id}>
+                          {project.name || project.id}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0 whitespace-nowrap"
+                    onClick={() => setIsCreateProjectOpen(true)}
+                    disabled={isBusy || isSubmitted}
+                  >
+                    פרויקט חדש
+                  </Button>
+                </div>
+                <Input
+                  id="project_name"
+                  value={formData.project_name}
+                  onChange={(e) => {
+                    const nextName = e.target.value;
+                    const selectedProject = projects.find((project) => project.id === formData.project_id);
+
+                    setFormData({
+                      ...formData,
+                      project_name: nextName,
+                      project_id: selectedProject?.name === nextName ? formData.project_id : '',
+                    });
+                  }}
                   disabled={isBusy || isSubmitted}
+                  placeholder="שם פרויקט (אופציונלי)"
                 />
-                <Label htmlFor="proposal_sent_to_client" className="cursor-pointer">
-                  הצעת המחיר נשלחה ללקוח
-                </Label>
+                <p className="text-xs text-muted-foreground">
+                  שדה אופציונלי. אפשר להגיש הצעת מחיר גם בלי פרויקט, אך תקבל תזכורת לפתוח פרויקט בהמשך.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="proposal_sent_to_client"
+                    checked={formData.proposal_sent_to_client}
+                    onCheckedChange={(checked) => setFormData({
+                      ...formData,
+                      proposal_sent_to_client: checked === true,
+                    })}
+                    disabled={isBusy || isSubmitted}
+                  />
+                  <Label htmlFor="proposal_sent_to_client" className="cursor-pointer">
+                    הצעת המחיר נשלחה ללקוח
+                  </Label>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  אם עדיין לא נשלחה, השאר ריק ותקבל תזכורת.
+                </p>
               </div>
 
               <div className="space-y-2">
@@ -319,21 +492,29 @@ export default function ProposalForm() {
                   onChange={(e) => setFormData({ ...formData, proposal_sent_at: e.target.value })}
                   disabled={isBusy || isSubmitted}
                 />
+                <p className="text-xs text-muted-foreground">
+                  אופציונלי. אם תסמן שההצעה נשלחה ולא תמלא תאריך, המערכת תמלא את הזמן הנוכחי בעת ההגשה.
+                </p>
               </div>
 
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id="client_saw_proposal"
-                  checked={formData.client_saw_proposal}
-                  onCheckedChange={(checked) => setFormData({
-                    ...formData,
-                    client_saw_proposal: checked === true,
-                  })}
-                  disabled={isBusy || isSubmitted}
-                />
-                <Label htmlFor="client_saw_proposal" className="cursor-pointer">
-                  הלקוח ראה את ההצעה
-                </Label>
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="client_saw_proposal"
+                    checked={formData.client_saw_proposal}
+                    onCheckedChange={(checked) => setFormData({
+                      ...formData,
+                      client_saw_proposal: checked === true,
+                    })}
+                    disabled={isBusy || isSubmitted}
+                  />
+                  <Label htmlFor="client_saw_proposal" className="cursor-pointer">
+                    הלקוח ראה את ההצעה
+                  </Label>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  אם אין אישור שהלקוח ראה, השאר ריק ותקבל תזכורת.
+                </p>
               </div>
 
               <div className="space-y-2">
@@ -345,6 +526,9 @@ export default function ProposalForm() {
                   onChange={(e) => setFormData({ ...formData, client_saw_at: e.target.value })}
                   disabled={isBusy || isSubmitted}
                 />
+                <p className="text-xs text-muted-foreground">
+                  אופציונלי. אם תסמן שהלקוח ראה את ההצעה ולא תמלא תאריך, המערכת תמלא את הזמן הנוכחי בעת ההגשה.
+                </p>
               </div>
 
               <div className="space-y-2">
@@ -384,12 +568,11 @@ export default function ProposalForm() {
                 </Button>
               </div>
 
-              <ProposalContinueTreatment
+              <ProposalOpenSignedProposal
                 formStatus={formStatus}
-                clientId={formData.client_id}
-                clientName={formData.client_name}
                 projectId={formData.project_id}
                 projectName={formData.project_name}
+                clientName={formData.client_name}
                 sourceInquiryId={formData.source_inquiry_id}
                 proposalSentToClient={formData.proposal_sent_to_client}
                 disabled={isBusy}
@@ -397,6 +580,24 @@ export default function ProposalForm() {
             </form>
           </CardContent>
         </Card>
+
+        <CreateClientDialog
+          open={isCreateClientOpen}
+          onOpenChange={setIsCreateClientOpen}
+          initialName={formData.client_name}
+          sourceInquiryId={formData.source_inquiry_id}
+          onClientCreated={handleNewClientCreated}
+        />
+
+        <CreateProjectDialog
+          open={isCreateProjectOpen}
+          onOpenChange={setIsCreateProjectOpen}
+          initialClientId={formData.client_id}
+          initialClientName={formData.client_name}
+          initialProjectName={formData.project_name || formData.client_name}
+          sourceInquiryId={formData.source_inquiry_id}
+          onProjectCreated={handleNewProjectCreated}
+        />
       </div>
     </div>
   );

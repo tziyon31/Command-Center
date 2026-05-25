@@ -14,6 +14,8 @@ import { Plus, Search } from 'lucide-react';
 import { assertProjectHasClientId } from '@/lib/projectValidation';
 import { runClientReminderRulesForClient } from '@/lib/clientReminderRules';
 import CreateClientDialog from '@/components/workflow/CreateClientDialog';
+import { buildInitialProjectForm, EMPTY_PROJECT_FORM } from '@/lib/projectDefaults';
+import { buildProposalFormPageUrl } from '@/lib/workflowNavigation';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 const STATUS_LABELS = {
@@ -34,26 +36,11 @@ const STATUS_LABELS = {
 const ACTIVE_STATUSES = ['planning', 'submission', 'execution', 'completed', 'collection_completed', 'signed'];
 const PROPOSAL_STATUSES = ['lead', 'pricing', 'waiting', 'rejected', 'cancelled'];
 
-const EMPTY_PROJECT_FORM = {
-  client_id: '',
-  bid_number: '',
-  work_number: '',
-  name: '',
-  city: '',
-  project_type: '',
-  area: '',
-  description: '',
-  status: 'pricing',
-  total_amount: 0,
-  year: new Date().getFullYear(),
-  notes: '',
-  source_inquiry_id: '',
-};
-
 export default function Projects() {
   const [searchTerm, setSearchTerm] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [isCreateClientOpen, setIsCreateClientOpen] = useState(false);
+  const [savedProject, setSavedProject] = useState(null);
   const [formData, setFormData] = useState(EMPTY_PROJECT_FORM);
 
   const queryClient = useQueryClient();
@@ -82,8 +69,7 @@ export default function Projects() {
 
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       queryClient.invalidateQueries({ queryKey: ['reminders'] });
-      setDialogOpen(false);
-      setFormData(EMPTY_PROJECT_FORM);
+      setSavedProject(project);
     },
   });
 
@@ -119,10 +105,17 @@ export default function Projects() {
 
   const handleDialogOpenChange = (open) => {
     setDialogOpen(open);
-    if (!open) {
+
+    if (open) {
+      setFormData(buildInitialProjectForm({ projects }));
+      setSavedProject(null);
       setIsCreateClientOpen(false);
-      setFormData(EMPTY_PROJECT_FORM);
+      return;
     }
+
+    setIsCreateClientOpen(false);
+    setSavedProject(null);
+    setFormData(EMPTY_PROJECT_FORM);
   };
 
   const linkedClient = clients.find((client) => client.id === formData.client_id);
@@ -318,7 +311,40 @@ export default function Projects() {
                 </div>
                 <div className="flex justify-end gap-3 pt-4">
                   <Button type="button" variant="outline" onClick={() => handleDialogOpenChange(false)}>ביטול</Button>
-                  <Button type="submit" disabled={!formData.client_id}>שמור</Button>
+                  <Button type="submit" disabled={!formData.client_id || createMutation.isPending}>
+                    {createMutation.isPending ? 'שומר...' : 'שמור'}
+                  </Button>
+                </div>
+
+                <div className="rounded-md border p-4 space-y-3">
+                  <h3 className="text-sm font-semibold">המשך טיפול</h3>
+                  <p className="text-xs text-muted-foreground">
+                    {savedProject?.id
+                      ? 'הפרויקט נשמר, ניתן לפתוח הצעת מחיר.'
+                      : 'יש לשמור את הפרויקט לפני פתיחת הצעת מחיר.'}
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    asChild={Boolean(savedProject?.id)}
+                    disabled={!savedProject?.id}
+                  >
+                    {savedProject?.id ? (
+                      <Link
+                        to={buildProposalFormPageUrl({
+                          projectId: savedProject.id,
+                          projectName: savedProject.name,
+                          clientId: savedProject.client_id,
+                          clientName: linkedClient?.name || '',
+                          sourceInquiryId: savedProject.source_inquiry_id || '',
+                        })}
+                      >
+                        פתח הצעת מחיר
+                      </Link>
+                    ) : (
+                      <span>פתח הצעת מחיר</span>
+                    )}
+                  </Button>
                 </div>
               </form>
             </DialogContent>
