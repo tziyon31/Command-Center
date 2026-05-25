@@ -14,7 +14,6 @@ import { buildInitialProjectForm } from '@/lib/projectDefaults';
 import { buildProjectCreatePayloadFromForm } from '@/lib/projectCreatePayload';
 import { assertProjectHasClientId } from '@/lib/projectValidation';
 import { runClientReminderRulesForClient } from '@/lib/clientReminderRules';
-import { runProposalReminderRulesForProject } from '@/lib/proposalReminderRules';
 
 export default function CreateProjectDialog({
   open,
@@ -94,18 +93,6 @@ export default function CreateProjectDialog({
 
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       queryClient.invalidateQueries({ queryKey: ['reminders'] });
-
-      try {
-        const proposals = await base44.entities.Proposal.list();
-        await runProposalReminderRulesForProject(project, {
-          clients,
-          proposals,
-        });
-        queryClient.invalidateQueries({ queryKey: ['reminders'] });
-      } catch (error) {
-        console.error('[CreateProjectDialog] failed to run P2 proposal reminder rule', error);
-      }
-
       onProjectCreated?.(project, client);
       onOpenChange(false);
     } catch (error) {
