@@ -12,21 +12,26 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Plus, Search, Upload } from 'lucide-react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import ClientContinueToProject from '@/components/workflow/ClientContinueToProject';
+import { runClientReminderRulesForClient } from '@/lib/clientReminderRules';
+
+const EMPTY_CLIENT_FORM = {
+  name: '',
+  email: '',
+  phone: '',
+  company: '',
+  address: '',
+  notes: '',
+  rating: 'B',
+};
 
 export default function Clients() {
   const [searchTerm, setSearchTerm] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [savedClientId, setSavedClientId] = useState(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [formData, setFormData] = useState({
-    name: '',
-    email: '',
-    phone: '',
-    company: '',
-    address: '',
-    notes: '',
-    rating: 'B'
-  });
+  const [formData, setFormData] = useState(EMPTY_CLIENT_FORM);
 
   const queryClient = useQueryClient();
 
@@ -37,11 +42,17 @@ export default function Clients() {
 
   const createMutation = useMutation({
     mutationFn: (data) => base44.entities.Client.create(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['clients']);
-      setDialogOpen(false);
-      setFormData({ name: '', email: '', phone: '', company: '', address: '', notes: '', rating: 'B' });
-    }
+    onSuccess: async (createdClient) => {
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
+      queryClient.invalidateQueries({ queryKey: ['reminders'] });
+      setSavedClientId(createdClient.id);
+
+      try {
+        await runClientReminderRulesForClient(createdClient);
+      } catch (error) {
+        console.error('[Clients] failed to run client reminder rules', error);
+      }
+    },
   });
 
   const filteredClients = clients.filter(client =>
@@ -50,9 +61,21 @@ export default function Clients() {
     client.company?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  const handleDialogOpenChange = (open) => {
+    setDialogOpen(open);
+    if (!open) {
+      setSavedClientId(null);
+      setFormData(EMPTY_CLIENT_FORM);
+    }
+  };
+
   const handleSubmit = (e) => {
     e.preventDefault();
-    createMutation.mutate(formData);
+    createMutation.mutate({
+      ...formData,
+      name: formData.name.trim(),
+      status: 'draft',
+    });
   };
 
   const handleFileUpload = async (e) => {
@@ -172,7 +195,7 @@ export default function Clients() {
                 </div>
               </DialogContent>
             </Dialog>
-            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+            <Dialog open={dialogOpen} onOpenChange={handleDialogOpenChange}>
               <DialogTrigger asChild>
                 <Button size="lg">
                   <Plus className="w-5 h-5 ml-2" />
@@ -253,13 +276,24 @@ export default function Clients() {
                   />
                 </div>
                 <div className="flex justify-end gap-3 pt-4">
-                  <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+                  <Button type="button" variant="outline" onClick={() => handleDialogOpenChange(false)}>
                     ביטול
                   </Button>
-                  <Button type="submit">
-                    שמור
+                  <Button type="submit" disabled={createMutation.isPending}>
+                    {createMutation.isPending ? 'שומר...' : 'שמור'}
                   </Button>
                 </div>
+
+                <ClientContinueToProject
+                  clientId={savedClientId}
+                  clientName={formData.name}
+                  disabled={!savedClientId}
+                  statusMessage={
+                    savedClientId
+                      ? undefined
+                      : 'יש לשמור את הלקוח לפני פתיחת פרויקט.'
+                  }
+                />
               </form>
               </DialogContent>
             </Dialog>

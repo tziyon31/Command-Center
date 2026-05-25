@@ -18,6 +18,8 @@ export default function ProjectClientSection({
   sourceInquiryId = '',
   onClientChange,
   disabled = false,
+  compact = false,
+  createButtonLabel = 'צור לקוח חדש',
 }) {
   const [isCreateClientOpen, setIsCreateClientOpen] = useState(false);
   const linkedClient = clients.find((client) => client.id === clientId);
@@ -57,25 +59,96 @@ export default function ProjectClientSection({
     });
   };
 
+  const clientSelect = (
+    <Select
+      value={clientId || undefined}
+      onValueChange={handleSelectClient}
+      disabled={disabled}
+    >
+      <SelectTrigger className={compact ? 'w-full' : undefined}>
+        <SelectValue placeholder="בחר לקוח" />
+      </SelectTrigger>
+      <SelectContent>
+        {clients.map((client) => (
+          <SelectItem key={client.id} value={client.id}>{client.name}</SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+
+  const createClientButton = (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      onClick={() => setIsCreateClientOpen(true)}
+      disabled={disabled}
+      className="shrink-0"
+    >
+      {createButtonLabel}
+    </Button>
+  );
+
+  const createClientDialog = (
+    <CreateClientDialog
+      open={isCreateClientOpen}
+      onOpenChange={setIsCreateClientOpen}
+      initialName={clientNameHint}
+      sourceInquiryId={sourceInquiryId}
+      onClientCreated={handleClientCreated}
+    />
+  );
+
   if (linkedClient) {
+    if (compact) {
+      return (
+        <div className="space-y-2">
+          <Label>לקוח *</Label>
+          <p className="text-xs text-muted-foreground">לקוח משויך: {linkedClient.name}</p>
+          <div className="flex gap-2">
+            <div className="flex-1">{clientSelect}</div>
+            {createClientButton}
+          </div>
+          {createClientDialog}
+        </div>
+      );
+    }
+
     return (
       <div className="rounded-md border p-4 space-y-2">
         <h3 className="text-sm font-semibold">לקוח *</h3>
         <p className="text-sm text-muted-foreground">
           לקוח משויך: {linkedClient.name}
         </p>
-        <Select
-          value={clientId}
-          onValueChange={handleSelectClient}
-          disabled={disabled}
-        >
-          <SelectTrigger><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {clients.map((client) => (
-              <SelectItem key={client.id} value={client.id}>{client.name}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {clientSelect}
+        {createClientDialog}
+      </div>
+    );
+  }
+
+  if (compact) {
+    return (
+      <div className="space-y-2">
+        <Label>לקוח *</Label>
+        <div className="flex gap-2">
+          <div className="flex-1">{clientSelect}</div>
+          {createClientButton}
+        </div>
+        {existingByName && (
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span>נמצא לקוח קיים: {existingByName.name}</span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleLinkExistingByName}
+              disabled={disabled}
+            >
+              שייך
+            </Button>
+          </div>
+        )}
+        {createClientDialog}
       </div>
     );
   }
@@ -89,20 +162,7 @@ export default function ProjectClientSection({
 
       <div className="space-y-2">
         <Label>בחירת לקוח קיים</Label>
-        <Select
-          value={clientId || undefined}
-          onValueChange={handleSelectClient}
-          disabled={disabled}
-        >
-          <SelectTrigger>
-            <SelectValue placeholder="בחר לקוח" />
-          </SelectTrigger>
-          <SelectContent>
-            {clients.map((client) => (
-              <SelectItem key={client.id} value={client.id}>{client.name}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {clientSelect}
       </div>
 
       {existingByName && (
@@ -128,16 +188,10 @@ export default function ProjectClientSection({
         onClick={() => setIsCreateClientOpen(true)}
         disabled={disabled}
       >
-        צור לקוח חדש
+        {createButtonLabel}
       </Button>
 
-      <CreateClientDialog
-        open={isCreateClientOpen}
-        onOpenChange={setIsCreateClientOpen}
-        initialName={clientNameHint}
-        sourceInquiryId={sourceInquiryId}
-        onClientCreated={handleClientCreated}
-      />
+      {createClientDialog}
     </div>
   );
 }

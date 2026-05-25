@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Plus, Search } from 'lucide-react';
 import { assertProjectHasClientId } from '@/lib/projectValidation';
 import { runClientReminderRulesForClient } from '@/lib/clientReminderRules';
+import ProjectClientSection from '@/components/workflow/ProjectClientSection';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 const STATUS_LABELS = {
@@ -90,15 +91,33 @@ export default function Projects() {
     createMutation.mutate(formData);
   };
 
-  const handleClientSelect = (clientId) => {
-    const client = clients.find((item) => item.id === clientId);
-    if (!client) return;
-
+  const handleProjectClientChange = (update) => {
     setFormData((prev) => ({
       ...prev,
-      client_id: client.id,
-      name: prev.name?.trim() ? prev.name : client.name,
+      client_id: update.clientId,
+      name: update.fillProjectName && !prev.name?.trim() ? update.clientName : prev.name,
     }));
+    queryClient.invalidateQueries({ queryKey: ['clients'] });
+  };
+
+  const handleDialogOpenChange = (open) => {
+    setDialogOpen(open);
+    if (!open) {
+      setFormData({
+        client_id: '',
+        bid_number: '',
+        work_number: '',
+        name: '',
+        city: '',
+        project_type: '',
+        area: '',
+        description: '',
+        status: 'pricing',
+        total_amount: 0,
+        year: new Date().getFullYear(),
+        notes: '',
+      });
+    }
   };
 
   const filtered = projects.filter(p =>
@@ -175,7 +194,7 @@ export default function Projects() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <h1 className="text-3xl font-bold">פרויקטים</h1>
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <Dialog open={dialogOpen} onOpenChange={handleDialogOpenChange}>
             <DialogTrigger asChild>
               <Button size="lg">
                 <Plus className="w-5 h-5 ml-2" />
@@ -242,23 +261,21 @@ export default function Projects() {
                     <Input type="number" value={formData.year} onChange={(e) => setFormData({ ...formData, year: parseInt(e.target.value) || new Date().getFullYear() })} />
                   </div>
                 </div>
-                <div className="space-y-2">
-                  <Label>לקוח *</Label>
-                  <Select value={formData.client_id} onValueChange={handleClientSelect}>
-                    <SelectTrigger><SelectValue placeholder="בחר לקוח" /></SelectTrigger>
-                    <SelectContent>
-                      {clients.map(client => (
-                        <SelectItem key={client.id} value={client.id}>{client.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <ProjectClientSection
+                  clientId={formData.client_id}
+                  clients={clients}
+                  clientNameHint={formData.name}
+                  onClientChange={handleProjectClientChange}
+                  disabled={createMutation.isPending}
+                  compact
+                  createButtonLabel="לקוח חדש"
+                />
                 <div className="space-y-2">
                   <Label>הערות</Label>
                   <Textarea value={formData.notes} onChange={(e) => setFormData({ ...formData, notes: e.target.value })} rows={2} />
                 </div>
                 <div className="flex justify-end gap-3 pt-4">
-                  <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>ביטול</Button>
+                  <Button type="button" variant="outline" onClick={() => handleDialogOpenChange(false)}>ביטול</Button>
                   <Button type="submit" disabled={!formData.client_id}>שמור</Button>
                 </div>
               </form>
