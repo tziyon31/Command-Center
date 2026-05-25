@@ -111,6 +111,29 @@ const buildDraftPayload = (formData) => ({
 
 const canSubmitForm = (formData) => Boolean(formData.client_name?.trim());
 
+const buildSubmittedUpdatePayload = (formData, submittedAt = '') => {
+  const now = new Date().toISOString();
+
+  return {
+    client_id: formData.client_id.trim(),
+    client_name: formData.client_name.trim(),
+    project_id: formData.project_id.trim(),
+    project_name: formData.project_name.trim(),
+    source_inquiry_id: formData.source_inquiry_id.trim(),
+    proposal_sent_to_client: Boolean(formData.proposal_sent_to_client),
+    proposal_sent_at: formData.proposal_sent_to_client
+      ? (toIsoFromDatetimeLocal(formData.proposal_sent_at) || now)
+      : '',
+    client_saw_proposal: Boolean(formData.client_saw_proposal),
+    client_saw_at: formData.client_saw_proposal
+      ? (toIsoFromDatetimeLocal(formData.client_saw_at) || now)
+      : '',
+    document_note: formData.document_note.trim(),
+    form_status: 'submitted',
+    submitted_at: submittedAt,
+  };
+};
+
 const buildSubmitPayload = (formData) => {
   const now = new Date().toISOString();
 
@@ -149,6 +172,7 @@ export default function ProposalForm() {
     ...prefill,
   });
   const [formStatus, setFormStatus] = useState('draft');
+  const [submittedAt, setSubmittedAt] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -183,6 +207,7 @@ export default function ProposalForm() {
 
     setFormData(proposalToForm(record));
     setFormStatus(record.form_status || 'draft');
+    setSubmittedAt(record.submitted_at || '');
   }, [record]);
 
   const filteredProjects = useMemo(() => {
@@ -302,13 +327,24 @@ export default function ProposalForm() {
     setIsCreateProjectOpen(false);
   };
 
-  const handleSaveDraft = async (event) => {
+  const handleFormSubmit = async (event) => {
     event.preventDefault();
+
+    if (isSubmitted) {
+      await handleSaveSubmittedChanges();
+      return;
+    }
+
+    await handleSaveDraft();
+  };
+
+  const handleSaveDraft = async () => {
     setIsSaving(true);
 
     try {
       const saved = await persistRecord(buildDraftPayload(formData));
       setFormStatus(saved?.form_status || 'draft');
+      setSubmittedAt('');
       queryClient.invalidateQueries({ queryKey: ['proposals'] });
       queryClient.invalidateQueries({ queryKey: ['proposal', recordId || saved?.id] });
       await syncProposalReminders(saved);
@@ -316,6 +352,45 @@ export default function ProposalForm() {
     } catch (error) {
       console.error('[ProposalForm] failed to save draft', error);
       alert('לא הצלחנו לשמור את הטיוטה');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleSaveSubmittedChanges = async () => {
+    if (!recordId) {
+      alert('יש לשמור את ההצעה לפני עדכון שינויים');
+      return;
+    }
+
+    setIsSaving(true);
+
+    try {
+      const payload = buildSubmittedUpdatePayload(formData, submittedAt);
+      const saved = await persistRecord(payload);
+
+      setFormStatus(saved?.form_status || 'submitted');
+      setSubmittedAt(saved?.submitted_at || submittedAt);
+      setFormData((prev) => ({
+        ...prev,
+        proposal_sent_to_client: payload.proposal_sent_to_client,
+        proposal_sent_at: payload.proposal_sent_at
+          ? toDatetimeLocalValue(payload.proposal_sent_at)
+          : '',
+        client_saw_proposal: payload.client_saw_proposal,
+        client_saw_at: payload.client_saw_at
+          ? toDatetimeLocalValue(payload.client_saw_at)
+          : '',
+        document_note: payload.document_note,
+      }));
+
+      queryClient.invalidateQueries({ queryKey: ['proposals'] });
+      queryClient.invalidateQueries({ queryKey: ['proposal', recordId] });
+      await syncProposalReminders(saved);
+      alert('השינויים נשמרו');
+    } catch (error) {
+      console.error('[ProposalForm] failed to save submitted proposal changes', error);
+      alert('לא הצלחנו לשמור את השינויים');
     } finally {
       setIsSaving(false);
     }
@@ -334,6 +409,7 @@ export default function ProposalForm() {
 
       const saved = await persistRecord(payload);
       setFormStatus(saved?.form_status || 'submitted');
+      setSubmittedAt(saved?.submitted_at || payload.submitted_at);
       setFormData((prev) => ({
         ...prev,
         proposal_sent_to_client: payload.proposal_sent_to_client,
@@ -427,7 +503,7 @@ export default function ProposalForm() {
             </div>
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleSaveDraft} className="space-y-4">
+            <form onSubmit={handleFormSubmit} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="proposal-client-select">לקוח</Label>
                 <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 items-center">
@@ -538,14 +614,16 @@ export default function ProposalForm() {
                       ...formData,
                       proposal_sent_to_client: checked === true,
                     })}
-                    disabled={isBusy || isSubmitted}
+                    disabled={isBusy}
                   />
                   <Label htmlFor="proposal_sent_to_client" className="cursor-pointer">
                     הצעת המחיר נשלחה ללקוח
                   </Label>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  אם עדיין לא נשלחה, השאר ריק. לאחר הגשת הטופס תיווצר תזכורת לשלוח אותה.
+                  {isSubmitted
+                    ? 'ניתן לעדכן אחרי הגשה. אם מסמנים שנשלחה ולא מזינים תאריך, המערכת תמלא את הזמן הנוכחי בעת השמירה.'
+                    : 'אם עדיין לא נשלחה, השאר ריק. לאחר הגשת הטופס תיווצר תזכורת לשלוח אותה.'}
                 </p>
               </div>
 
@@ -556,10 +634,12 @@ export default function ProposalForm() {
                   type="datetime-local"
                   value={formData.proposal_sent_at}
                   onChange={(e) => setFormData({ ...formData, proposal_sent_at: e.target.value })}
-                  disabled={isBusy || isSubmitted}
+                  disabled={isBusy}
                 />
                 <p className="text-xs text-muted-foreground">
-                  אופציונלי. אם תסמן שההצעה נשלחה ולא תמלא תאריך, המערכת תמלא את הזמן הנוכחי בעת ההגשה.
+                  {isSubmitted
+                    ? 'אופציונלי. אם מסמנים שההצעה נשלחה ולא מזינים תאריך, המערכת תמלא את הזמן הנוכחי בעת שמירת השינויים.'
+                    : 'אופציונלי. אם תסמן שההצעה נשלחה ולא תמלא תאריך, המערכת תמלא את הזמן הנוכחי בעת ההגשה.'}
                 </p>
               </div>
 
@@ -572,14 +652,16 @@ export default function ProposalForm() {
                       ...formData,
                       client_saw_proposal: checked === true,
                     })}
-                    disabled={isBusy || isSubmitted}
+                    disabled={isBusy}
                   />
                   <Label htmlFor="client_saw_proposal" className="cursor-pointer">
                     הלקוח ראה את ההצעה
                   </Label>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  אם עדיין אין אישור שהלקוח ראה, השאר ריק. לאחר הגשת הטופס תיווצר תזכורת למעקב.
+                  {isSubmitted
+                    ? 'ניתן לעדכן אחרי הגשה. אם מסמנים שהלקוח ראה ולא מזינים תאריך, המערכת תמלא את הזמן הנוכחי בעת השמירה.'
+                    : 'אם עדיין אין אישור שהלקוח ראה, השאר ריק. לאחר הגשת הטופס תיווצר תזכורת למעקב.'}
                 </p>
               </div>
 
@@ -590,10 +672,12 @@ export default function ProposalForm() {
                   type="datetime-local"
                   value={formData.client_saw_at}
                   onChange={(e) => setFormData({ ...formData, client_saw_at: e.target.value })}
-                  disabled={isBusy || isSubmitted}
+                  disabled={isBusy}
                 />
                 <p className="text-xs text-muted-foreground">
-                  אופציונלי. אם תסמן שהלקוח ראה את ההצעה ולא תמלא תאריך, המערכת תמלא את הזמן הנוכחי בעת ההגשה.
+                  {isSubmitted
+                    ? 'אופציונלי. אם מסמנים שהלקוח ראה ולא מזינים תאריך, המערכת תמלא את הזמן הנוכחי בעת שמירת השינויים.'
+                    : 'אופציונלי. אם תסמן שהלקוח ראה את ההצעה ולא תמלא תאריך, המערכת תמלא את הזמן הנוכחי בעת ההגשה.'}
                 </p>
               </div>
 
@@ -604,7 +688,7 @@ export default function ProposalForm() {
                   value={formData.document_note}
                   onChange={(e) => setFormData({ ...formData, document_note: e.target.value })}
                   rows={3}
-                  disabled={isBusy || isSubmitted}
+                  disabled={isBusy}
                 />
               </div>
 
@@ -622,16 +706,24 @@ export default function ProposalForm() {
                     {isDeleting ? 'מוחק...' : 'מחק'}
                   </Button>
                 )}
-                <Button type="submit" variant="outline" disabled={isBusy || isSubmitted}>
-                  {isSaving ? 'שומר...' : 'שמור טיוטה'}
-                </Button>
-                <Button
-                  type="button"
-                  disabled={isBusy || isSubmitted}
-                  onClick={handleSubmitForm}
-                >
-                  {isSubmitting ? 'מגיש...' : 'הגשת טופס'}
-                </Button>
+                {isSubmitted ? (
+                  <Button type="submit" disabled={isBusy}>
+                    {isSaving ? 'שומר...' : 'שמור שינויים'}
+                  </Button>
+                ) : (
+                  <>
+                    <Button type="submit" variant="outline" disabled={isBusy}>
+                      {isSaving ? 'שומר...' : 'שמור טיוטה'}
+                    </Button>
+                    <Button
+                      type="button"
+                      disabled={isBusy}
+                      onClick={handleSubmitForm}
+                    >
+                      {isSubmitting ? 'מגיש...' : 'הגשת טופס'}
+                    </Button>
+                  </>
+                )}
               </div>
 
               <ProposalOpenSignedProposal
