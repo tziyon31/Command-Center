@@ -24,6 +24,7 @@ import {
   findProjectBySourceInquiryId,
   loadInquiryById,
 } from '@/lib/inquiryContinuation';
+import { buildProposalFormPageUrl } from '@/lib/workflowNavigation';
 
 const AUTOSAVE_DEBOUNCE_MS = 1000;
 
@@ -381,6 +382,24 @@ export default function InquiryForm() {
     }
   };
 
+  const handleOpenProposalFromInquiry = () => {
+    if (formStatus !== 'submitted') {
+      alert('יש להגיש את הפנייה לפני פתיחת הצעת מחיר');
+      return;
+    }
+
+    const inquiryId = currentInquiryIdRef.current;
+    if (!inquiryId) {
+      alert('יש לשמור את הפנייה לפני פתיחת הצעת מחיר');
+      return;
+    }
+
+    navigate(buildProposalFormPageUrl({
+      sourceInquiryId: inquiryId,
+      clientName: formData.client_name.trim(),
+    }));
+  };
+
   const handleOpenProjectFromInquiry = async () => {
     if (formStatus !== 'submitted') {
       alert('יש להגיש את הפנייה לפני פתיחת פרויקט');
@@ -733,6 +752,14 @@ export default function InquiryForm() {
                         : linkedProject
                           ? 'פתח פרויקט קיים'
                           : 'פתח פרויקט מהפנייה'}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleOpenProposalFromInquiry}
+                      disabled={isSaving || !isSubmitted}
+                    >
+                      פתח הצעת מחיר
                     </Button>
                   </div>
                 </div>

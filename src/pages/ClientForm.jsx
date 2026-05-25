@@ -17,6 +17,7 @@ import {
 import { ArrowRight } from 'lucide-react';
 import ClientContinueToProject from '@/components/workflow/ClientContinueToProject';
 import { runClientReminderRulesForClient } from '@/lib/clientReminderRules';
+import { buildProposalFormPageUrl } from '@/lib/workflowNavigation';
 
 const EMPTY_FORM = {
   name: '',
@@ -196,6 +197,35 @@ export default function ClientForm() {
                     : 'יש לשמור את הלקוח לפני פתיחת פרויקט.'
                 }
               />
+
+              <div className="rounded-md border p-4 space-y-3">
+                <h3 className="text-sm font-semibold">הצעת מחיר</h3>
+                <p className="text-xs text-muted-foreground">
+                  {savedClientId
+                    ? 'ניתן לפתוח טופס הצעת מחיר עם מילוי מקדים.'
+                    : 'יש לשמור את הלקוח לפני פתיחת הצעת מחיר.'}
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  asChild={Boolean(savedClientId)}
+                  disabled={!savedClientId || isSaving}
+                >
+                  {savedClientId ? (
+                    <Link
+                      to={buildProposalFormPageUrl({
+                        clientId: savedClientId,
+                        clientName: formData.name.trim(),
+                        sourceInquiryId: sourceInquiryId || undefined,
+                      })}
+                    >
+                      פתח הצעת מחיר
+                    </Link>
+                  ) : (
+                    <span>פתח הצעת מחיר</span>
+                  )}
+                </Button>
+              </div>
             </form>
           </CardContent>
         </Card>

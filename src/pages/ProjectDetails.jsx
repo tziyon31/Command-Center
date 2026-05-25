@@ -39,7 +39,7 @@ import {
 import ProjectClientSection from '@/components/workflow/ProjectClientSection';
 import { assertProjectHasClientId } from '@/lib/projectValidation';
 import { runClientReminderRulesForClient } from '@/lib/clientReminderRules';
-import { buildSignedProposalFormPageUrl } from '@/lib/workflowNavigation';
+import { buildProposalFormPageUrl, buildSignedProposalFormPageUrl } from '@/lib/workflowNavigation';
 
 const toNumber = (value) => {
   const num = Number(value);
@@ -533,11 +533,16 @@ export default function ProjectDetails() {
                 </div>
                 <div className="rounded-md border p-4 space-y-2">
                   <p className="text-xs text-muted-foreground">
-                    יש לשמור את הפרויקט לפני פתיחת הצעה חתומה.
+                    יש לשמור את הפרויקט לפני פתיחת הצעת מחיר או הצעה חתומה.
                   </p>
-                  <Button type="button" variant="outline" disabled>
-                    פתח הצעה חתומה
-                  </Button>
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="button" variant="outline" disabled>
+                      פתח הצעת מחיר
+                    </Button>
+                    <Button type="button" variant="outline" disabled>
+                      פתח הצעה חתומה
+                    </Button>
+                  </div>
                 </div>
                 <div className="flex justify-end gap-3 pt-4">
                   <Button type="button" variant="outline" asChild disabled={isSavingCreate}>
@@ -621,6 +626,14 @@ export default function ProjectDetails() {
     !hasProjectTargetDate(project);
 
   const linkedClient = clients.find((client) => client.id === project.client_id);
+  const proposalFormUrl = buildProposalFormPageUrl({
+    projectId: project.id,
+    projectName: project.name,
+    clientId: project.client_id || '',
+    clientName: linkedClient?.name || clientNameHint || '',
+    sourceInquiryId: project.source_inquiry_id || createSourceInquiryId || '',
+  });
+
   const signedProposalFormUrl = buildSignedProposalFormPageUrl({
     projectId: project.id,
     projectName: project.name,
@@ -792,6 +805,9 @@ export default function ProjectDetails() {
               </div>
               <div className="flex items-center gap-2 shrink-0 flex-wrap">
                 <Button asChild variant="outline" disabled={!project.id}>
+                  <Link to={proposalFormUrl}>פתח הצעת מחיר</Link>
+                </Button>
+                <Button asChild variant="outline" disabled={!project.id}>
                   <Link to={signedProposalFormUrl}>פתח הצעה חתומה</Link>
                 </Button>
                 <Button
@@ -820,14 +836,19 @@ export default function ProjectDetails() {
         <Card className="border-0 shadow-sm">
           <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <CardTitle>הצעה חתומה</CardTitle>
+              <CardTitle>הצעות מחיר</CardTitle>
               <CardDescription>
-                פתיחת טופס הצעה/הזמנה חתומה לפרויקט — ללא יצירה אוטומטית של רשומה.
+                פתיחת טפסי הצעת מחיר או הצעה חתומה — ללא יצירה אוטומטית של רשומה.
               </CardDescription>
             </div>
-            <Button asChild variant="outline" className="shrink-0">
-              <Link to={signedProposalFormUrl}>פתח הצעה חתומה</Link>
-            </Button>
+            <div className="flex flex-wrap gap-2 shrink-0">
+              <Button asChild variant="outline">
+                <Link to={proposalFormUrl}>פתח הצעת מחיר</Link>
+              </Button>
+              <Button asChild variant="outline">
+                <Link to={signedProposalFormUrl}>פתח הצעה חתומה</Link>
+              </Button>
+            </div>
           </CardHeader>
         </Card>
 
