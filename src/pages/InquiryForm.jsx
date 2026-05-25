@@ -454,6 +454,7 @@ export default function InquiryForm() {
     try {
       await deleteInquiry(inquiryId);
       queryClient.invalidateQueries({ queryKey: ['inquiries'] });
+      queryClient.invalidateQueries({ queryKey: ['reminders'] });
       queryClient.removeQueries({ queryKey: ['inquiry', inquiryId] });
       navigate(createPageUrl('Inquiries'));
     } catch (error) {

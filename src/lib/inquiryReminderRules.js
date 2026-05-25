@@ -1,5 +1,6 @@
 import { base44 } from '@/api/base44Client';
 import {
+  cancelOrphanRemindersForSourceType,
   ensureReminderForCondition,
 } from '@/lib/reminderEngine';
 
@@ -243,6 +244,16 @@ export async function runInquiryReminderRulesForAll() {
   }
 
   const cache = { clients, projects };
+
+  try {
+    await cancelOrphanRemindersForSourceType(
+      'inquiry',
+      inquiries.map((inquiry) => inquiry.id).filter(Boolean),
+    );
+  } catch (error) {
+    console.error('[InquiryReminderRules] failed to cancel orphan inquiry reminders', error);
+    summary.errors += 1;
+  }
 
   for (const inquiry of inquiries) {
     summary.checked += 1;

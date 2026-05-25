@@ -181,6 +181,175 @@ export async function cancelReminder(reminderId, reason) {
   });
 }
 
+const INQUIRY_REMINDER_CONDITION_PREFIXES = [
+  'inquiry_missing_fields:',
+  'inquiry_needs_next_step:',
+];
+
+const emptyCancelRemindersSummary = () => ({
+  checked: 0,
+  matched: 0,
+  cancelled: 0,
+  skipped: 0,
+  errors: 0,
+});
+
+const getInquiryIdFromConditionKey = (conditionKey) => {
+  if (!conditionKey) return null;
+
+  for (const prefix of INQUIRY_REMINDER_CONDITION_PREFIXES) {
+    if (conditionKey.startsWith(prefix)) {
+      return conditionKey.slice(prefix.length);
+    }
+  }
+
+  return null;
+};
+
+const matchesDeletedSource = (reminder, sourceType, sourceId) => {
+  if (reminder?.source_type === sourceType && reminder?.source_id === sourceId) {
+    return true;
+  }
+
+  if (sourceType !== 'inquiry') {
+    return false;
+  }
+
+  const inquiryIdFromKey = getInquiryIdFromConditionKey(reminder?.condition_key);
+  return inquiryIdFromKey === sourceId;
+};
+
+/**
+ * Cancels all non-cancelled reminders linked to a deleted source (soft cancel, not hard delete).
+ */
+export async function cancelRemindersForDeletedSource(sourceType, sourceId) {
+  if (!sourceType || !sourceId) {
+    return {
+      ...emptyCancelRemindersSummary(),
+      status: 'skipped',
+      reason: 'missing_source',
+    };
+  }
+
+  const summary = emptyCancelRemindersSummary();
+
+  let reminders = [];
+
+  try {
+    reminders = await base44.entities.Reminder.list();
+  } catch (error) {
+    summary.errors += 1;
+    throw error;
+  }
+
+  summary.checked = reminders.length;
+
+  const matched = reminders.filter((reminder) => (
+    matchesDeletedSource(reminder, sourceType, sourceId)
+  ));
+
+  summary.matched = matched.length;
+
+  for (const reminder of matched) {
+    if (reminder.status === REMINDER_STATUS.CANCELLED) {
+      summary.skipped += 1;
+      continue;
+    }
+
+    if (!reminder?.id) {
+      summary.errors += 1;
+      continue;
+    }
+
+    try {
+      await cancelReminder(reminder.id, 'source_deleted');
+      summary.cancelled += 1;
+    } catch (error) {
+      summary.errors += 1;
+      console.error(
+        '[ReminderEngine] failed to cancel reminder for deleted source',
+        { sourceType, sourceId, reminderId: reminder.id },
+        error,
+      );
+    }
+  }
+
+  return summary;
+}
+
+/**
+ * Cancels inquiry reminders whose source_id or condition_key points at a missing inquiry.
+ */
+export async function cancelOrphanRemindersForSourceType(sourceType, existingSourceIds = []) {
+  if (!sourceType) {
+    return {
+      ...emptyCancelRemindersSummary(),
+      status: 'skipped',
+      reason: 'missing_source_type',
+    };
+  }
+
+  const existingIds = new Set(
+    (existingSourceIds || []).filter(Boolean),
+  );
+
+  const summary = emptyCancelRemindersSummary();
+
+  let reminders = [];
+
+  try {
+    reminders = await base44.entities.Reminder.list();
+  } catch (error) {
+    summary.errors += 1;
+    throw error;
+  }
+
+  summary.checked = reminders.length;
+
+  const remindersToCancel = new Map();
+
+  for (const reminder of reminders) {
+    if (isTerminalReminderStatus(reminder?.status)) {
+      continue;
+    }
+
+    let isOrphan = false;
+
+    if (reminder?.source_type === sourceType && reminder?.source_id) {
+      isOrphan = !existingIds.has(reminder.source_id);
+    }
+
+    if (!isOrphan && sourceType === 'inquiry') {
+      const inquiryIdFromKey = getInquiryIdFromConditionKey(reminder?.condition_key);
+      if (inquiryIdFromKey && !existingIds.has(inquiryIdFromKey)) {
+        isOrphan = true;
+      }
+    }
+
+    if (isOrphan && reminder?.id) {
+      remindersToCancel.set(reminder.id, reminder);
+    }
+  }
+
+  summary.matched = remindersToCancel.size;
+
+  for (const reminder of remindersToCancel.values()) {
+    try {
+      await cancelReminder(reminder.id, 'source_deleted');
+      summary.cancelled += 1;
+    } catch (error) {
+      summary.errors += 1;
+      console.error(
+        '[ReminderEngine] failed to cancel orphan reminder',
+        { sourceType, reminderId: reminder.id },
+        error,
+      );
+    }
+  }
+
+  return summary;
+}
+
 const ALLOWED_SCHEDULE_FIELDS = new Set(['frequency', 'next_remind_at', 'default_time']);
 const VALID_REMINDER_FREQUENCIES = new Set([
   'immediate',

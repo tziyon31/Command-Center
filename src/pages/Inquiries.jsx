@@ -79,6 +79,7 @@ export default function Inquiries() {
     mutationFn: deleteInquiry,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['inquiries'] });
+      queryClient.invalidateQueries({ queryKey: ['reminders'] });
     },
   });
 
