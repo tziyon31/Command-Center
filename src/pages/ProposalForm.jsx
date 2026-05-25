@@ -21,6 +21,7 @@ import { ArrowRight } from 'lucide-react';
 import CreateClientDialog from '@/components/workflow/CreateClientDialog';
 import CreateProjectDialog from '@/components/workflow/CreateProjectDialog';
 import ProposalOpenSignedProposal from '@/components/workflow/ProposalOpenSignedProposal';
+import { formatProjectSelectLabel } from '@/lib/projectSelectLabel';
 
 const EMPTY_FORM = {
   client_id: '',
@@ -207,21 +208,21 @@ export default function ProposalForm() {
     const client = clients.find((item) => item.id === selectedClientId);
     if (!client) return;
 
-    setFormData((prev) => ({
+    setFormData((prev) => clearProjectIfNotForClient({
       ...prev,
       client_id: client.id,
       client_name: client.name,
       source_inquiry_id: applySourceInquiryId(prev.source_inquiry_id, client.source_inquiry_id),
-    }));
+    }, client.id));
   };
 
   const handleNewClientCreated = (client) => {
-    setFormData((prev) => ({
+    setFormData((prev) => clearProjectIfNotForClient({
       ...prev,
       client_id: client.id,
       client_name: client.name,
       source_inquiry_id: applySourceInquiryId(prev.source_inquiry_id, client.source_inquiry_id),
-    }));
+    }, client.id));
     queryClient.invalidateQueries({ queryKey: ['clients'] });
     setIsCreateClientOpen(false);
   };
@@ -235,7 +236,7 @@ export default function ProposalForm() {
     setFormData((prev) => ({
       ...prev,
       project_id: project.id,
-      project_name: project.name || prev.project_name,
+      project_name: project.name || '',
       client_id: project.client_id || prev.client_id,
       client_name: linkedClient?.name || prev.client_name,
       source_inquiry_id: applySourceInquiryId(
@@ -245,11 +246,13 @@ export default function ProposalForm() {
     }));
   };
 
-  const handleNewProjectCreated = (project, client) => {
+  const handleNewProjectCreated = async (project, client) => {
+    await queryClient.invalidateQueries({ queryKey: ['projects'] });
+
     setFormData((prev) => ({
       ...prev,
       project_id: project.id,
-      project_name: project.name || prev.project_name,
+      project_name: project.name || '',
       client_id: project.client_id || prev.client_id,
       client_name: client?.name || prev.client_name,
       source_inquiry_id: applySourceInquiryId(
@@ -257,7 +260,6 @@ export default function ProposalForm() {
         project.source_inquiry_id || client?.source_inquiry_id,
       ),
     }));
-    queryClient.invalidateQueries({ queryKey: ['projects'] });
     setIsCreateProjectOpen(false);
   };
 
@@ -434,12 +436,14 @@ export default function ProposalForm() {
                     disabled={isBusy || isSubmitted}
                   >
                     <SelectTrigger id="proposal-project-select">
-                      <SelectValue placeholder="בחר פרויקט קיים" />
+                      <SelectValue placeholder={formData.client_id ? 'בחר פרויקט של הלקוח' : 'בחר פרויקט קיים'}>
+                        {selectedProjectLabel}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       {filteredProjects.map((project) => (
                         <SelectItem key={project.id} value={project.id}>
-                          {project.name || project.id}
+                          {formatProjectSelectLabel(project)}
                         </SelectItem>
                       ))}
                     </SelectContent>
