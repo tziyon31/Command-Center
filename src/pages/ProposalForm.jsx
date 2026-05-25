@@ -43,7 +43,7 @@ const FORM_STATUS_LABELS = {
 
 const DELETE_CONFIRM_MESSAGE = 'למחוק את הצעת המחיר? פעולה זו לא ניתנת לביטול.';
 
-const SUBMIT_VALIDATION_MESSAGE = 'יש למלא שם לקוח ולאשר שהצעת המחיר נשלחה לפני הגשת הטופס';
+const SUBMIT_VALIDATION_MESSAGE = 'יש למלא שם לקוח לפני הגשת הטופס';
 
 const readSearchParams = () => {
   const params = new URLSearchParams(window.location.search);
@@ -104,10 +104,30 @@ const buildDraftPayload = (formData) => ({
   form_status: 'draft',
 });
 
-const canSubmitForm = (formData) => (
-  Boolean(formData.client_name?.trim())
-  && formData.proposal_sent_to_client === true
-);
+const canSubmitForm = (formData) => Boolean(formData.client_name?.trim());
+
+const buildSubmitPayload = (formData) => {
+  const now = new Date().toISOString();
+
+  return {
+    client_id: formData.client_id.trim(),
+    client_name: formData.client_name.trim(),
+    project_id: formData.project_id.trim(),
+    project_name: formData.project_name.trim(),
+    source_inquiry_id: formData.source_inquiry_id.trim(),
+    proposal_sent_to_client: Boolean(formData.proposal_sent_to_client),
+    proposal_sent_at: formData.proposal_sent_to_client
+      ? (toIsoFromDatetimeLocal(formData.proposal_sent_at) || now)
+      : '',
+    client_saw_proposal: Boolean(formData.client_saw_proposal),
+    client_saw_at: formData.client_saw_proposal
+      ? (toIsoFromDatetimeLocal(formData.client_saw_at) || now)
+      : '',
+    document_note: formData.document_note.trim(),
+    form_status: 'submitted',
+    submitted_at: now,
+  };
+};
 
 const applySourceInquiryId = (currentValue, nextValue) => (
   currentValue?.trim() ? currentValue : (nextValue || '')
@@ -268,27 +288,20 @@ export default function ProposalForm() {
     setIsSubmitting(true);
 
     try {
-      const now = new Date().toISOString();
-      const payload = {
-        ...buildDraftPayload(formData),
-        proposal_sent_to_client: true,
-        proposal_sent_at: toIsoFromDatetimeLocal(formData.proposal_sent_at) || now,
-        client_saw_at: formData.client_saw_proposal
-          ? (toIsoFromDatetimeLocal(formData.client_saw_at) || now)
-          : toIsoFromDatetimeLocal(formData.client_saw_at),
-        form_status: 'submitted',
-        submitted_at: now,
-      };
+      const payload = buildSubmitPayload(formData);
 
       const saved = await persistRecord(payload);
       setFormStatus(saved?.form_status || 'submitted');
       setFormData((prev) => ({
         ...prev,
-        proposal_sent_to_client: true,
-        proposal_sent_at: toDatetimeLocalValue(payload.proposal_sent_at),
+        proposal_sent_to_client: payload.proposal_sent_to_client,
+        proposal_sent_at: payload.proposal_sent_at
+          ? toDatetimeLocalValue(payload.proposal_sent_at)
+          : '',
+        client_saw_proposal: payload.client_saw_proposal,
         client_saw_at: payload.client_saw_at
           ? toDatetimeLocalValue(payload.client_saw_at)
-          : prev.client_saw_at,
+          : '',
       }));
       queryClient.invalidateQueries({ queryKey: ['proposals'] });
       queryClient.invalidateQueries({ queryKey: ['proposal', recordId || saved?.id] });
@@ -459,7 +472,7 @@ export default function ProposalForm() {
                   placeholder="שם פרויקט (אופציונלי)"
                 />
                 <p className="text-xs text-muted-foreground">
-                  שדה אופציונלי. אפשר להגיש הצעת מחיר גם בלי פרויקט, אך תקבל תזכורת לפתוח פרויקט בהמשך.
+                  שדה אופציונלי. אפשר להגיש הצעת מחיר גם בלי פרויקט, ובהמשך לקשר או לפתוח פרויקט.
                 </p>
               </div>
 
@@ -479,7 +492,7 @@ export default function ProposalForm() {
                   </Label>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  אם עדיין לא נשלחה, השאר ריק ותקבל תזכורת.
+                  אם עדיין לא נשלחה, השאר ריק. לאחר הגשת הטופס תיווצר תזכורת לשלוח אותה.
                 </p>
               </div>
 
@@ -513,7 +526,7 @@ export default function ProposalForm() {
                   </Label>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  אם אין אישור שהלקוח ראה, השאר ריק ותקבל תזכורת.
+                  אם עדיין אין אישור שהלקוח ראה, השאר ריק. לאחר הגשת הטופס תיווצר תזכורת למעקב.
                 </p>
               </div>
 

@@ -6,15 +6,13 @@ import { createPageUrl } from '@/utils';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
+import ProjectCreateFormFields from '@/components/workflow/ProjectCreateFormFields';
 import { Badge } from "@/components/ui/badge";
 import { Plus, Search } from 'lucide-react';
 import { assertProjectHasClientId } from '@/lib/projectValidation';
 import { runClientReminderRulesForClient } from '@/lib/clientReminderRules';
-import CreateClientDialog from '@/components/workflow/CreateClientDialog';
 import { buildInitialProjectForm, EMPTY_PROJECT_FORM } from '@/lib/projectDefaults';
+import { buildProjectCreatePayloadFromForm } from '@/lib/projectCreatePayload';
 import { buildProposalFormPageUrl } from '@/lib/workflowNavigation';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
@@ -39,7 +37,6 @@ const PROPOSAL_STATUSES = ['lead', 'pricing', 'waiting', 'rejected', 'cancelled'
 export default function Projects() {
   const [searchTerm, setSearchTerm] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [isCreateClientOpen, setIsCreateClientOpen] = useState(false);
   const [savedProject, setSavedProject] = useState(null);
   const [formData, setFormData] = useState(EMPTY_PROJECT_FORM);
 
@@ -56,7 +53,12 @@ export default function Projects() {
   });
 
   const createMutation = useMutation({
-    mutationFn: (data) => base44.entities.Project.create(data),
+    mutationFn: (data) => base44.entities.Project.create(
+      buildProjectCreatePayloadFromForm(data, {
+        sourceInquiryId: data.source_inquiry_id,
+        formStatus: 'draft',
+      }),
+    ),
     onSuccess: async (project) => {
       const client = clients.find((item) => item.id === project?.client_id);
       if (client) {
@@ -81,26 +83,14 @@ export default function Projects() {
     createMutation.mutate(formData);
   };
 
-  const applyClientToProjectForm = (client) => {
-    if (!client?.id) return;
-
+  const handleProjectClientChange = (update) => {
     setFormData((prev) => ({
       ...prev,
-      client_id: client.id,
-      name: prev.name?.trim() ? prev.name : client.name,
-      source_inquiry_id: prev.source_inquiry_id || client.source_inquiry_id || '',
+      client_id: update.clientId,
+      name: update.fillProjectName && !prev.name?.trim() ? update.clientName : prev.name,
+      source_inquiry_id: prev.source_inquiry_id || update.sourceInquiryId || '',
     }));
     queryClient.invalidateQueries({ queryKey: ['clients'] });
-  };
-
-  const handleClientSelect = (selectedClientId) => {
-    const client = clients.find((item) => item.id === selectedClientId);
-    applyClientToProjectForm(client);
-  };
-
-  const handleNewClientCreated = (client) => {
-    applyClientToProjectForm(client);
-    setIsCreateClientOpen(false);
   };
 
   const handleDialogOpenChange = (open) => {
@@ -109,11 +99,9 @@ export default function Projects() {
     if (open) {
       setFormData(buildInitialProjectForm({ projects }));
       setSavedProject(null);
-      setIsCreateClientOpen(false);
       return;
     }
 
-    setIsCreateClientOpen(false);
     setSavedProject(null);
     setFormData(EMPTY_PROJECT_FORM);
   };
@@ -206,109 +194,15 @@ export default function Projects() {
                 <DialogTitle>הוספת פרויקט חדש</DialogTitle>
               </DialogHeader>
               <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>מספר BID</Label>
-                    <Input value={formData.bid_number} onChange={(e) => setFormData({ ...formData, bid_number: e.target.value })} placeholder="00055" />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>מספר עבודה</Label>
-                    <Input value={formData.work_number} onChange={(e) => setFormData({ ...formData, work_number: e.target.value })} placeholder="1055" />
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>שם הפרויקט *</Label>
-                    <Input value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} required />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>עיר</Label>
-                    <Input value={formData.city} onChange={(e) => setFormData({ ...formData, city: e.target.value })} />
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>סוג פרויקט</Label>
-                    <Input value={formData.project_type} onChange={(e) => setFormData({ ...formData, project_type: e.target.value })} placeholder="מגורים / מסחר / ציבורי..." />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>שטח / יח"ד</Label>
-                    <Input value={formData.area} onChange={(e) => setFormData({ ...formData, area: e.target.value })} />
-                  </div>
-                </div>
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="space-y-2">
-                    <Label>סטטוס</Label>
-                    <Select value={formData.status} onValueChange={(value) => setFormData({ ...formData, status: value })}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="pricing">בתמחור</SelectItem>
-                        <SelectItem value="waiting">ממתין</SelectItem>
-                        <SelectItem value="signed">התקבלה</SelectItem>
-                        <SelectItem value="execution">בעבודה</SelectItem>
-                        <SelectItem value="completed">בוצע</SelectItem>
-                        <SelectItem value="cancelled">בוטלה</SelectItem>
-                        <SelectItem value="rejected">לא התקבלה</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>שכ"ט ₪</Label>
-                    <Input type="number" value={formData.total_amount} onChange={(e) => setFormData({ ...formData, total_amount: parseFloat(e.target.value) || 0 })} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>שנה</Label>
-                    <Input type="number" value={formData.year} onChange={(e) => setFormData({ ...formData, year: parseInt(e.target.value) || new Date().getFullYear() })} />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="project-client-select">לקוח *</Label>
-                  {linkedClient && (
-                    <p className="text-xs text-muted-foreground">
-                      לקוח משויך: {linkedClient.name}
-                    </p>
-                  )}
-                  <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 items-center">
-                    <Select
-                      value={formData.client_id || undefined}
-                      onValueChange={handleClientSelect}
-                      disabled={createMutation.isPending}
-                    >
-                      <SelectTrigger id="project-client-select" className="w-full">
-                        <SelectValue placeholder="בחר לקוח" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {clients.map((client) => (
-                          <SelectItem key={client.id} value={client.id}>
-                            {client.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="shrink-0 whitespace-nowrap min-w-[5.5rem]"
-                      onClick={() => setIsCreateClientOpen(true)}
-                      disabled={createMutation.isPending}
-                      data-testid="project-modal-new-client-btn"
-                    >
-                      לקוח חדש
-                    </Button>
-                  </div>
-                </div>
-                <CreateClientDialog
-                  open={isCreateClientOpen}
-                  onOpenChange={setIsCreateClientOpen}
-                  initialName={formData.name}
+                <ProjectCreateFormFields
+                  formData={formData}
+                  setFormData={setFormData}
+                  clients={clients}
+                  disabled={createMutation.isPending}
+                  clientNameHint={formData.name}
                   sourceInquiryId={formData.source_inquiry_id}
-                  onClientCreated={handleNewClientCreated}
+                  onClientChange={handleProjectClientChange}
                 />
-                <div className="space-y-2">
-                  <Label>הערות</Label>
-                  <Textarea value={formData.notes} onChange={(e) => setFormData({ ...formData, notes: e.target.value })} rows={2} />
-                </div>
                 <div className="flex justify-end gap-3 pt-4">
                   <Button type="button" variant="outline" onClick={() => handleDialogOpenChange(false)}>ביטול</Button>
                   <Button type="submit" disabled={!formData.client_id || createMutation.isPending}>

@@ -9,18 +9,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import ProjectClientSection from '@/components/workflow/ProjectClientSection';
+import ProjectCreateFormFields from '@/components/workflow/ProjectCreateFormFields';
 import { buildInitialProjectForm } from '@/lib/projectDefaults';
+import { buildProjectCreatePayloadFromForm } from '@/lib/projectCreatePayload';
 import { assertProjectHasClientId } from '@/lib/projectValidation';
 import { runClientReminderRulesForClient } from '@/lib/clientReminderRules';
 
@@ -84,26 +75,10 @@ export default function CreateProjectDialog({
     setIsSaving(true);
 
     try {
-      const payload = {
-        client_id: formData.client_id,
-        bid_number: formData.bid_number.trim(),
-        work_number: formData.work_number.trim(),
-        name,
-        city: formData.city.trim(),
-        project_type: formData.project_type.trim(),
-        area: formData.area.trim(),
-        description: formData.description.trim(),
-        status: formData.status,
-        total_amount: Number(formData.total_amount) || 0,
-        year: Number(formData.year) || new Date().getFullYear(),
-        notes: formData.notes.trim(),
-        form_status: 'draft',
-        collected_amount: 0,
-      };
-
-      if (formData.source_inquiry_id?.trim()) {
-        payload.source_inquiry_id = formData.source_inquiry_id.trim();
-      }
+      const payload = buildProjectCreatePayloadFromForm(formData, {
+        sourceInquiryId: formData.source_inquiry_id || sourceInquiryId,
+        formStatus: 'draft',
+      });
 
       const project = await base44.entities.Project.create(payload);
       const client = clients.find((item) => item.id === project?.client_id);
@@ -135,62 +110,15 @@ export default function CreateProjectDialog({
           <DialogTitle>הוספת פרויקט חדש</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>מספר BID</Label>
-              <Input
-                value={formData.bid_number}
-                onChange={(e) => setFormData({ ...formData, bid_number: e.target.value })}
-                disabled={isSaving}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>מספר עבודה</Label>
-              <Input
-                value={formData.work_number}
-                onChange={(e) => setFormData({ ...formData, work_number: e.target.value })}
-                disabled={isSaving}
-              />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>שם הפרויקט *</Label>
-              <Input
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                disabled={isSaving}
-                required
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>עיר</Label>
-              <Input
-                value={formData.city}
-                onChange={(e) => setFormData({ ...formData, city: e.target.value })}
-                disabled={isSaving}
-              />
-            </div>
-          </div>
-          <ProjectClientSection
-            clientId={formData.client_id}
+          <ProjectCreateFormFields
+            formData={formData}
+            setFormData={setFormData}
             clients={clients}
+            disabled={isSaving}
             clientNameHint={initialClientName || formData.name}
             sourceInquiryId={formData.source_inquiry_id || sourceInquiryId}
             onClientChange={handleProjectClientChange}
-            disabled={isSaving}
-            compact
-            createButtonLabel="לקוח חדש"
           />
-          <div className="space-y-2">
-            <Label>הערות</Label>
-            <Textarea
-              value={formData.notes}
-              onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-              rows={2}
-              disabled={isSaving}
-            />
-          </div>
           <DialogFooter>
             <Button
               type="button"

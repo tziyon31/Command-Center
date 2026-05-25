@@ -37,9 +37,11 @@ import {
   deleteProject,
 } from '@/lib/projectDelete';
 import ProjectClientSection from '@/components/workflow/ProjectClientSection';
+import ProjectCreateFormFields from '@/components/workflow/ProjectCreateFormFields';
 import { assertProjectHasClientId } from '@/lib/projectValidation';
 import { runClientReminderRulesForClient } from '@/lib/clientReminderRules';
 import { buildProjectCreateFormFromSearchParams } from '@/lib/projectDefaults';
+import { buildProjectCreatePayloadFromForm } from '@/lib/projectCreatePayload';
 import { buildProposalFormPageUrl, buildSignedProposalFormPageUrl } from '@/lib/workflowNavigation';
 
 const toNumber = (value) => {
@@ -306,10 +308,10 @@ export default function ProjectDetails() {
 
     try {
       const project = await base44.entities.Project.create(
-        buildProjectCreatePayload(createFormData, {
-          sourceInquiryId: createSourceInquiryId,
+        buildProjectCreatePayloadFromForm(createFormData, {
+          sourceInquiryId: createFormData.source_inquiry_id || createSourceInquiryId,
           formStatus: createFormStatus,
-        })
+        }),
       );
 
       await syncClientReminderAfterProjectSave(project.client_id);
@@ -435,118 +437,15 @@ export default function ProjectDetails() {
             </CardHeader>
             <CardContent>
               <form onSubmit={handleSaveProjectCreate} className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>מספר BID</Label>
-                    <Input
-                      value={createFormData.bid_number}
-                      onChange={(e) => setCreateFormData({ ...createFormData, bid_number: e.target.value })}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>מספר עבודה</Label>
-                    <Input
-                      value={createFormData.work_number}
-                      onChange={(e) => setCreateFormData({ ...createFormData, work_number: e.target.value })}
-                    />
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>שם הפרויקט *</Label>
-                    <Input
-                      value={createFormData.name}
-                      onChange={(e) => setCreateFormData({ ...createFormData, name: e.target.value })}
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>עיר</Label>
-                    <Input
-                      value={createFormData.city}
-                      onChange={(e) => setCreateFormData({ ...createFormData, city: e.target.value })}
-                    />
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>סוג פרויקט</Label>
-                    <Input
-                      value={createFormData.project_type}
-                      onChange={(e) => setCreateFormData({ ...createFormData, project_type: e.target.value })}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>שטח / יח&quot;ד</Label>
-                    <Input
-                      value={createFormData.area}
-                      onChange={(e) => setCreateFormData({ ...createFormData, area: e.target.value })}
-                    />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label>תיאור</Label>
-                  <Textarea
-                    value={createFormData.description}
-                    onChange={(e) => setCreateFormData({ ...createFormData, description: e.target.value })}
-                    rows={2}
-                  />
-                </div>
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="space-y-2">
-                    <Label>סטטוס</Label>
-                    <Select
-                      value={createFormData.status}
-                      onValueChange={(value) => setCreateFormData({ ...createFormData, status: value })}
-                    >
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="pricing">בתמחור</SelectItem>
-                        <SelectItem value="waiting">ממתין</SelectItem>
-                        <SelectItem value="signed">התקבלה</SelectItem>
-                        <SelectItem value="execution">בעבודה</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>שכ&quot;ט ₪</Label>
-                    <Input
-                      type="number"
-                      value={createFormData.total_amount}
-                      onChange={(e) => setCreateFormData({
-                        ...createFormData,
-                        total_amount: parseFloat(e.target.value) || 0,
-                      })}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>שנה</Label>
-                    <Input
-                      type="number"
-                      value={createFormData.year}
-                      onChange={(e) => setCreateFormData({
-                        ...createFormData,
-                        year: parseInt(e.target.value, 10) || new Date().getFullYear(),
-                      })}
-                    />
-                  </div>
-                </div>
-                <ProjectClientSection
-                  clientId={createFormData.client_id}
+                <ProjectCreateFormFields
+                  formData={createFormData}
+                  setFormData={setCreateFormData}
                   clients={clients}
-                  clientNameHint={clientNameHint}
-                  sourceInquiryId={createSourceInquiryId}
-                  onClientChange={(update) => applyProjectClientChange(update, 'create')}
                   disabled={isSavingCreate}
+                  clientNameHint={clientNameHint}
+                  sourceInquiryId={createFormData.source_inquiry_id || createSourceInquiryId}
+                  onClientChange={(update) => applyProjectClientChange(update, 'create')}
                 />
-                <div className="space-y-2">
-                  <Label>הערות</Label>
-                  <Textarea
-                    value={createFormData.notes}
-                    onChange={(e) => setCreateFormData({ ...createFormData, notes: e.target.value })}
-                    rows={2}
-                  />
-                </div>
                 <div className="rounded-md border p-4 space-y-2">
                   <p className="text-xs text-muted-foreground">
                     יש לשמור את הפרויקט לפני פתיחת הצעת מחיר או הצעה חתומה.
