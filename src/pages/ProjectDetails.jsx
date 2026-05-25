@@ -39,6 +39,7 @@ import {
 import ProjectClientSection from '@/components/workflow/ProjectClientSection';
 import { assertProjectHasClientId } from '@/lib/projectValidation';
 import { runClientReminderRulesForClient } from '@/lib/clientReminderRules';
+import { buildSignedProposalFormPageUrl } from '@/lib/workflowNavigation';
 
 const toNumber = (value) => {
   const num = Number(value);
@@ -530,6 +531,14 @@ export default function ProjectDetails() {
                     rows={2}
                   />
                 </div>
+                <div className="rounded-md border p-4 space-y-2">
+                  <p className="text-xs text-muted-foreground">
+                    יש לשמור את הפרויקט לפני פתיחת הצעה חתומה.
+                  </p>
+                  <Button type="button" variant="outline" disabled>
+                    פתח הצעה חתומה
+                  </Button>
+                </div>
                 <div className="flex justify-end gap-3 pt-4">
                   <Button type="button" variant="outline" asChild disabled={isSavingCreate}>
                     <Link to={createPageUrl('Projects')}>ביטול</Link>
@@ -610,6 +619,14 @@ export default function ProjectDetails() {
   const hasMissingTargetDate =
     hasCollectionDueNow &&
     !hasProjectTargetDate(project);
+
+  const linkedClient = clients.find((client) => client.id === project.client_id);
+  const signedProposalFormUrl = buildSignedProposalFormPageUrl({
+    projectId: project.id,
+    projectName: project.name,
+    clientName: linkedClient?.name || clientNameHint || '',
+    sourceInquiryId: project.source_inquiry_id || createSourceInquiryId || '',
+  });
 
   const refreshProjectData = async () => {
     await Promise.all([
@@ -773,7 +790,10 @@ export default function ProjectDetails() {
                 </div>
                 <p className="text-sm text-muted-foreground">פרטי פרויקט בסיסיים</p>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                <Button asChild variant="outline" disabled={!project.id}>
+                  <Link to={signedProposalFormUrl}>פתח הצעה חתומה</Link>
+                </Button>
                 <Button
                   type="button"
                   variant="outline"
@@ -795,6 +815,20 @@ export default function ProjectDetails() {
               </div>
             </div>
           </CardContent>
+        </Card>
+
+        <Card className="border-0 shadow-sm">
+          <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <CardTitle>הצעה חתומה</CardTitle>
+              <CardDescription>
+                פתיחת טופס הצעה/הזמנה חתומה לפרויקט — ללא יצירה אוטומטית של רשומה.
+              </CardDescription>
+            </div>
+            <Button asChild variant="outline" className="shrink-0">
+              <Link to={signedProposalFormUrl}>פתח הצעה חתומה</Link>
+            </Button>
+          </CardHeader>
         </Card>
 
         <Card className="border-0 shadow-sm">

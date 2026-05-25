@@ -4,28 +4,28 @@
   "properties": {
     "project_id": {
       "type": "string",
-      "description": "\u05de\u05d6\u05d4\u05d4 \u05e4\u05e8\u05d5\u05d9\u05e7\u05d8"
+      "description": "מזהה פרויקט (חובה רק בהגשת טופס)"
     },
     "project_name": {
       "type": "string",
-      "description": "\u05e9\u05dd \u05d4\u05e4\u05e8\u05d5\u05d9\u05e7\u05d8"
+      "description": "שם הפרויקט"
     },
     "client_name": {
       "type": "string",
-      "description": "\u05e9\u05dd \u05d4\u05dc\u05e7\u05d5\u05d7"
+      "description": "שם הלקוח (חובה רק בהגשת טופס)"
     },
     "has_signed_offer_or_order": {
       "type": "boolean",
       "default": false,
-      "description": "\u05d4\u05d0\u05dd \u05d9\u05e9 \u05d4\u05e6\u05e2\u05d4 \u05d7\u05ea\u05d5\u05de\u05d4 \u05d0\u05d5 \u05d4\u05d6\u05de\u05e0\u05ea \u05e2\u05d1\u05d5\u05d3\u05d4 \u05d7\u05ea\u05d5\u05de\u05d4"
+      "description": "האם יש הצעה או הזמנה חתומה"
     },
     "signed_at": {
       "type": "string",
-      "description": "\u05ea\u05d0\u05e8\u05d9\u05da \u05d7\u05ea\u05d9\u05de\u05d4 (ISO datetime string)"
+      "description": "תאריך חתימה (ISO datetime string)"
     },
     "document_note": {
       "type": "string",
-      "description": "\u05d4\u05e2\u05e8\u05d4 \u05e2\u05dc \u05d4\u05de\u05e1\u05de\u05da"
+      "description": "הערה / אסמכתא / מספר מסמך"
     },
     "form_status": {
       "type": "string",
@@ -35,15 +35,15 @@
         "cancelled"
       ],
       "default": "draft",
-      "description": "\u05de\u05e6\u05d1 \u05de\u05d9\u05dc\u05d5\u05d9 \u05d8\u05d5\u05e4\u05e1"
+      "description": "סטטוס הטופס"
     },
     "submitted_at": {
       "type": "string",
-      "description": "\u05de\u05ea\u05d9 \u05d4\u05d5\u05d2\u05e9 (ISO datetime string)"
+      "description": "מועד הגשה (ISO datetime string)"
     },
     "source_inquiry_id": {
       "type": "string",
-      "description": "\u05de\u05d6\u05d4\u05d4 \u05e4\u05e0\u05d9\u05d9\u05d4 \u05de\u05e7\u05d5\u05e8\u05d9\u05ea \u05d0\u05dd \u05d4\u05e4\u05e8\u05d5\u05d9\u05e7\u05d8 \u05e0\u05d5\u05e6\u05e8 \u05de\u05e4\u05e0\u05d9\u05d9\u05d4"
+      "description": "מזהה פנייה מקור אם הפרויקט נוצר מפנייה"
     }
   },
   "required": []

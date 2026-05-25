@@ -29,6 +29,28 @@ export const buildProjectCreatePageUrl = ({
   return createPageUrl(`ProjectDetails?${query.toString()}`);
 };
 
+export const buildSignedProposalFormPageUrl = ({
+  projectId,
+  projectName,
+  clientName,
+  sourceInquiryId,
+  signedProposalId,
+}) => {
+  const query = new URLSearchParams();
+
+  if (signedProposalId) {
+    query.set('id', signedProposalId);
+  } else {
+    if (projectId) query.set('project_id', projectId);
+    if (projectName) query.set('project_name', projectName);
+    if (clientName) query.set('client_name', clientName);
+    if (sourceInquiryId) query.set('source_inquiry_id', sourceInquiryId);
+  }
+
+  const queryString = query.toString();
+  return createPageUrl(queryString ? `SignedProposalForm?${queryString}` : 'SignedProposalForm');
+};
+
 export const buildClientFormPageUrl = ({ name, sourceInquiryId }) => {
   const query = new URLSearchParams();
 

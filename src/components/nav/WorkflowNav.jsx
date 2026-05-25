@@ -10,6 +10,7 @@ const REGISTERED_PAGE_NAMES = new Set([
   'Inquiries',
   'Clients',
   'Projects',
+  'SignedProposals',
 ]);
 
 const WORKFLOW_ITEMS = [
@@ -30,6 +31,8 @@ const WORKFLOW_ACTIVE_PAGES = new Set([
   'Projects',
   'ProjectDetails',
   'InvoiceUpload',
+  'SignedProposals',
+  'SignedProposalForm',
 ]);
 
 export function getWorkflowItemsForRole(role) {
@@ -61,6 +64,10 @@ const isWorkflowItemActive = (pageName, currentPageName) => {
       currentPageName === 'ProjectDetails' ||
       currentPageName === 'InvoiceUpload'
     );
+  }
+
+  if (pageName === 'SignedProposals') {
+    return currentPageName === 'SignedProposals' || currentPageName === 'SignedProposalForm';
   }
 
   return currentPageName === pageName;

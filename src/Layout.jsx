@@ -28,6 +28,10 @@ const resolveActiveNavPage = (currentPageName) => {
     return 'Inquiries';
   }
 
+  if (currentPageName === 'SignedProposalForm') {
+    return 'SignedProposals';
+  }
+
   return currentPageName;
 };
 
