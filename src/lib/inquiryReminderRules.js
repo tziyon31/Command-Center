@@ -35,13 +35,6 @@ const shouldHaveR1Reminder = (inquiry) => {
   return inquiry.form_status !== 'submitted' || isDetailsMissing(inquiry);
 };
 
-const hasNonCancelledProposalForInquiry = (inquiryId, cache = {}) => {
-  const proposals = cache.proposals ?? [];
-  return proposals.some(
-    (proposal) => proposal.source_inquiry_id === inquiryId && proposal.form_status !== 'cancelled',
-  );
-};
-
 /** @returns {'needs_client' | 'needs_project' | null} */
 const getR2ReminderState = async (inquiry, cache = {}) => {
   if (!inquiry?.id || !hasClientName(inquiry)) {
@@ -49,11 +42,6 @@ const getR2ReminderState = async (inquiry, cache = {}) => {
   }
 
   if (inquiry.form_status !== 'submitted') {
-    return null;
-  }
-
-  // Submitted inquiries without a proposal are handled by P1 (proposal flow).
-  if (!hasNonCancelledProposalForInquiry(inquiry.id, cache)) {
     return null;
   }
 
@@ -278,14 +266,12 @@ export async function runInquiryReminderRulesForAll() {
   let inquiries = [];
   let clients = [];
   let projects = [];
-  let proposals = [];
 
   try {
-    [inquiries, clients, projects, proposals] = await Promise.all([
+    [inquiries, clients, projects] = await Promise.all([
       base44.entities.Inquiry.list(),
       base44.entities.Client.list(),
       base44.entities.Project.list(),
-      base44.entities.Proposal.list(),
     ]);
   } catch (error) {
     console.error('[InquiryReminderRules] failed to load entities', error);
@@ -293,7 +279,7 @@ export async function runInquiryReminderRulesForAll() {
     return summary;
   }
 
-  const cache = { clients, projects, proposals };
+  const cache = { clients, projects };
 
   try {
     await cancelOrphanRemindersForSourceType(
