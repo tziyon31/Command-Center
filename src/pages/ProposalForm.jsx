@@ -182,11 +182,35 @@ export default function ProposalForm() {
   }, [record]);
 
   const filteredProjects = useMemo(() => {
-    if (!formData.client_id) return projects;
+    const list = Array.isArray(projects) ? projects : [];
+    if (!formData.client_id) return list;
 
-    const byClient = projects.filter((project) => project.client_id === formData.client_id);
-    return byClient.length ? byClient : projects;
+    return list.filter((project) => project.client_id === formData.client_id);
   }, [projects, formData.client_id]);
+
+  const selectedProjectLabel = useMemo(() => {
+    if (!formData.project_id) return null;
+
+    const list = Array.isArray(projects) ? projects : [];
+    const project = list.find((item) => item.id === formData.project_id);
+    if (project) return formatProjectSelectLabel(project);
+
+    return formData.project_name?.trim() || null;
+  }, [projects, formData.project_id, formData.project_name]);
+
+  const clearProjectIfNotForClient = (prev, clientId) => {
+    if (!prev.project_id) return prev;
+
+    const list = Array.isArray(projects) ? projects : [];
+    const selectedProject = list.find((project) => project.id === prev.project_id);
+    if (selectedProject && selectedProject.client_id === clientId) return prev;
+
+    return {
+      ...prev,
+      project_id: '',
+      project_name: '',
+    };
+  };
 
   const persistRecord = async (payload) => {
     if (recordId) {
