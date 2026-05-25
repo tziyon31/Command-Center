@@ -23,11 +23,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import QuoteBreakdownCard from '../components/dashboard/QuoteBreakdownCard.jsx';
 import TodayTasksCard from '../components/dashboard/TodayTasksCard.jsx';
 import ReminderPanel from '../components/reminders/ReminderPanel.jsx';
-import {
-  getVisibleReminders,
-  loadVisibleReminders,
-  logReminderDbSummary,
-} from '@/lib/reminderEngine';
+import { loadVisibleReminders } from '@/lib/reminderEngine';
 import { runInquiryReminderRulesForAll } from '@/lib/inquiryReminderRules';
 import { runClientReminderRulesForAll } from '@/lib/clientReminderRules';
 import {
@@ -229,34 +225,11 @@ export default function Dashboard() {
   } = useQuery({
     queryKey: ['reminders', 'visible'],
     queryFn: async () => {
-      const logScanStep = async (label) => {
-        if (!import.meta.env.DEV) return;
-        const reminders = await base44.entities.Reminder.list();
-        const visible = getVisibleReminders(reminders);
-        console.log(`[Dashboard reminder scan] ${label}: visible=${visible.length}`);
-      };
-
-      if (import.meta.env.DEV) {
-        await logReminderDbSummary('Dashboard before rules');
-      }
-
-      await logScanStep('before all rules');
       await runInquiryReminderRulesForAll();
-      await logScanStep('after inquiry rules');
       await runClientReminderRulesForAll();
-      await logScanStep('after client rules');
       await runProposalSourceReminderRulesForAll();
-      await logScanStep('after proposal source rules');
       await runProposalReminderRulesForAll();
-      await logScanStep('after proposal rules');
-
-      const visible = await loadVisibleReminders();
-
-      if (import.meta.env.DEV) {
-        await logReminderDbSummary('Dashboard after rules');
-      }
-
-      return visible;
+      return loadVisibleReminders();
     },
     enabled: canSeeFullDashboard && !!currentUser,
   });

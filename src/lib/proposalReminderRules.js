@@ -4,7 +4,9 @@ import {
   cancelReminder,
   ensureReminderForCondition,
   findReminderByConditionKey,
+  resolveReminderByConditionKey,
 } from '@/lib/reminderEngine';
+import { getInquiryNeedsNextStepConditionKey } from '@/lib/inquiryReminderRules';
 import { buildProposalFormPageUrl } from '@/lib/workflowNavigation';
 
 export const PROPOSAL_INCOMPLETE_CONDITION_PREFIX = 'proposal_incomplete:';
@@ -85,6 +87,15 @@ const isProjectEligibleForP2 = (project) => (
   && Boolean(project?.client_id)
   && !INACTIVE_PROJECT_STATUSES.has(project?.status)
 );
+
+async function supersedeR2ForInquiry(inquiryId) {
+  if (!inquiryId) return;
+
+  await resolveReminderByConditionKey(
+    getInquiryNeedsNextStepConditionKey(inquiryId),
+    'superseded_by_proposal_flow',
+  );
+}
 
 const buildP0ReminderInput = (proposal) => {
   const clientName = proposal.client_name.trim();
@@ -259,6 +270,10 @@ async function runP1ReminderRuleForInquiry(inquiry, cache = {}) {
     inquiry.form_status === 'submitted'
     && !hasNonCancelledProposalForInquiry(inquiry.id, proposals)
   );
+
+  if (conditionIsTrue) {
+    await supersedeR2ForInquiry(inquiry.id);
+  }
 
   const result = await ensureReminderForCondition(
     conditionIsTrue,
