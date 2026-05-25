@@ -40,12 +40,32 @@ export default function ReminderPanel({
     return validReminders.slice(0, METRICS_FOCUS_LIMIT);
   }, [reminders, mode]);
 
-  const totalValidCount = useMemo(() => {
+  const totalCount = useMemo(() => {
     return reminders.filter(hasClientName).length;
   }, [reminders]);
 
+  const visibleCount = displayReminders.length;
+  const hiddenCount = Math.max(0, totalCount - visibleCount);
+  const hasHiddenReminders = hiddenCount > 0;
+
   const isMetricsFocus = mode === 'metrics_focus';
   const isRemindersFocus = mode === 'reminders_focus';
+
+  const statusLine = (() => {
+    if (totalCount === 0) {
+      return 'אין תזכורות לטיפול כרגע';
+    }
+
+    if (isRemindersFocus) {
+      return `מוצגות כל ${totalCount} התזכורות`;
+    }
+
+    if (hasHiddenReminders) {
+      return `מוצגות ${visibleCount} מתוך ${totalCount} תזכורות`;
+    }
+
+    return `${totalCount} תזכורות לטיפול`;
+  })();
 
   return (
     <Card
@@ -63,19 +83,9 @@ export default function ReminderPanel({
           </div>
           <div className="min-w-0">
             <h3 className="text-base font-semibold leading-tight">תזכורות</h3>
-            <p className="text-xs text-muted-foreground">
-              {totalValidCount > 0
-                ? `${totalValidCount} תזכורות לטיפול`
-                : 'אין תזכורות לטיפול כרגע'}
-            </p>
+            <p className="text-xs text-muted-foreground">{statusLine}</p>
           </div>
         </div>
-
-        {isMetricsFocus && onShowAll && (
-          <Button type="button" variant="outline" size="sm" className="shrink-0 h-8 text-xs" onClick={onShowAll}>
-            הצג את כל התזכורות
-          </Button>
-        )}
 
         {isRemindersFocus && onMinimize && (
           <Button type="button" variant="outline" size="sm" className="shrink-0 h-8 text-xs" onClick={onMinimize}>
@@ -89,21 +99,51 @@ export default function ReminderPanel({
       ) : displayReminders.length === 0 ? (
         <p className="text-sm text-muted-foreground">אין תזכורות לטיפול כרגע</p>
       ) : (
-        <div
-          className={cn(
-            'grid gap-3',
-            'grid-cols-1 md:grid-cols-2',
-            isRemindersFocus && 'xl:grid-cols-3',
+        <>
+          <div
+            className={cn(
+              'grid gap-3',
+              'grid-cols-1 md:grid-cols-2',
+              isRemindersFocus && 'xl:grid-cols-3',
+            )}
+          >
+            {displayReminders.map((reminder) => (
+              <ReminderCard
+                key={reminder.id || reminder.condition_key}
+                reminder={reminder}
+                onSnoozed={onSnoozed}
+              />
+            ))}
+          </div>
+
+          {isMetricsFocus && hasHiddenReminders && (
+            <div className="mt-4 pt-3 border-t border-slate-200/80 space-y-2">
+              <p className="text-sm text-muted-foreground">
+                מוצגות {visibleCount} מתוך {totalCount} תזכורות
+              </p>
+              <p className="text-sm text-amber-800/90">
+                עוד {hiddenCount} תזכורות מוסתרות
+              </p>
+              {onShowAll && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-full sm:w-auto"
+                  onClick={onShowAll}
+                >
+                  הצג את כל {totalCount} התזכורות
+                </Button>
+              )}
+            </div>
           )}
-        >
-          {displayReminders.map((reminder) => (
-            <ReminderCard
-              key={reminder.id || reminder.condition_key}
-              reminder={reminder}
-              onSnoozed={onSnoozed}
-            />
-          ))}
-        </div>
+
+          {isRemindersFocus && totalCount > 0 && (
+            <p className="mt-4 pt-3 border-t border-slate-200/80 text-sm text-muted-foreground">
+              מוצגות כל {totalCount} התזכורות
+            </p>
+          )}
+        </>
       )}
     </Card>
   );
