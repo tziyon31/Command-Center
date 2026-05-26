@@ -14,6 +14,7 @@ import { buildInitialProjectForm } from '@/lib/projectDefaults';
 import { buildProjectCreatePayloadFromForm } from '@/lib/projectCreatePayload';
 import { assertProjectHasClientId } from '@/lib/projectValidation';
 import { runClientReminderRulesForClient } from '@/lib/clientReminderRules';
+import { syncProposalReminderRulesAfterProjectSave } from '@/lib/proposalReminderRules';
 
 export default function CreateProjectDialog({
   open,
@@ -89,6 +90,12 @@ export default function CreateProjectDialog({
         } catch (error) {
           console.error('[CreateProjectDialog] failed to run client reminder rules', error);
         }
+      }
+
+      try {
+        await syncProposalReminderRulesAfterProjectSave(project);
+      } catch (error) {
+        console.error('[CreateProjectDialog] failed to run P2 proposal reminder rule', error);
       }
 
       queryClient.invalidateQueries({ queryKey: ['projects'] });

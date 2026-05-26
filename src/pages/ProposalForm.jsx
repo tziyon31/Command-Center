@@ -25,6 +25,7 @@ import { formatProjectSelectLabel } from '@/lib/projectSelectLabel';
 import {
   cancelRemindersForProposal,
   runProposalReminderRulesForProposal,
+  syncProposalReminderRulesAfterProjectSave,
 } from '@/lib/proposalReminderRules';
 
 const EMPTY_FORM = {
@@ -312,6 +313,13 @@ export default function ProposalForm() {
 
   const handleNewProjectCreated = async (project, client) => {
     await queryClient.invalidateQueries({ queryKey: ['projects'] });
+
+    try {
+      await syncProposalReminderRulesAfterProjectSave(project);
+      queryClient.invalidateQueries({ queryKey: ['reminders'] });
+    } catch (error) {
+      console.error('[ProposalForm] failed to run P2 proposal reminder rule for new project', error);
+    }
 
     setFormData((prev) => ({
       ...prev,

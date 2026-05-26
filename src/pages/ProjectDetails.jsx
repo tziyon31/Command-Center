@@ -40,6 +40,7 @@ import ProjectClientSection from '@/components/workflow/ProjectClientSection';
 import ProjectCreateFormFields from '@/components/workflow/ProjectCreateFormFields';
 import { assertProjectHasClientId } from '@/lib/projectValidation';
 import { runClientReminderRulesForClient } from '@/lib/clientReminderRules';
+import { syncProposalReminderRulesAfterProjectSave } from '@/lib/proposalReminderRules';
 import { buildProjectCreateFormFromSearchParams } from '@/lib/projectDefaults';
 import { buildProjectCreatePayloadFromForm } from '@/lib/projectCreatePayload';
 import { buildProposalFormPageUrl, buildSignedProposalFormPageUrl } from '@/lib/workflowNavigation';
@@ -316,6 +317,13 @@ export default function ProjectDetails() {
 
       await syncClientReminderAfterProjectSave(project.client_id);
 
+      try {
+        await syncProposalReminderRulesAfterProjectSave(project);
+        queryClient.invalidateQueries({ queryKey: ['reminders'] });
+      } catch (error) {
+        console.error('[Project] failed to run P2 proposal reminder rule', error);
+      }
+
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       if (createSourceInquiryId) {
         queryClient.invalidateQueries({ queryKey: ['project-by-inquiry', createSourceInquiryId] });
@@ -354,6 +362,18 @@ export default function ProjectDetails() {
     try {
       await base44.entities.Project.update(project.id, buildProjectUpdatePayload(editFormData));
       await syncClientReminderAfterProjectSave(editFormData.client_id);
+
+      try {
+        await syncProposalReminderRulesAfterProjectSave({
+          ...project,
+          ...editFormData,
+          id: project.id,
+        });
+        queryClient.invalidateQueries({ queryKey: ['reminders'] });
+      } catch (error) {
+        console.error('[Project] failed to run P2 proposal reminder rule after edit', error);
+      }
+
       queryClient.invalidateQueries({ queryKey: ['project', project.id] });
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       setIsEditDialogOpen(false);

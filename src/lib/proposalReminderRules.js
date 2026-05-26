@@ -10,6 +10,9 @@ import { buildProposalFormPageUrl } from '@/lib/workflowNavigation';
 export const PROPOSAL_INCOMPLETE_CONDITION_PREFIX = 'proposal_incomplete:';
 export const PROPOSAL_NOT_SENT_CONDITION_PREFIX = 'proposal_not_sent:';
 export const PROPOSAL_NOT_SEEN_CONDITION_PREFIX = 'proposal_not_seen:';
+export const PROJECT_NEEDS_PROPOSAL_CONDITION_PREFIX = 'project_needs_proposal:';
+
+const INACTIVE_PROJECT_STATUSES = new Set(['cancelled']);
 
 export function getProposalIncompleteConditionKey(proposalId) {
   return `${PROPOSAL_INCOMPLETE_CONDITION_PREFIX}${proposalId}`;
@@ -23,7 +26,29 @@ export function getProposalNotSeenConditionKey(proposalId) {
   return `${PROPOSAL_NOT_SEEN_CONDITION_PREFIX}${proposalId}`;
 }
 
+export function getProjectNeedsProposalConditionKey(projectId) {
+  return `${PROJECT_NEEDS_PROPOSAL_CONDITION_PREFIX}${projectId}`;
+}
+
 const hasTrimmedClientName = (value) => Boolean(String(value || '').trim());
+
+const hasNonCancelledProposalForProject = (projectId, proposals = []) => (
+  proposals.some(
+    (proposal) => proposal.project_id === projectId && proposal.form_status !== 'cancelled',
+  )
+);
+
+const resolveClientNameForProject = (project, cache = {}) => {
+  const clients = cache.clients ?? [];
+  const linkedClient = clients.find((client) => client.id === project?.client_id);
+  return linkedClient?.name || project?.client_name || '';
+};
+
+const isProjectEligibleForP2 = (project) => (
+  Boolean(project?.id)
+  && Boolean(project?.client_id)
+  && !INACTIVE_PROJECT_STATUSES.has(project?.status)
+);
 
 const classifyRuleAction = (engineResult) => {
   const action = engineResult?.action;
@@ -81,6 +106,32 @@ const buildP3ReminderInput = (proposal) => {
     source_id: proposal.id,
     condition_key: getProposalNotSentConditionKey(proposal.id),
     action_url: buildProposalFormPageUrl({ proposalId: proposal.id }),
+    action_label: 'פתח הצעת מחיר',
+    frequency: 'daily',
+  };
+};
+
+const buildP2ReminderInput = (project, cache = {}) => {
+  const projectName = project.name || project.project_name || '';
+  const clientName = resolveClientNameForProject(project, cache);
+
+  return {
+    title: `לפתוח הצעת מחיר לפרויקט ${projectName || 'ללא שם'}`,
+    description: 'הפרויקט קיים אך עדיין לא נפתחה לו הצעת מחיר.',
+    client_name: clientName,
+    client_id: project.client_id || '',
+    project_name: projectName,
+    project_id: project.id,
+    source_type: 'project',
+    source_id: project.id,
+    condition_key: getProjectNeedsProposalConditionKey(project.id),
+    action_url: buildProposalFormPageUrl({
+      projectId: project.id,
+      projectName,
+      clientId: project.client_id || '',
+      clientName,
+      sourceInquiryId: project.source_inquiry_id || '',
+    }),
     action_label: 'פתח הצעת מחיר',
     frequency: 'daily',
   };
@@ -229,12 +280,101 @@ async function runP4ReminderRuleForProposal(proposal) {
   };
 }
 
-export async function runProposalReminderRulesForProposal(proposal) {
+async function runP2ReminderRuleForProject(project, cache = {}) {
+  const conditionKey = getProjectNeedsProposalConditionKey(project?.id);
+  const proposals = cache.proposals ?? [];
+
+  if (!project?.id) {
+    return { status: 'skipped', action: null, reason: 'no_project_id', rule: 'p2' };
+  }
+
+  if (!isProjectEligibleForP2(project)) {
+    const result = await ensureReminderForCondition(
+      false,
+      { condition_key: conditionKey },
+      { immediate: false },
+    );
+
+    return {
+      status: 'skipped',
+      action: classifyRuleAction(result),
+      reason: 'project_not_eligible',
+      rule: 'p2',
+    };
+  }
+
+  const conditionIsTrue = !hasNonCancelledProposalForProject(project.id, proposals);
+
+  const result = await ensureReminderForCondition(
+    conditionIsTrue,
+    conditionIsTrue ? buildP2ReminderInput(project, cache) : { condition_key: conditionKey },
+    { immediate: conditionIsTrue },
+  );
+
+  return {
+    status: conditionIsTrue ? 'applied' : 'cleared',
+    action: classifyRuleAction(result),
+    conditionKey,
+    rule: 'p2',
+  };
+}
+
+export async function syncProposalReminderRulesAfterProjectSave(project) {
+  try {
+    return await runProposalReminderRulesForProject(project);
+  } catch (error) {
+    console.error('[ProposalReminderRules] failed after project save', error);
+    return null;
+  }
+}
+
+export async function runProposalReminderRulesForProject(project, cache = {}) {
+  let proposals = cache.proposals;
+  let clients = cache.clients;
+
+  if (!proposals) {
+    proposals = await base44.entities.Proposal.list();
+  }
+
+  if (!clients) {
+    clients = await base44.entities.Client.list();
+  }
+
+  return runP2ReminderRuleForProject(project, { proposals, clients });
+}
+
+export async function runProposalReminderRulesForProposal(proposal, cache = {}) {
   const p0 = await runP0ReminderRuleForProposal(proposal);
   const p3 = await runP3ReminderRuleForProposal(proposal);
   const p4 = await runP4ReminderRuleForProposal(proposal);
 
-  return { p0, p3, p4 };
+  let p2 = null;
+
+  if (proposal?.project_id) {
+    let proposals = cache.proposals;
+    let clients = cache.clients;
+    let projects = cache.projects;
+
+    if (!proposals) {
+      proposals = await base44.entities.Proposal.list();
+    }
+
+    if (!clients) {
+      clients = await base44.entities.Client.list();
+    }
+
+    if (!projects) {
+      projects = await base44.entities.Project.list();
+    }
+
+    const project = projects.find((item) => item.id === proposal.project_id);
+
+    if (project) {
+      p2 = await runP2ReminderRuleForProject(project, { proposals, clients, projects });
+    }
+  }
+
+  return { p0, p3, p4, p2 };
 }
 
 export async function runProposalReminderRulesForAll() {
@@ -248,14 +388,22 @@ export async function runProposalReminderRulesForAll() {
   };
 
   let proposals = [];
+  let projects = [];
+  let clients = [];
 
   try {
-    proposals = await base44.entities.Proposal.list();
+    [proposals, projects, clients] = await Promise.all([
+      base44.entities.Proposal.list(),
+      base44.entities.Project.list(),
+      base44.entities.Client.list(),
+    ]);
   } catch (error) {
-    console.error('[ProposalReminderRules] failed to load proposals', error);
+    console.error('[ProposalReminderRules] failed to load entities', error);
     summary.errors += 1;
     return summary;
   }
+
+  const cache = { proposals, clients, projects };
 
   try {
     await cancelOrphanRemindersForSourceType(
@@ -267,14 +415,29 @@ export async function runProposalReminderRulesForAll() {
     summary.errors += 1;
   }
 
+  for (const project of projects) {
+    summary.checked += 1;
+
+    try {
+      const result = await runP2ReminderRuleForProject(project, cache);
+      tallyRuleResult(summary, result);
+    } catch (error) {
+      summary.errors += 1;
+      console.error('[ProposalReminderRules] P2 failed for project', project?.id, error);
+    }
+  }
+
   for (const proposal of proposals) {
     summary.checked += 1;
 
     try {
-      const result = await runProposalReminderRulesForProposal(proposal);
+      const result = await runProposalReminderRulesForProposal(proposal, cache);
       tallyRuleResult(summary, result.p0);
       tallyRuleResult(summary, result.p3);
       tallyRuleResult(summary, result.p4);
+      if (result.p2) {
+        tallyRuleResult(summary, result.p2);
+      }
     } catch (error) {
       summary.errors += 1;
       console.error('[ProposalReminderRules] failed for proposal', proposal?.id, error);

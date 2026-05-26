@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Plus, Search } from 'lucide-react';
 import { assertProjectHasClientId } from '@/lib/projectValidation';
 import { runClientReminderRulesForClient } from '@/lib/clientReminderRules';
+import { syncProposalReminderRulesAfterProjectSave } from '@/lib/proposalReminderRules';
 import { buildInitialProjectForm, EMPTY_PROJECT_FORM } from '@/lib/projectDefaults';
 import { buildProjectCreatePayloadFromForm } from '@/lib/projectCreatePayload';
 import { buildProposalFormPageUrl } from '@/lib/workflowNavigation';
@@ -67,6 +68,12 @@ export default function Projects() {
         } catch (error) {
           console.error('[Projects] failed to run client reminder rules', error);
         }
+      }
+
+      try {
+        await syncProposalReminderRulesAfterProjectSave(project);
+      } catch (error) {
+        console.error('[Projects] failed to run P2 proposal reminder rule', error);
       }
 
       queryClient.invalidateQueries({ queryKey: ['projects'] });
