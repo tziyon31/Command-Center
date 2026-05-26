@@ -26,6 +26,8 @@ import ReminderPanel from '../components/reminders/ReminderPanel.jsx';
 import {
   cleanupDuplicateConditionKeyReminders,
   cleanupOrphanReminders,
+  isRateLimitError,
+  loadReminderEngineCache,
   loadVisibleReminders,
 } from '@/lib/reminderEngine';
 import { runInquiryReminderRulesForAll } from '@/lib/inquiryReminderRules';
@@ -226,17 +228,46 @@ export default function Dashboard() {
   } = useQuery({
     queryKey: ['reminders', 'visible'],
     queryFn: async () => {
-      await runInquiryReminderRulesForAll();
-      await runClientReminderRulesForAll();
+      const scanCache = {};
 
       try {
-        await runProposalReminderRulesForAll();
+        await loadReminderEngineCache(scanCache);
+      } catch (error) {
+        console.error('[Dashboard] failed to preload reminder cache', error);
+
+        if (isRateLimitError(error)) {
+          return loadVisibleReminders();
+        }
+      }
+
+      try {
+        await runInquiryReminderRulesForAll(scanCache);
+      } catch (error) {
+        console.error('[Dashboard] inquiry reminder rules failed', error);
+      }
+
+      try {
+        await runClientReminderRulesForAll(scanCache);
+      } catch (error) {
+        console.error('[Dashboard] client reminder rules failed', error);
+      }
+
+      try {
+        const proposalSummary = await runProposalReminderRulesForAll(scanCache);
+
+        if (proposalSummary?.rateLimited) {
+          console.warn('[Dashboard] proposal rules stopped due to rate limit');
+        }
       } catch (error) {
         console.error('[Dashboard] proposal reminder rules failed', error);
       }
 
       try {
-        const orphanCleanup = await cleanupOrphanReminders({ dryRun: true });
+        const orphanCleanup = await cleanupOrphanReminders({
+          dryRun: true,
+          cache: scanCache,
+        });
+
         if (orphanCleanup.wouldCancel > 0) {
           console.info('[Dashboard] orphan cleanup dry-run', orphanCleanup);
         }
@@ -245,7 +276,11 @@ export default function Dashboard() {
       }
 
       try {
-        const duplicateCleanup = await cleanupDuplicateConditionKeyReminders({ dryRun: true });
+        const duplicateCleanup = await cleanupDuplicateConditionKeyReminders({
+          dryRun: true,
+          cache: scanCache,
+        });
+
         if (duplicateCleanup.wouldCancelDuplicates > 0) {
           console.info('[Dashboard] duplicate cleanup dry-run', duplicateCleanup);
         }
@@ -253,7 +288,7 @@ export default function Dashboard() {
         console.error('[Dashboard] duplicate reminder cleanup failed', error);
       }
 
-      return loadVisibleReminders();
+      return loadVisibleReminders({ cache: scanCache });
     },
     enabled: canSeeFullDashboard && !!currentUser,
   });

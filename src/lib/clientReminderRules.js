@@ -1,5 +1,13 @@
 import { base44 } from '@/api/base44Client';
-import { ensureReminderForCondition } from '@/lib/reminderEngine';
+import {
+  ensureReminderForCondition,
+  isRateLimitError,
+  loadReminderEngineCache,
+} from '@/lib/reminderEngine';
+
+const withReminderCache = (cache, options = {}) => (
+  cache?.reminders ? { ...options, cache } : options
+);
 import { buildProjectCreatePageUrl } from '@/lib/workflowNavigation';
 
 export const CLIENT_NEEDS_PROJECT_CONDITION_PREFIX = 'client_needs_project:';
@@ -21,6 +29,7 @@ const classifyRuleAction = (engineResult) => {
   if (action === 'created') return 'created';
   if (action === 'updated' || action === 'reactivated') return 'updated';
   if (action === 'resolved' || action === 'already_resolved') return 'resolved';
+  if (action === 'unchanged' || action === 'not_found') return 'skipped';
   return 'skipped';
 };
 
@@ -96,7 +105,7 @@ export async function runClientReminderRulesForClient(client, cache = {}) {
   };
 }
 
-export async function runClientReminderRulesForAll() {
+export async function runClientReminderRulesForAll(cache = {}) {
   const summary = {
     checked: 0,
     created: 0,
@@ -104,6 +113,7 @@ export async function runClientReminderRulesForAll() {
     resolved: 0,
     skipped: 0,
     errors: 0,
+    rateLimited: false,
   };
 
   let clients = [];
@@ -120,9 +130,23 @@ export async function runClientReminderRulesForAll() {
     return summary;
   }
 
-  const cache = { projects };
+  cache.projects = projects;
+
+  try {
+    await loadReminderEngineCache(cache);
+  } catch (error) {
+    console.error('[ClientReminderRules] failed to load reminder cache', error);
+    summary.errors += 1;
+
+    if (isRateLimitError(error)) {
+      summary.rateLimited = true;
+      return summary;
+    }
+  }
 
   for (const client of clients) {
+    if (summary.rateLimited) break;
+
     summary.checked += 1;
 
     try {
@@ -137,6 +161,11 @@ export async function runClientReminderRulesForAll() {
     } catch (error) {
       summary.errors += 1;
       console.error('[ClientReminderRules] failed for client', client?.id, error);
+
+      if (isRateLimitError(error)) {
+        summary.rateLimited = true;
+        break;
+      }
     }
   }
 

@@ -2,7 +2,13 @@ import { base44 } from '@/api/base44Client';
 import {
   cancelOrphanRemindersForSourceType,
   ensureReminderForCondition,
+  isRateLimitError,
+  loadReminderEngineCache,
 } from '@/lib/reminderEngine';
+
+const withReminderCache = (cache, options = {}) => (
+  cache?.reminders ? { ...options, cache } : options
+);
 import {
   buildClientFormPageUrl,
   buildProjectCreatePageUrl,
@@ -123,6 +129,7 @@ const classifyRuleAction = (engineResult) => {
   if (action === 'created') return 'created';
   if (action === 'updated' || action === 'reactivated') return 'updated';
   if (action === 'resolved' || action === 'already_resolved') return 'resolved';
+  if (action === 'unchanged' || action === 'not_found') return 'skipped';
   return 'skipped';
 };
 
@@ -168,7 +175,7 @@ async function runR1ReminderRuleForInquiry(inquiry) {
     const result = await ensureReminderForCondition(
       false,
       { condition_key: conditionKey },
-      { immediate: false },
+      withReminderCache(cache, { immediate: false }),
     );
 
     return {
@@ -185,7 +192,7 @@ async function runR1ReminderRuleForInquiry(inquiry) {
   const result = await ensureReminderForCondition(
     conditionIsTrue,
     reminderInput,
-    { immediate: false },
+    withReminderCache(cache, { immediate: false }),
   );
 
   return {
@@ -210,7 +217,7 @@ async function runR2ReminderRuleForInquiry(inquiry, cache = {}) {
     const result = await ensureReminderForCondition(
       false,
       { condition_key: conditionKey },
-      { immediate: false },
+      withReminderCache(cache, { immediate: false }),
     );
 
     return {
@@ -230,7 +237,7 @@ async function runR2ReminderRuleForInquiry(inquiry, cache = {}) {
   const result = await ensureReminderForCondition(
     conditionIsTrue,
     reminderInput,
-    { immediate: false },
+    withReminderCache(cache, { immediate: false }),
   );
 
   return {
@@ -253,7 +260,7 @@ export async function runInquiryReminderRulesForInquiry(inquiry, cache = {}) {
   };
 }
 
-export async function runInquiryReminderRulesForAll() {
+export async function runInquiryReminderRulesForAll(cache = {}) {
   const summary = {
     checked: 0,
     created: 0,
@@ -261,6 +268,7 @@ export async function runInquiryReminderRulesForAll() {
     resolved: 0,
     skipped: 0,
     errors: 0,
+    rateLimited: false,
   };
 
   let inquiries = [];
@@ -279,12 +287,26 @@ export async function runInquiryReminderRulesForAll() {
     return summary;
   }
 
-  const cache = { clients, projects };
+  cache.clients = clients;
+  cache.projects = projects;
+
+  try {
+    await loadReminderEngineCache(cache);
+  } catch (error) {
+    console.error('[InquiryReminderRules] failed to load reminder cache', error);
+    summary.errors += 1;
+
+    if (isRateLimitError(error)) {
+      summary.rateLimited = true;
+      return summary;
+    }
+  }
 
   try {
     await cancelOrphanRemindersForSourceType(
       'inquiry',
       inquiries.map((inquiry) => inquiry.id).filter(Boolean),
+      { cache },
     );
   } catch (error) {
     console.error('[InquiryReminderRules] failed to cancel orphan inquiry reminders', error);
@@ -292,6 +314,8 @@ export async function runInquiryReminderRulesForAll() {
   }
 
   for (const inquiry of inquiries) {
+    if (summary.rateLimited) break;
+
     summary.checked += 1;
 
     try {
@@ -305,6 +329,11 @@ export async function runInquiryReminderRulesForAll() {
         inquiry?.id,
         error,
       );
+
+      if (isRateLimitError(error)) {
+        summary.rateLimited = true;
+        break;
+      }
     }
   }
 

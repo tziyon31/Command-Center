@@ -54,7 +54,7 @@ const emptyPersistSummary = () => ({
   errors: [],
 });
 
-const isTerminalReminderStatus = (status) =>
+export const isTerminalReminderStatus = (status) =>
   status === REMINDER_STATUS.RESOLVED || status === REMINDER_STATUS.CANCELLED;
 
 const isAlreadyActiveWithClearedSnooze = (reminder) =>
@@ -496,7 +496,11 @@ export async function cancelRemindersForDeletedSource(sourceType, sourceId) {
 /**
  * Cancels inquiry reminders whose source_id or condition_key points at a missing inquiry.
  */
-export async function cancelOrphanRemindersForSourceType(sourceType, existingSourceIds = []) {
+export async function cancelOrphanRemindersForSourceType(
+  sourceType,
+  existingSourceIds = [],
+  options = {},
+) {
   if (!sourceType) {
     return {
       ...emptyCancelRemindersSummary(),
@@ -511,10 +515,12 @@ export async function cancelOrphanRemindersForSourceType(sourceType, existingSou
 
   const summary = emptyCancelRemindersSummary();
 
-  let reminders = [];
+  let reminders = options.cache?.reminders ?? null;
 
   try {
-    reminders = await base44.entities.Reminder.list();
+    if (!reminders) {
+      reminders = await base44.entities.Reminder.list();
+    }
   } catch (error) {
     summary.errors += 1;
     throw error;
@@ -584,10 +590,12 @@ export async function cleanupOrphanReminders(options = {}) {
     wouldCancelReminders: [],
   };
 
-  let reminders = [];
+  let reminders = options.cache?.reminders ?? null;
 
   try {
-    reminders = await base44.entities.Reminder.list();
+    if (!reminders) {
+      reminders = await base44.entities.Reminder.list();
+    }
   } catch (error) {
     summary.errors.push({
       stage: 'list_reminders',
@@ -697,10 +705,12 @@ export async function cleanupDuplicateConditionKeyReminders(options = {}) {
     wouldCancelReminders: [],
   };
 
-  let reminders = [];
+  let reminders = options.cache?.reminders ?? null;
 
   try {
-    reminders = await base44.entities.Reminder.list();
+    if (!reminders) {
+      reminders = await base44.entities.Reminder.list();
+    }
   } catch (error) {
     summary.errors.push({
       stage: 'list_reminders',
@@ -1108,12 +1118,25 @@ export function sortVisibleReminders(reminders, now = new Date()) {
 /**
  * Loads reminders, persists expired snoozes, and returns visible sorted reminders.
  */
-export async function loadVisibleReminders(now = new Date()) {
-  let reminders = await base44.entities.Reminder.list();
+export async function loadVisibleReminders(options = {}) {
+  const now = options.now ?? new Date();
+  let reminders = options.cache?.reminders;
+
+  if (!reminders) {
+    reminders = await base44.entities.Reminder.list();
+  }
+
   const summary = await normalizeAndPersistExpiredSnoozes(reminders, now);
 
   if (summary.updated > 0) {
     reminders = await base44.entities.Reminder.list();
+
+    if (options.cache) {
+      options.cache.reminders = reminders;
+      rebuildReminderConditionKeyIndex(options.cache);
+    }
+  } else if (options.cache) {
+    options.cache.reminders = reminders;
   }
 
   const visible = getVisibleReminders(reminders, now);
@@ -1202,21 +1225,144 @@ export function areDailyRemindersEnabled(settings) {
   return settings?.daily_reminders_enabled !== false;
 }
 
-export async function getOrCreateReminderSettings(userId) {
+export function isRateLimitError(error) {
+  if (!error) return false;
+
+  const message = error instanceof Error ? error.message : String(error);
+  const status = error?.status ?? error?.statusCode ?? error?.response?.status;
+
+  return status === 429 || message.includes('Rate limit');
+}
+
+export function createReminderEngineCache() {
+  return {
+    reminders: null,
+    remindersByConditionKey: null,
+    settings: null,
+    settingsList: null,
+  };
+}
+
+const indexRemindersByConditionKey = (reminders) => {
+  const map = new Map();
+
+  for (const reminder of reminders || []) {
+    const key = reminder?.condition_key ? String(reminder.condition_key).trim() : '';
+
+    if (!key) continue;
+
+    if (!map.has(key)) {
+      map.set(key, []);
+    }
+
+    map.get(key).push(reminder);
+  }
+
+  return map;
+};
+
+export function rebuildReminderConditionKeyIndex(cache) {
+  if (!cache?.reminders) return;
+
+  cache.remindersByConditionKey = indexRemindersByConditionKey(cache.reminders);
+}
+
+export function upsertReminderInCache(cache, reminder) {
+  if (!cache?.reminders || !reminder?.id) return;
+
+  const existingIndex = cache.reminders.findIndex((item) => item.id === reminder.id);
+
+  if (existingIndex >= 0) {
+    cache.reminders[existingIndex] = reminder;
+  } else {
+    cache.reminders.push(reminder);
+  }
+
+  rebuildReminderConditionKeyIndex(cache);
+}
+
+/**
+ * Loads Reminder + ReminderSettings once for a full scan (mutates cache in place).
+ */
+export async function loadReminderEngineCache(cache = null, options = {}) {
+  const target = cache || createReminderEngineCache();
+
+  if (target.reminders) {
+    return target;
+  }
+
+  const [reminders, settingsList] = await Promise.all([
+    base44.entities.Reminder.list(),
+    base44.entities.ReminderSettings.list(),
+  ]);
+
+  target.reminders = reminders;
+  target.settingsList = settingsList;
+  target.settings = findReminderSettingsInList(
+    settingsList,
+    normalizeSettingsUserId(options.userId),
+  );
+  rebuildReminderConditionKeyIndex(target);
+
+  return target;
+}
+
+export function findReminderByConditionKeyInCache(cache, conditionKey, now = new Date()) {
+  const normalizedKey = conditionKey ? String(conditionKey).trim() : '';
+
+  if (!normalizedKey || !cache?.remindersByConditionKey) {
+    return null;
+  }
+
+  const reminders = cache.remindersByConditionKey.get(normalizedKey) || [];
+  return pickPrimaryReminderForConditionKey(reminders, now);
+}
+
+export function hasOpenReminderForConditionKey(cache, conditionKey, now = new Date()) {
+  const reminder = findReminderByConditionKeyInCache(cache, conditionKey, now);
+  return Boolean(reminder && isOpenReminderStatus(reminder.status));
+}
+
+export async function getOrCreateReminderSettings(userId, options = {}) {
   const defaults = getDefaultReminderSettings();
   const normalizedUserId = normalizeSettingsUserId(userId);
+  const cache = options.cache;
 
-  const settingsList = await base44.entities.ReminderSettings.list();
+  if (cache?.settings) {
+    return cache.settings;
+  }
+
+  const settingsList = cache?.settingsList
+    ?? await base44.entities.ReminderSettings.list();
+
+  if (cache && !cache.settingsList) {
+    cache.settingsList = settingsList;
+  }
+
   const existing = findReminderSettingsInList(settingsList, normalizedUserId);
 
   if (existing) {
+    if (cache) {
+      cache.settings = existing;
+    }
+
     return existing;
   }
 
-  return base44.entities.ReminderSettings.create({
+  const created = await base44.entities.ReminderSettings.create({
     ...defaults,
     user_id: normalizedUserId,
   });
+
+  if (cache) {
+    cache.settings = created;
+
+    if (cache.settingsList) {
+      cache.settingsList.push(created);
+    }
+  }
+
+  return created;
 }
 
 const REQUIRED_REMINDER_INPUT_FIELDS = [
@@ -1311,19 +1457,34 @@ const buildReminderContentPatch = (input) => ({
   frequency: input.frequency || 'daily',
 });
 
-export async function findRemindersByConditionKey(conditionKey) {
+const REMINDER_CONTENT_PATCH_FIELDS = Object.keys(buildReminderContentPatch({}));
+
+const isSameReminderContent = (existing, input) => {
+  const patch = buildReminderContentPatch(input);
+
+  return REMINDER_CONTENT_PATCH_FIELDS.every(
+    (field) => String(existing?.[field] ?? '') === String(patch[field] ?? ''),
+  );
+};
+
+export async function findRemindersByConditionKey(conditionKey, options = {}) {
   const normalizedKey = conditionKey ? String(conditionKey).trim() : '';
 
   if (!normalizedKey) {
     throw new Error('conditionKey is required');
   }
 
+  if (options.cache?.remindersByConditionKey) {
+    return options.cache.remindersByConditionKey.get(normalizedKey) || [];
+  }
+
   const reminders = await base44.entities.Reminder.list();
   return reminders.filter((reminder) => reminder.condition_key === normalizedKey);
 }
 
-export async function findReminderByConditionKey(conditionKey, now = new Date()) {
-  const reminders = await findRemindersByConditionKey(conditionKey);
+export async function findReminderByConditionKey(conditionKey, options = {}) {
+  const now = options.now ?? new Date();
+  const reminders = await findRemindersByConditionKey(conditionKey, options);
   return pickPrimaryReminderForConditionKey(reminders, now);
 }
 
@@ -1332,9 +1493,9 @@ export async function upsertReminder(input, options = {}) {
 
   const now = new Date();
   const timestamp = now.toISOString();
-  const settings = await getOrCreateReminderSettings(options.userId);
+  const settings = await getOrCreateReminderSettings(options.userId, options);
   const frequency = input.frequency || 'daily';
-  const existing = await findReminderByConditionKey(input.condition_key);
+  const existing = await findReminderByConditionKey(input.condition_key, options);
 
   const nextRemindAt = input.next_remind_at || computeNextReminderAt({
     frequency,
@@ -1358,6 +1519,8 @@ export async function upsertReminder(input, options = {}) {
       future_email_enabled: false,
     });
 
+    upsertReminderInCache(options.cache, createdReminder);
+
     return {
       action: 'created',
       reminder: createdReminder,
@@ -1375,9 +1538,21 @@ export async function upsertReminder(input, options = {}) {
       next_remind_at: nextRemindAt,
     });
 
+    upsertReminderInCache(options.cache, reactivatedReminder);
+
     return {
       action: 'reactivated',
       reminder: reactivatedReminder,
+    };
+  }
+
+  if (
+    isSameReminderContent(existing, input)
+    && String(existing.next_remind_at || '') === String(nextRemindAt || '')
+  ) {
+    return {
+      action: 'unchanged',
+      reminder: existing,
     };
   }
 
@@ -1386,14 +1561,16 @@ export async function upsertReminder(input, options = {}) {
     next_remind_at: nextRemindAt,
   });
 
+  upsertReminderInCache(options.cache, updatedReminder);
+
   return {
     action: 'updated',
     reminder: updatedReminder,
   };
 }
 
-export async function resolveReminderByConditionKey(conditionKey, reason) {
-  const existing = await findReminderByConditionKey(conditionKey);
+export async function resolveReminderByConditionKey(conditionKey, reason, options = {}) {
+  const existing = await findReminderByConditionKey(conditionKey, options);
 
   if (!existing) {
     return { action: 'not_found' };
@@ -1415,6 +1592,8 @@ export async function resolveReminderByConditionKey(conditionKey, reason) {
 
   const resolvedReminder = await resolveReminder(existing.id, reason || 'condition_cleared');
 
+  upsertReminderInCache(options.cache, resolvedReminder);
+
   return {
     action: 'resolved',
     reminder: resolvedReminder,
@@ -1427,7 +1606,16 @@ export async function ensureReminderForCondition(conditionIsTrue, reminderInput,
   }
 
   const conditionKey = reminderInput?.condition_key;
-  return resolveReminderByConditionKey(conditionKey, 'condition_cleared');
+
+  if (options.cache?.remindersByConditionKey && conditionKey) {
+    const existing = findReminderByConditionKeyInCache(options.cache, conditionKey);
+
+    if (!existing || isTerminalReminderStatus(existing.status)) {
+      return { action: 'not_found' };
+    }
+  }
+
+  return resolveReminderByConditionKey(conditionKey, 'condition_cleared', options);
 }
 
 const buildFoundationTestInput = (conditionKey) => ({

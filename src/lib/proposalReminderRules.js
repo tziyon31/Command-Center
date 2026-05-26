@@ -4,6 +4,9 @@ import {
   cancelReminder,
   ensureReminderForCondition,
   findReminderByConditionKey,
+  hasOpenReminderForConditionKey,
+  isRateLimitError,
+  loadReminderEngineCache,
 } from '@/lib/reminderEngine';
 import { buildProposalFormPageUrl } from '@/lib/workflowNavigation';
 
@@ -50,12 +53,17 @@ const isProjectEligibleForP2 = (project) => (
   && !INACTIVE_PROJECT_STATUSES.has(project?.status)
 );
 
+const withReminderCache = (cache, options = {}) => (
+  cache?.reminders ? { ...options, cache } : options
+);
+
 const classifyRuleAction = (engineResult) => {
   const action = engineResult?.action;
 
   if (action === 'created') return 'created';
   if (action === 'updated' || action === 'reactivated') return 'updated';
   if (action === 'resolved' || action === 'already_resolved') return 'resolved';
+  if (action === 'unchanged' || action === 'not_found') return 'skipped';
   return 'skipped';
 };
 
@@ -156,7 +164,7 @@ const buildP4ReminderInput = (proposal) => {
   };
 };
 
-async function runP0ReminderRuleForProposal(proposal) {
+async function runP0ReminderRuleForProposal(proposal, cache = {}) {
   const conditionKey = getProposalIncompleteConditionKey(proposal?.id);
 
   if (!proposal?.id) {
@@ -167,7 +175,7 @@ async function runP0ReminderRuleForProposal(proposal) {
     const result = await ensureReminderForCondition(
       false,
       { condition_key: conditionKey },
-      { immediate: false },
+      withReminderCache(cache, { immediate: false }),
     );
 
     return {
@@ -186,7 +194,7 @@ async function runP0ReminderRuleForProposal(proposal) {
   const result = await ensureReminderForCondition(
     conditionIsTrue,
     conditionIsTrue ? buildP0ReminderInput(proposal) : { condition_key: conditionKey },
-    { immediate: false },
+    withReminderCache(cache, { immediate: false }),
   );
 
   return {
@@ -197,7 +205,7 @@ async function runP0ReminderRuleForProposal(proposal) {
   };
 }
 
-async function runP3ReminderRuleForProposal(proposal) {
+async function runP3ReminderRuleForProposal(proposal, cache = {}) {
   const conditionKey = getProposalNotSentConditionKey(proposal?.id);
 
   if (!proposal?.id) {
@@ -238,7 +246,7 @@ async function runP3ReminderRuleForProposal(proposal) {
   };
 }
 
-async function runP4ReminderRuleForProposal(proposal) {
+async function runP4ReminderRuleForProposal(proposal, cache = {}) {
   const conditionKey = getProposalNotSeenConditionKey(proposal?.id);
 
   if (!proposal?.id) {
@@ -249,7 +257,7 @@ async function runP4ReminderRuleForProposal(proposal) {
     const result = await ensureReminderForCondition(
       false,
       { condition_key: conditionKey },
-      { immediate: false },
+      withReminderCache(cache, { immediate: false }),
     );
 
     return {
@@ -269,7 +277,7 @@ async function runP4ReminderRuleForProposal(proposal) {
   const result = await ensureReminderForCondition(
     conditionIsTrue,
     conditionIsTrue ? buildP4ReminderInput(proposal) : { condition_key: conditionKey },
-    { immediate: conditionIsTrue },
+    withReminderCache(cache, { immediate: conditionIsTrue }),
   );
 
   return {
@@ -289,10 +297,22 @@ async function runP2ReminderRuleForProject(project, cache = {}) {
   }
 
   if (!isProjectEligibleForP2(project)) {
+    if (
+      cache?.reminders
+      && !hasOpenReminderForConditionKey(cache, conditionKey)
+    ) {
+      return {
+        status: 'skipped',
+        action: 'not_found',
+        reason: 'project_not_eligible',
+        rule: 'p2',
+      };
+    }
+
     const result = await ensureReminderForCondition(
       false,
       { condition_key: conditionKey },
-      { immediate: false },
+      withReminderCache(cache, { immediate: false }),
     );
 
     return {
@@ -305,10 +325,21 @@ async function runP2ReminderRuleForProject(project, cache = {}) {
 
   const conditionIsTrue = !hasNonCancelledProposalForProject(project.id, proposals);
 
+  if (!conditionIsTrue && cache?.reminders) {
+    if (!hasOpenReminderForConditionKey(cache, conditionKey)) {
+      return {
+        status: 'cleared',
+        action: 'not_found',
+        conditionKey,
+        rule: 'p2',
+      };
+    }
+  }
+
   const result = await ensureReminderForCondition(
     conditionIsTrue,
     conditionIsTrue ? buildP2ReminderInput(project, cache) : { condition_key: conditionKey },
-    { immediate: conditionIsTrue },
+    withReminderCache(cache, { immediate: conditionIsTrue }),
   );
 
   return {
@@ -377,7 +408,7 @@ export async function runProposalReminderRulesForProposal(proposal, cache = {}) 
   return { p0, p3, p4, p2 };
 }
 
-export async function runProposalReminderRulesForAll() {
+export async function runProposalReminderRulesForAll(cache = {}) {
   const summary = {
     checked: 0,
     created: 0,
@@ -385,6 +416,7 @@ export async function runProposalReminderRulesForAll() {
     resolved: 0,
     skipped: 0,
     errors: 0,
+    rateLimited: false,
   };
 
   let proposals = [];
@@ -403,12 +435,27 @@ export async function runProposalReminderRulesForAll() {
     return summary;
   }
 
-  const cache = { proposals, clients, projects };
+  cache.proposals = proposals;
+  cache.clients = clients;
+  cache.projects = projects;
+
+  try {
+    await loadReminderEngineCache(cache);
+  } catch (error) {
+    console.error('[ProposalReminderRules] failed to load reminder cache', error);
+    summary.errors += 1;
+
+    if (isRateLimitError(error)) {
+      summary.rateLimited = true;
+      return summary;
+    }
+  }
 
   try {
     await cancelOrphanRemindersForSourceType(
       'proposal',
       proposals.map((proposal) => proposal.id).filter(Boolean),
+      { cache },
     );
   } catch (error) {
     console.error('[ProposalReminderRules] failed to cancel orphan proposal reminders', error);
@@ -416,6 +463,8 @@ export async function runProposalReminderRulesForAll() {
   }
 
   for (const project of projects) {
+    if (summary.rateLimited) break;
+
     summary.checked += 1;
 
     try {
@@ -424,10 +473,17 @@ export async function runProposalReminderRulesForAll() {
     } catch (error) {
       summary.errors += 1;
       console.error('[ProposalReminderRules] P2 failed for project', project?.id, error);
+
+      if (isRateLimitError(error)) {
+        summary.rateLimited = true;
+        break;
+      }
     }
   }
 
   for (const proposal of proposals) {
+    if (summary.rateLimited) break;
+
     summary.checked += 1;
 
     try {
@@ -435,12 +491,18 @@ export async function runProposalReminderRulesForAll() {
       tallyRuleResult(summary, result.p0);
       tallyRuleResult(summary, result.p3);
       tallyRuleResult(summary, result.p4);
+
       if (result.p2) {
         tallyRuleResult(summary, result.p2);
       }
     } catch (error) {
       summary.errors += 1;
       console.error('[ProposalReminderRules] failed for proposal', proposal?.id, error);
+
+      if (isRateLimitError(error)) {
+        summary.rateLimited = true;
+        break;
+      }
     }
   }
 
