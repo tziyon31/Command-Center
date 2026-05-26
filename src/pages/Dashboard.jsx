@@ -236,13 +236,19 @@ export default function Dashboard() {
       }
 
       try {
-        await cleanupOrphanReminders();
+        const orphanCleanup = await cleanupOrphanReminders({ dryRun: true });
+        if (orphanCleanup.wouldCancel > 0) {
+          console.info('[Dashboard] orphan cleanup dry-run', orphanCleanup);
+        }
       } catch (error) {
         console.error('[Dashboard] orphan reminder cleanup failed', error);
       }
 
       try {
-        await cleanupDuplicateConditionKeyReminders();
+        const duplicateCleanup = await cleanupDuplicateConditionKeyReminders({ dryRun: true });
+        if (duplicateCleanup.wouldCancelDuplicates > 0) {
+          console.info('[Dashboard] duplicate cleanup dry-run', duplicateCleanup);
+        }
       } catch (error) {
         console.error('[Dashboard] duplicate reminder cleanup failed', error);
       }
