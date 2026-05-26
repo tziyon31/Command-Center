@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
+import { cancelRemindersForDeletedSource } from '@/lib/reminderEngine';
 import { createPageUrl } from '@/utils';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -78,6 +79,7 @@ export default function SignedProposals() {
 
     try {
       await deleteMutation.mutateAsync(id);
+      await cancelRemindersForDeletedSource('signed_proposal', id);
     } catch (error) {
       console.error('[SignedProposals] failed to delete', error);
       alert('לא הצלחנו למחוק את ההצעה החתומה');

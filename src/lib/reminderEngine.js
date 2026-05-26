@@ -181,10 +181,33 @@ export async function cancelReminder(reminderId, reason) {
   });
 }
 
-const INQUIRY_REMINDER_CONDITION_PREFIXES = [
-  'inquiry_missing_fields:',
-  'inquiry_needs_next_step:',
+const REMINDER_CONDITION_PREFIX_BY_ENTITY_TYPE = {
+  inquiry: [
+    'inquiry_missing_fields:',
+    'inquiry_needs_next_step:',
+  ],
+  client: ['client_needs_project:'],
+  project: ['project_needs_proposal:'],
+  proposal: [
+    'proposal_incomplete:',
+    'proposal_not_sent:',
+    'proposal_not_seen:',
+  ],
+};
+
+const INQUIRY_REMINDER_CONDITION_PREFIXES =
+  REMINDER_CONDITION_PREFIX_BY_ENTITY_TYPE.inquiry;
+
+const ORPHAN_ENTITY_LOADERS = [
+  { sourceType: 'inquiry', entityName: 'Inquiry' },
+  { sourceType: 'client', entityName: 'Client' },
+  { sourceType: 'project', entityName: 'Project' },
+  { sourceType: 'proposal', entityName: 'Proposal' },
+  { sourceType: 'signed_proposal', entityName: 'SignedProposal' },
 ];
+
+const DATE_LIKE_CONDITION_KEY_PATTERN =
+  /\d{4}[-/]\d{2}[-/]\d{2}|\d{4}-\d{2}-\d{2}|:20\d{2}|:today|:tomorrow|:date/i;
 
 const emptyCancelRemindersSummary = () => ({
   checked: 0,
@@ -194,16 +217,34 @@ const emptyCancelRemindersSummary = () => ({
   errors: 0,
 });
 
-const getInquiryIdFromConditionKey = (conditionKey) => {
+const getEntityIdFromConditionKey = (conditionKey, entityType = null) => {
   if (!conditionKey) return null;
 
-  for (const prefix of INQUIRY_REMINDER_CONDITION_PREFIXES) {
-    if (conditionKey.startsWith(prefix)) {
-      return conditionKey.slice(prefix.length);
+  const typesToCheck = entityType
+    ? [entityType]
+    : Object.keys(REMINDER_CONDITION_PREFIX_BY_ENTITY_TYPE);
+
+  for (const type of typesToCheck) {
+    const prefixes = REMINDER_CONDITION_PREFIX_BY_ENTITY_TYPE[type] || [];
+
+    for (const prefix of prefixes) {
+      if (conditionKey.startsWith(prefix)) {
+        return { entityType: type, entityId: conditionKey.slice(prefix.length) };
+      }
     }
   }
 
   return null;
+};
+
+const getInquiryIdFromConditionKey = (conditionKey) => {
+  const parsed = getEntityIdFromConditionKey(conditionKey, 'inquiry');
+  return parsed?.entityId || null;
+};
+
+const getEntityIdFromConditionKeyForSource = (conditionKey, sourceType) => {
+  const parsed = getEntityIdFromConditionKey(conditionKey, sourceType);
+  return parsed?.entityId || null;
 };
 
 const matchesDeletedSource = (reminder, sourceType, sourceId) => {
@@ -211,12 +252,124 @@ const matchesDeletedSource = (reminder, sourceType, sourceId) => {
     return true;
   }
 
-  if (sourceType !== 'inquiry') {
+  const entityIdFromKey = getEntityIdFromConditionKeyForSource(
+    reminder?.condition_key,
+    sourceType,
+  );
+
+  return entityIdFromKey === sourceId;
+};
+
+const isOpenReminderStatus = (status) =>
+  status === REMINDER_STATUS.ACTIVE || status === REMINDER_STATUS.SNOOZED;
+
+const loadExistingEntityIdSet = async (entityName) => {
+  try {
+    const entity = base44.entities[entityName];
+
+    if (!entity || typeof entity.list !== 'function') {
+      return new Set();
+    }
+
+    const items = await entity.list();
+    return new Set((items || []).map((item) => item?.id).filter(Boolean));
+  } catch (error) {
+    console.error('[ReminderEngine] failed to load entity ids', { entityName }, error);
+    return new Set();
+  }
+};
+
+const loadEntityIdSetsForOrphanCleanup = async () => {
+  const sets = {};
+
+  await Promise.all(
+    ORPHAN_ENTITY_LOADERS.map(async ({ sourceType, entityName }) => {
+      sets[sourceType] = await loadExistingEntityIdSet(entityName);
+    }),
+  );
+
+  return sets;
+};
+
+const isOrphanOpenReminder = (reminder, entityIdSets) => {
+  if (!reminder || isTerminalReminderStatus(reminder.status)) {
     return false;
   }
 
-  const inquiryIdFromKey = getInquiryIdFromConditionKey(reminder?.condition_key);
-  return inquiryIdFromKey === sourceId;
+  if (reminder.source_type && reminder.source_id) {
+    const idsForSourceType = entityIdSets[reminder.source_type];
+
+    if (idsForSourceType && !idsForSourceType.has(reminder.source_id)) {
+      return true;
+    }
+  }
+
+  const parsed = getEntityIdFromConditionKey(reminder.condition_key);
+
+  if (parsed?.entityType && parsed?.entityId) {
+    const idsForEntityType = entityIdSets[parsed.entityType];
+
+    if (idsForEntityType && !idsForEntityType.has(parsed.entityId)) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
+const getReminderRecencyTimestamp = (reminder) => (
+  toTimestamp(reminder?.updated_date || reminder?.updated_at)
+  ?? toTimestamp(reminder?.created_date || reminder?.created_at)
+  ?? 0
+);
+
+/**
+ * Picks the best reminder row for a stable condition_key (open rows preferred).
+ */
+export function pickPrimaryReminderForConditionKey(reminders, now = new Date()) {
+  if (!Array.isArray(reminders) || reminders.length === 0) {
+    return null;
+  }
+
+  const openReminders = reminders.filter(
+    (reminder) => isOpenReminderStatus(reminder?.status),
+  );
+  const pool = openReminders.length > 0 ? openReminders : reminders;
+
+  const rankReminder = (reminder) => {
+    const normalized = normalizeReminderState(reminder, now);
+    let priority = 0;
+
+    if (normalized.status === REMINDER_STATUS.ACTIVE) {
+      priority = 3;
+    } else if (normalized.status === REMINDER_STATUS.SNOOZED) {
+      const snoozeTime = toTimestamp(reminder.snoozed_until);
+      const hasValidSnooze =
+        snoozeTime !== null && snoozeTime > toTimestamp(now);
+
+      priority = hasValidSnooze ? 2 : 3;
+    } else if (reminder.status === REMINDER_STATUS.RESOLVED) {
+      priority = 1;
+    }
+
+    return {
+      priority,
+      recency: getReminderRecencyTimestamp(reminder),
+    };
+  };
+
+  const sorted = [...pool].sort((left, right) => {
+    const leftRank = rankReminder(left);
+    const rightRank = rankReminder(right);
+
+    if (leftRank.priority !== rightRank.priority) {
+      return rightRank.priority - leftRank.priority;
+    }
+
+    return rightRank.recency - leftRank.recency;
+  });
+
+  return sorted[0] || null;
 };
 
 /**
@@ -319,9 +472,10 @@ export async function cancelOrphanRemindersForSourceType(sourceType, existingSou
       isOrphan = !existingIds.has(reminder.source_id);
     }
 
-    if (!isOrphan && sourceType === 'inquiry') {
-      const inquiryIdFromKey = getInquiryIdFromConditionKey(reminder?.condition_key);
-      if (inquiryIdFromKey && !existingIds.has(inquiryIdFromKey)) {
+    if (!isOrphan && reminder?.condition_key) {
+      const parsed = getEntityIdFromConditionKey(reminder.condition_key, sourceType);
+
+      if (parsed?.entityId && !existingIds.has(parsed.entityId)) {
         isOrphan = true;
       }
     }
@@ -348,6 +502,238 @@ export async function cancelOrphanRemindersForSourceType(sourceType, existingSou
   }
 
   return summary;
+}
+
+/**
+ * Cancels active/snoozed reminders whose source or condition_key points at a missing entity.
+ */
+export async function cleanupOrphanReminders() {
+  const summary = {
+    checked: 0,
+    cancelled: 0,
+    skipped: 0,
+    errors: [],
+  };
+
+  let reminders = [];
+
+  try {
+    reminders = await base44.entities.Reminder.list();
+  } catch (error) {
+    summary.errors.push({
+      stage: 'list_reminders',
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return summary;
+  }
+
+  summary.checked = reminders.length;
+
+  const entityIdSets = await loadEntityIdSetsForOrphanCleanup();
+
+  for (const reminder of reminders) {
+    if (!isOpenReminderStatus(reminder?.status)) {
+      summary.skipped += 1;
+      continue;
+    }
+
+    if (!isOrphanOpenReminder(reminder, entityIdSets)) {
+      continue;
+    }
+
+    if (!reminder?.id) {
+      summary.errors.push({
+        reminderId: null,
+        error: 'reminder id is required',
+      });
+      continue;
+    }
+
+    try {
+      await cancelReminder(reminder.id, 'source_deleted');
+      summary.cancelled += 1;
+    } catch (error) {
+      summary.errors.push({
+        reminderId: reminder.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      console.error(
+        '[ReminderEngine] failed to cancel orphan reminder',
+        { reminderId: reminder.id, condition_key: reminder.condition_key },
+        error,
+      );
+    }
+  }
+
+  return summary;
+}
+
+/**
+ * Keeps a single active/snoozed reminder per condition_key; cancels duplicate open rows.
+ */
+export async function cleanupDuplicateConditionKeyReminders(now = new Date()) {
+  const summary = {
+    checkedConditionKeys: 0,
+    duplicateGroups: 0,
+    cancelledDuplicates: 0,
+    errors: [],
+  };
+
+  let reminders = [];
+
+  try {
+    reminders = await base44.entities.Reminder.list();
+  } catch (error) {
+    summary.errors.push({
+      stage: 'list_reminders',
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return summary;
+  }
+
+  const openByConditionKey = new Map();
+
+  for (const reminder of reminders) {
+    const conditionKey = reminder?.condition_key
+      ? String(reminder.condition_key).trim()
+      : '';
+
+    if (!conditionKey || !isOpenReminderStatus(reminder?.status)) {
+      continue;
+    }
+
+    if (!openByConditionKey.has(conditionKey)) {
+      openByConditionKey.set(conditionKey, []);
+    }
+
+    openByConditionKey.get(conditionKey).push(reminder);
+  }
+
+  summary.checkedConditionKeys = openByConditionKey.size;
+
+  for (const [conditionKey, group] of openByConditionKey.entries()) {
+    if (group.length <= 1) {
+      continue;
+    }
+
+    summary.duplicateGroups += 1;
+
+    const keeper = pickPrimaryReminderForConditionKey(group, now);
+
+    for (const reminder of group) {
+      if (!reminder?.id || reminder.id === keeper?.id) {
+        continue;
+      }
+
+      try {
+        await cancelReminder(reminder.id, 'duplicate_condition_key_cleanup');
+        summary.cancelledDuplicates += 1;
+      } catch (error) {
+        summary.errors.push({
+          reminderId: reminder.id,
+          conditionKey,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        console.error(
+          '[ReminderEngine] failed to cancel duplicate reminder',
+          { reminderId: reminder.id, conditionKey },
+          error,
+        );
+      }
+    }
+  }
+
+  return summary;
+}
+
+/**
+ * Diagnostic report for reminder lifecycle issues (console logging in dev).
+ */
+export async function analyzeReminderLifecycle() {
+  const report = {
+    duplicateConditionKeys: [],
+    dateLikeConditionKeys: [],
+    orphanReminders: [],
+    totals: {
+      reminders: 0,
+      openReminders: 0,
+    },
+  };
+
+  let reminders = [];
+
+  try {
+    reminders = await base44.entities.Reminder.list();
+  } catch (error) {
+    report.error = error instanceof Error ? error.message : String(error);
+    return report;
+  }
+
+  report.totals.reminders = reminders.length;
+  report.totals.openReminders = reminders.filter(
+    (reminder) => isOpenReminderStatus(reminder?.status),
+  ).length;
+
+  const byConditionKey = new Map();
+
+  for (const reminder of reminders) {
+    const conditionKey = reminder?.condition_key
+      ? String(reminder.condition_key).trim()
+      : '';
+
+    if (!conditionKey) continue;
+
+    if (DATE_LIKE_CONDITION_KEY_PATTERN.test(conditionKey)) {
+      report.dateLikeConditionKeys.push({
+        condition_key: conditionKey,
+        status: reminder.status,
+        title: reminder.title,
+      });
+    }
+
+    if (!byConditionKey.has(conditionKey)) {
+      byConditionKey.set(conditionKey, []);
+    }
+
+    byConditionKey.get(conditionKey).push(reminder);
+  }
+
+  for (const [conditionKey, group] of byConditionKey.entries()) {
+    if (group.length <= 1) continue;
+
+    report.duplicateConditionKeys.push({
+      condition_key: conditionKey,
+      count: group.length,
+      statuses: group.map((item) => item.status),
+      titles: group.map((item) => item.title),
+      source_types: group.map((item) => item.source_type),
+      source_ids: group.map((item) => item.source_id),
+      next_remind_at: group.map((item) => item.next_remind_at),
+      created_date: group.map((item) => item.created_date),
+      updated_date: group.map((item) => item.updated_date),
+      resolved_reason: group.map((item) => item.resolved_reason),
+    });
+  }
+
+  const entityIdSets = await loadEntityIdSetsForOrphanCleanup();
+
+  for (const reminder of reminders) {
+    if (!isOpenReminderStatus(reminder?.status)) continue;
+
+    if (!isOrphanOpenReminder(reminder, entityIdSets)) continue;
+
+    report.orphanReminders.push({
+      title: reminder.title,
+      condition_key: reminder.condition_key,
+      source_type: reminder.source_type,
+      source_id: reminder.source_id,
+      status: reminder.status,
+      action_url: reminder.action_url,
+    });
+  }
+
+  console.info('[ReminderLifecycleAnalysis]', report);
+  return report;
 }
 
 const ALLOWED_SCHEDULE_FIELDS = new Set(['frequency', 'next_remind_at', 'default_time']);
@@ -663,7 +1049,7 @@ const buildReminderContentPatch = (input) => ({
   frequency: input.frequency || 'daily',
 });
 
-export async function findReminderByConditionKey(conditionKey) {
+export async function findRemindersByConditionKey(conditionKey) {
   const normalizedKey = conditionKey ? String(conditionKey).trim() : '';
 
   if (!normalizedKey) {
@@ -671,7 +1057,12 @@ export async function findReminderByConditionKey(conditionKey) {
   }
 
   const reminders = await base44.entities.Reminder.list();
-  return reminders.find((reminder) => reminder.condition_key === normalizedKey) || null;
+  return reminders.filter((reminder) => reminder.condition_key === normalizedKey);
+}
+
+export async function findReminderByConditionKey(conditionKey, now = new Date()) {
+  const reminders = await findRemindersByConditionKey(conditionKey);
+  return pickPrimaryReminderForConditionKey(reminders, now);
 }
 
 export async function upsertReminder(input, options = {}) {
@@ -711,14 +1102,10 @@ export async function upsertReminder(input, options = {}) {
     };
   }
 
-  if (existing.status === REMINDER_STATUS.CANCELLED) {
-    return {
-      action: 'skipped_cancelled',
-      reminder: existing,
-    };
-  }
-
-  if (existing.status === REMINDER_STATUS.RESOLVED) {
+  if (
+    existing.status === REMINDER_STATUS.CANCELLED
+    || existing.status === REMINDER_STATUS.RESOLVED
+  ) {
     await reactivateReminder(existing);
 
     const reactivatedReminder = await persistReminderUpdate(existing.id, {
@@ -732,7 +1119,10 @@ export async function upsertReminder(input, options = {}) {
     };
   }
 
-  const updatedReminder = await persistReminderUpdate(existing.id, buildReminderContentPatch(input));
+  const updatedReminder = await persistReminderUpdate(existing.id, {
+    ...buildReminderContentPatch(input),
+    next_remind_at: nextRemindAt,
+  });
 
   return {
     action: 'updated',

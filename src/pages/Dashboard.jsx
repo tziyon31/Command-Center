@@ -23,7 +23,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import QuoteBreakdownCard from '../components/dashboard/QuoteBreakdownCard.jsx';
 import TodayTasksCard from '../components/dashboard/TodayTasksCard.jsx';
 import ReminderPanel from '../components/reminders/ReminderPanel.jsx';
-import { loadVisibleReminders } from '@/lib/reminderEngine';
+import {
+  cleanupDuplicateConditionKeyReminders,
+  cleanupOrphanReminders,
+  loadVisibleReminders,
+} from '@/lib/reminderEngine';
 import { runInquiryReminderRulesForAll } from '@/lib/inquiryReminderRules';
 import { runClientReminderRulesForAll } from '@/lib/clientReminderRules';
 import { runProposalReminderRulesForAll } from '@/lib/proposalReminderRules';
@@ -229,6 +233,18 @@ export default function Dashboard() {
         await runProposalReminderRulesForAll();
       } catch (error) {
         console.error('[Dashboard] proposal reminder rules failed', error);
+      }
+
+      try {
+        await cleanupOrphanReminders();
+      } catch (error) {
+        console.error('[Dashboard] orphan reminder cleanup failed', error);
+      }
+
+      try {
+        await cleanupDuplicateConditionKeyReminders();
+      } catch (error) {
+        console.error('[Dashboard] duplicate reminder cleanup failed', error);
       }
 
       return loadVisibleReminders();

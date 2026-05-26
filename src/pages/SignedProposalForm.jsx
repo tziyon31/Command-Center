@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
+import { cancelRemindersForDeletedSource } from '@/lib/reminderEngine';
 import { createPageUrl } from '@/utils';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -238,6 +239,7 @@ export default function SignedProposalForm() {
 
     try {
       await base44.entities.SignedProposal.delete(recordId);
+      await cancelRemindersForDeletedSource('signed_proposal', recordId);
       queryClient.invalidateQueries({ queryKey: ['signed-proposals'] });
       navigate(createPageUrl('SignedProposals'));
     } catch (error) {

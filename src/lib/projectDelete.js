@@ -1,4 +1,5 @@
 import { base44 } from '@/api/base44Client';
+import { cancelRemindersForDeletedSource } from '@/lib/reminderEngine';
 
 export const PROJECT_DELETE_CONFIRM_MESSAGE =
   'האם אתה בטוח שברצונך למחוק את הפרויקט? פעולה זו לא ניתנת לשחזור.';
@@ -11,9 +12,11 @@ export async function deleteProject(projectId) {
 
   if (typeof projectEntity.delete === 'function') {
     await projectEntity.delete(projectId);
+    await cancelRemindersForDeletedSource('project', projectId);
     return 'hard';
   }
 
   await projectEntity.update(projectId, { status: 'cancelled' });
+  await cancelRemindersForDeletedSource('project', projectId);
   return 'soft';
 }

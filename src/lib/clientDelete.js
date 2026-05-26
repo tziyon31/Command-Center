@@ -1,4 +1,5 @@
 import { base44 } from '@/api/base44Client';
+import { cancelRemindersForDeletedSource } from '@/lib/reminderEngine';
 
 export const CLIENT_DELETE_CONFIRM_MESSAGE =
   'האם אתה בטוח שברצונך למחוק את הלקוח? פעולה זו לא ניתנת לשחזור.';
@@ -11,9 +12,11 @@ export async function deleteClient(clientId) {
 
   if (typeof clientEntity.delete === 'function') {
     await clientEntity.delete(clientId);
+    await cancelRemindersForDeletedSource('client', clientId);
     return 'hard';
   }
 
   await clientEntity.update(clientId, { status: 'archived' });
+  await cancelRemindersForDeletedSource('client', clientId);
   return 'soft';
 }
