@@ -452,6 +452,12 @@ export async function runSignedProposalNeedReminderRuleForProposal(proposal, cac
   return runSP1ReminderRuleForProposal(proposal, cache);
 }
 
+const hasNonCancelledSignedProposalForProject = (projectId, signedProposals = []) => (
+  signedProposals.some(
+    (sp) => sp.project_id === projectId && sp.form_status !== 'cancelled',
+  )
+);
+
 async function runP2ReminderRuleForProject(project, cache = {}) {
   const conditionKey = getProjectNeedsProposalConditionKey(project?.id);
   const proposals = cache.proposals ?? [];
@@ -487,7 +493,14 @@ async function runP2ReminderRuleForProject(project, cache = {}) {
     };
   }
 
-  const conditionIsTrue = !hasNonCancelledProposalForProject(project.id, proposals);
+  // אם יש הצעת מחיר חתומה לפרויקט — הפרויקט כבר עבר שלב הצעת מחיר, אין תזכורת
+  const signedProposals = cache.signedProposals ?? await base44.entities.SignedProposal.list();
+  const hasSignedProposal = hasNonCancelledSignedProposalForProject(project.id, signedProposals);
+
+  const conditionIsTrue = (
+    !hasNonCancelledProposalForProject(project.id, proposals)
+    && !hasSignedProposal
+  );
 
   if (!conditionIsTrue && cache?.reminders) {
     if (!hasOpenReminderForConditionKey(cache, conditionKey)) {
@@ -611,6 +624,7 @@ export async function syncProposalReminderRulesAfterProjectSave(project) {
 export async function runProposalReminderRulesForProject(project, cache = {}) {
   let proposals = cache.proposals;
   let clients = cache.clients;
+  let signedProposals = cache.signedProposals;
 
   if (!proposals) {
     proposals = await base44.entities.Proposal.list();
@@ -620,7 +634,11 @@ export async function runProposalReminderRulesForProject(project, cache = {}) {
     clients = await base44.entities.Client.list();
   }
 
-  return runP2ReminderRuleForProject(project, { proposals, clients });
+  if (!signedProposals) {
+    signedProposals = await base44.entities.SignedProposal.list();
+  }
+
+  return runP2ReminderRuleForProject(project, { proposals, clients, signedProposals });
 }
 
 export async function runProposalReminderRulesForProposal(proposal, cache = {}) {
