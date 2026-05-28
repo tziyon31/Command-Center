@@ -4,11 +4,13 @@ import { Button } from '@/components/ui/button';
 import { buildSignedProposalFormPageUrl } from '@/lib/workflowNavigation';
 
 export default function ProposalOpenSignedProposal({
+  proposalId = '',
   formStatus,
   projectId = '',
   projectName = '',
   clientName = '',
   sourceInquiryId = '',
+  documentNote = '',
   proposalSentToClient = false,
   disabled = false,
 }) {
@@ -20,10 +22,12 @@ export default function ProposalOpenSignedProposal({
     && !disabled;
 
   const signedProposalUrl = buildSignedProposalFormPageUrl({
+    proposalId: proposalId || undefined,
     projectId: projectId || undefined,
     projectName: projectName.trim(),
     clientName: clientName.trim(),
     sourceInquiryId: sourceInquiryId || undefined,
+    documentNote: documentNote.trim(),
   });
 
   return (

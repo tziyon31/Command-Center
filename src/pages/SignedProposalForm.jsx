@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
 import { cancelRemindersForDeletedSource } from '@/lib/reminderEngine';
+import { syncSignedProposalReminderRules } from '@/lib/proposalReminderRules';
 import { createPageUrl } from '@/utils';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -21,6 +22,7 @@ import {
 import { ArrowRight } from 'lucide-react';
 
 const EMPTY_FORM = {
+  proposal_id: '',
   project_id: '',
   project_name: '',
   client_name: '',
@@ -46,10 +48,12 @@ const readSearchParams = () => {
   return {
     id: params.get('id') || '',
     prefill: {
+      proposal_id: params.get('proposal_id') || '',
       project_id: params.get('project_id') || '',
       project_name: params.get('project_name') || '',
       client_name: params.get('client_name') || '',
       source_inquiry_id: params.get('source_inquiry_id') || '',
+      document_note: params.get('document_note') || '',
     },
   };
 };
@@ -72,6 +76,7 @@ const toIsoFromDatetimeLocal = (localValue) => {
 };
 
 const signedProposalToForm = (record) => ({
+  proposal_id: record?.proposal_id || '',
   project_id: record?.project_id || '',
   project_name: record?.project_name || '',
   client_name: record?.client_name || '',
@@ -82,6 +87,7 @@ const signedProposalToForm = (record) => ({
 });
 
 const buildDraftPayload = (formData) => ({
+  proposal_id: formData.proposal_id.trim(),
   project_id: formData.project_id.trim(),
   project_name: formData.project_name.trim(),
   client_name: formData.client_name.trim(),
@@ -117,6 +123,7 @@ export default function SignedProposalForm() {
   const isEditMode = Boolean(recordId);
   const isSubmitted = formStatus === 'submitted';
   const isBusy = isSaving || isSubmitting || isDeleting;
+  const [submittedAt, setSubmittedAt] = useState('');
 
   const { data: record, isLoading: isLoadingRecord } = useQuery({
     queryKey: ['signed-proposal', recordId],
@@ -142,6 +149,7 @@ export default function SignedProposalForm() {
 
     setFormData(signedProposalToForm(record));
     setFormStatus(record.form_status || 'draft');
+    setSubmittedAt(record.submitted_at || '');
   }, [record]);
 
   const applyProjectSelection = (projectId) => {
@@ -175,8 +183,47 @@ export default function SignedProposalForm() {
     return created;
   };
 
+  const syncSignedProposalReminders = async (savedRecord) => {
+    try {
+      await syncSignedProposalReminderRules(savedRecord);
+      await queryClient.invalidateQueries({ queryKey: ['reminders'] });
+    } catch (error) {
+      console.error('[SignedProposalForm] failed to sync signed-proposal reminder rules', error);
+    }
+  };
+
+  const buildSubmittedUpdatePayload = () => ({
+    ...buildDraftPayload(formData),
+    has_signed_offer_or_order: Boolean(formData.has_signed_offer_or_order),
+    form_status: 'submitted',
+    submitted_at: submittedAt || record?.submitted_at || nowIso(),
+    signed_at: toIsoFromDatetimeLocal(formData.signed_at) || record?.signed_at || nowIso(),
+  });
+
+  const nowIso = () => new Date().toISOString();
+
   const handleSaveDraft = async (event) => {
     event.preventDefault();
+    if (isSubmitted) {
+      setIsSaving(true);
+
+      try {
+        const saved = await persistRecord(buildSubmittedUpdatePayload());
+        setFormStatus(saved?.form_status || 'submitted');
+        setSubmittedAt(saved?.submitted_at || submittedAt || '');
+        queryClient.invalidateQueries({ queryKey: ['signed-proposals'] });
+        queryClient.invalidateQueries({ queryKey: ['signed-proposal', recordId || saved?.id] });
+        await syncSignedProposalReminders(saved);
+        alert('השינויים נשמרו');
+      } catch (error) {
+        console.error('[SignedProposalForm] failed to save submitted changes', error);
+        alert('לא הצלחנו לשמור את השינויים');
+      } finally {
+        setIsSaving(false);
+      }
+      return;
+    }
+
     setIsSaving(true);
 
     try {
@@ -184,6 +231,7 @@ export default function SignedProposalForm() {
       setFormStatus(saved?.form_status || 'draft');
       queryClient.invalidateQueries({ queryKey: ['signed-proposals'] });
       queryClient.invalidateQueries({ queryKey: ['signed-proposal', recordId || saved?.id] });
+      await syncSignedProposalReminders(saved);
       alert('הטיוטה נשמרה');
     } catch (error) {
       console.error('[SignedProposalForm] failed to save draft', error);
@@ -207,12 +255,13 @@ export default function SignedProposalForm() {
         ...buildDraftPayload(formData),
         has_signed_offer_or_order: true,
         form_status: 'submitted',
-        submitted_at: now,
+        submitted_at: submittedAt || now,
         signed_at: toIsoFromDatetimeLocal(formData.signed_at) || now,
       };
 
       const saved = await persistRecord(payload);
       setFormStatus(saved?.form_status || 'submitted');
+      setSubmittedAt(saved?.submitted_at || payload.submitted_at || '');
       setFormData((prev) => ({
         ...prev,
         signed_at: toDatetimeLocalValue(payload.signed_at),
@@ -220,6 +269,7 @@ export default function SignedProposalForm() {
       }));
       queryClient.invalidateQueries({ queryKey: ['signed-proposals'] });
       queryClient.invalidateQueries({ queryKey: ['signed-proposal', recordId || saved?.id] });
+      await syncSignedProposalReminders(saved);
       alert('הטופס הוגש בהצלחה');
     } catch (error) {
       console.error('[SignedProposalForm] failed to submit form', error);
@@ -298,7 +348,7 @@ export default function SignedProposalForm() {
                 <Select
                   value={formData.project_id || undefined}
                   onValueChange={applyProjectSelection}
-                  disabled={isBusy || isSubmitted}
+                  disabled={isBusy}
                 >
                   <SelectTrigger id="project-select">
                     <SelectValue placeholder="בחר פרויקט" />
@@ -320,7 +370,7 @@ export default function SignedProposalForm() {
                     id="project_name"
                     value={formData.project_name}
                     onChange={(e) => setFormData({ ...formData, project_name: e.target.value })}
-                    disabled={isBusy || isSubmitted}
+                    disabled={isBusy}
                   />
                 </div>
                 <div className="space-y-2">
@@ -329,7 +379,7 @@ export default function SignedProposalForm() {
                     id="client_name"
                     value={formData.client_name}
                     onChange={(e) => setFormData({ ...formData, client_name: e.target.value })}
-                    disabled={isBusy || isSubmitted}
+                    disabled={isBusy}
                   />
                 </div>
               </div>
@@ -342,7 +392,7 @@ export default function SignedProposalForm() {
                     ...formData,
                     has_signed_offer_or_order: checked === true,
                   })}
-                  disabled={isBusy || isSubmitted}
+                  disabled={isBusy}
                 />
                 <Label htmlFor="has_signed_offer_or_order" className="cursor-pointer">
                   יש הצעה או הזמנה חתומה
@@ -356,7 +406,7 @@ export default function SignedProposalForm() {
                   type="datetime-local"
                   value={formData.signed_at}
                   onChange={(e) => setFormData({ ...formData, signed_at: e.target.value })}
-                  disabled={isBusy || isSubmitted}
+                  disabled={isBusy}
                 />
               </div>
 
@@ -367,7 +417,7 @@ export default function SignedProposalForm() {
                   value={formData.document_note}
                   onChange={(e) => setFormData({ ...formData, document_note: e.target.value })}
                   rows={3}
-                  disabled={isBusy || isSubmitted}
+                  disabled={isBusy}
                 />
               </div>
 
@@ -385,8 +435,8 @@ export default function SignedProposalForm() {
                     {isDeleting ? 'מוחק...' : 'מחק'}
                   </Button>
                 )}
-                <Button type="submit" variant="outline" disabled={isBusy || isSubmitted}>
-                  {isSaving ? 'שומר...' : 'שמור טיוטה'}
+                <Button type="submit" variant="outline" disabled={isBusy}>
+                  {isSaving ? 'שומר...' : (isSubmitted ? 'שמור שינויים' : 'שמור טיוטה')}
                 </Button>
                 <Button
                   type="button"

@@ -58,6 +58,8 @@ export const buildSignedProposalFormPageUrl = ({
   projectName,
   clientName,
   sourceInquiryId,
+  proposalId,
+  documentNote,
   signedProposalId,
 }) => {
   const query = new URLSearchParams();
@@ -65,10 +67,12 @@ export const buildSignedProposalFormPageUrl = ({
   if (signedProposalId) {
     query.set('id', signedProposalId);
   } else {
+    if (proposalId) query.set('proposal_id', proposalId);
     if (projectId) query.set('project_id', projectId);
     if (projectName) query.set('project_name', projectName);
     if (clientName) query.set('client_name', clientName);
     if (sourceInquiryId) query.set('source_inquiry_id', sourceInquiryId);
+    if (documentNote) query.set('document_note', documentNote);
   }
 
   const queryString = query.toString();

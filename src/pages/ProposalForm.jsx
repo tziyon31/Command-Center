@@ -800,11 +800,13 @@ export default function ProposalForm() {
               </div>
 
               <ProposalOpenSignedProposal
+                proposalId={recordId}
                 formStatus={formStatus}
                 projectId={formData.project_id}
                 projectName={formData.project_name}
                 clientName={formData.client_name}
                 sourceInquiryId={formData.source_inquiry_id}
+                documentNote={formData.document_note}
                 proposalSentToClient={formData.proposal_sent_to_client}
                 disabled={isBusy}
               />

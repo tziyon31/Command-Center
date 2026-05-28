@@ -193,6 +193,7 @@ const REMINDER_CONDITION_PREFIX_BY_ENTITY_TYPE = {
     'proposal_incomplete:',
     'proposal_not_sent:',
     'proposal_not_seen:',
+    'proposal_needs_signed_proposal:',
   ],
 };
 
@@ -220,6 +221,7 @@ const CONDITION_KEY_PREFIX_COUNTS = [
   { label: 'proposal_incomplete', prefix: 'proposal_incomplete:' },
   { label: 'proposal_not_sent', prefix: 'proposal_not_sent:' },
   { label: 'proposal_not_seen', prefix: 'proposal_not_seen:' },
+  { label: 'proposal_needs_signed_proposal', prefix: 'proposal_needs_signed_proposal:' },
 ];
 
 /** Default true: Dashboard must not mutate reminders until dry-run is verified. */
@@ -248,6 +250,7 @@ const REMINDER_PREFIXES = {
   P0: 'proposal_incomplete:',
   P3: 'proposal_not_sent:',
   P4: 'proposal_not_seen:',
+  SP1: 'proposal_needs_signed_proposal:',
 };
 
 const DATE_LIKE_CONDITION_KEY_PATTERN =
@@ -1784,6 +1787,33 @@ const evaluateReminderBusinessValidity = async (reminder, cache) => {
     return { valid: !invalid, reason: invalid ? 'condition_cleared' : 'valid' };
   }
 
+  if (conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.SP1)) {
+    const proposalsById = await ensureEntityMap(cache, 'Proposal');
+    if (!proposalsById) return { valid: true, reason: 'proposal_loader_failed' };
+    const proposal = proposalsById.get(sourceId);
+    if (!proposal) return { valid: false, reason: 'source_deleted' };
+
+    if (
+      proposal.form_status !== 'submitted'
+      || proposal.form_status === 'cancelled'
+      || proposal.proposal_sent_to_client !== true
+      || !toTrimmedValue(proposal.project_id)
+    ) {
+      return { valid: false, reason: 'condition_cleared' };
+    }
+
+    const signedProposalsById = await ensureEntityMap(cache, 'SignedProposal');
+    if (!signedProposalsById) return { valid: true, reason: 'signed_proposal_loader_failed' };
+
+    const hasSignedProposal = [...signedProposalsById.values()].some((signedProposal) => {
+      if (signedProposal?.form_status === 'cancelled') return false;
+      if (toTrimmedValue(signedProposal.proposal_id) === proposal.id) return true;
+      return toTrimmedValue(signedProposal.project_id) === toTrimmedValue(proposal.project_id);
+    });
+
+    return { valid: !hasSignedProposal, reason: hasSignedProposal ? 'condition_cleared' : 'valid' };
+  }
+
   if (conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.P2)) {
     const projectsById = await ensureEntityMap(cache, 'Project');
     if (!projectsById) return { valid: true, reason: 'project_loader_failed' };
@@ -2010,10 +2040,13 @@ export async function runReminderReconciliationNow(reason = 'manual') {
       ensureEntityMap(cache, 'Client'),
       ensureEntityMap(cache, 'Project'),
       ensureEntityMap(cache, 'Proposal'),
+      ensureEntityMap(cache, 'SignedProposal'),
     ]);
 
     const inquiriesById = cache.InquiryById;
     const proposalsById = cache.ProposalById;
+    const signedProposalsById = cache.SignedProposalById;
+    cache.signedProposals = signedProposalsById ? [...signedProposalsById.values()] : [];
     const remainingBeforeP1 = Math.max(RECONCILIATION_MAX_MUTATIONS_PER_RUN - result.mutationCount, 0);
 
     if (remainingBeforeP1 > 0 && inquiriesById && proposalsById) {
@@ -2032,6 +2065,25 @@ export async function runReminderReconciliationNow(reason = 'manual') {
       if (p1Summary.hasMore || p1Summary.rateLimited || result.mutationCount >= RECONCILIATION_MAX_MUTATIONS_PER_RUN) {
         result.hasMore = true;
         return result;
+      }
+    }
+
+    if (proposalsById && result.mutationCount < RECONCILIATION_MAX_MUTATIONS_PER_RUN) {
+      const { runSignedProposalNeedReminderRuleForProposal } = await import('@/lib/proposalReminderRules');
+      for (const proposal of proposalsById.values()) {
+        if (result.mutationCount >= RECONCILIATION_MAX_MUTATIONS_PER_RUN) {
+          result.hasMore = true;
+          break;
+        }
+
+        const verdict = await runSignedProposalNeedReminderRuleForProposal(proposal, cache);
+        if (
+          verdict?.action === 'created'
+          || verdict?.action === 'updated'
+          || verdict?.action === 'resolved'
+        ) {
+          result.mutationCount += 1;
+        }
       }
     }
 

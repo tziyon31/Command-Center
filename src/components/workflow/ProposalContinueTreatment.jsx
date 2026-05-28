@@ -9,12 +9,14 @@ import {
 } from '@/lib/workflowNavigation';
 
 export default function ProposalContinueTreatment({
+  proposalId = '',
   formStatus,
   clientId = '',
   clientName = '',
   projectId = '',
   projectName = '',
   sourceInquiryId = '',
+  documentNote = '',
   proposalSentToClient = false,
   disabled = false,
 }) {
@@ -57,10 +59,12 @@ export default function ProposalContinueTreatment({
   };
 
   const signedProposalUrl = buildSignedProposalFormPageUrl({
+    proposalId: proposalId || undefined,
     projectId: projectId || undefined,
     projectName: projectName.trim(),
     clientName: trimmedClientName,
     sourceInquiryId: sourceInquiryId || undefined,
+    documentNote: documentNote.trim(),
   });
 
   return (
