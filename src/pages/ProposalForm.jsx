@@ -27,6 +27,8 @@ import {
   syncProposalReminderRulesAfterProjectSave,
 } from '@/lib/proposalReminderRules';
 import { cancelRemindersForDeletedSource } from '@/lib/reminderEngine';
+import { runClientReminderRulesForClient } from '@/lib/clientReminderRules';
+import { runInquiryReminderRulesForInquiry } from '@/lib/inquiryReminderRules';
 
 const EMPTY_FORM = {
   client_id: '',
@@ -288,8 +290,46 @@ export default function ProposalForm() {
       client_name: client.name,
       source_inquiry_id: applySourceInquiryId(prev.source_inquiry_id, client.source_inquiry_id),
     }, client.id));
-    queryClient.invalidateQueries({ queryKey: ['clients'] });
-    setIsCreateClientOpen(false);
+
+    const syncAfterCreate = async () => {
+      await queryClient.invalidateQueries({ queryKey: ['clients'] });
+
+      let proposalForRules = null;
+
+      if (recordId) {
+        const patch = {
+          client_id: client.id,
+          client_name: client.name,
+        };
+        const updatedProposal = await base44.entities.Proposal.update(recordId, patch);
+        proposalForRules = updatedProposal;
+        await queryClient.invalidateQueries({ queryKey: ['proposal', recordId] });
+      }
+
+      const sourceInquiryId = client.source_inquiry_id || formData.source_inquiry_id;
+
+      if (sourceInquiryId) {
+        const inquiries = await base44.entities.Inquiry.filter({ id: sourceInquiryId });
+        if (inquiries?.[0]) {
+          await runInquiryReminderRulesForInquiry(inquiries[0], { clients: [client] });
+        }
+      } else {
+        await runClientReminderRulesForClient(client);
+      }
+
+      if (proposalForRules?.id) {
+        await runProposalReminderRulesForProposal(proposalForRules);
+      }
+
+      await queryClient.invalidateQueries({ queryKey: ['proposals'] });
+      await queryClient.invalidateQueries({ queryKey: ['reminders'] });
+      setIsCreateClientOpen(false);
+    };
+
+    void syncAfterCreate().catch((error) => {
+      console.error('[ProposalForm] failed to sync client creation flow', error);
+      alert('הלקוח נוצר, אבל לא הצלחנו להשלים סנכרון תזכורות וקישור להצעה.');
+    });
   };
 
   const handleProjectSelect = (selectedProjectId) => {
@@ -332,6 +372,24 @@ export default function ProposalForm() {
         project.source_inquiry_id || client?.source_inquiry_id,
       ),
     }));
+
+    if (recordId) {
+      try {
+        const updatedProposal = await base44.entities.Proposal.update(recordId, {
+          project_id: project.id,
+          project_name: project.name || '',
+          client_id: project.client_id || (client?.id || formData.client_id || ''),
+          client_name: client?.name || formData.client_name,
+        });
+        await runProposalReminderRulesForProposal(updatedProposal);
+        await queryClient.invalidateQueries({ queryKey: ['proposal', recordId] });
+        await queryClient.invalidateQueries({ queryKey: ['proposals'] });
+        await queryClient.invalidateQueries({ queryKey: ['reminders'] });
+      } catch (error) {
+        console.error('[ProposalForm] failed to sync proposal after project creation', error);
+      }
+    }
+
     setIsCreateProjectOpen(false);
   };
 

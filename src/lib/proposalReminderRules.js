@@ -47,6 +47,37 @@ const resolveClientNameForProject = (project, cache = {}) => {
   return linkedClient?.name || project?.client_name || '';
 };
 
+const toShortId = (value) => String(value || '').slice(0, 6);
+
+const formatShortDate = (value) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+
+  return new Intl.DateTimeFormat('he-IL', {
+    day: '2-digit',
+    month: '2-digit',
+    year: '2-digit',
+  }).format(date);
+};
+
+const buildProposalReminderContextDescription = (proposal, fallback) => {
+  if (proposal?.project_name) {
+    return `פרויקט: ${proposal.project_name}`;
+  }
+
+  if (proposal?.document_note) {
+    return `הערה/מספר הצעה: ${proposal.document_note}`;
+  }
+
+  const dateLabel = formatShortDate(proposal?.created_date || proposal?.submitted_at);
+  if (dateLabel) {
+    return `הצעה מ-${dateLabel}`;
+  }
+
+  return `מזהה הצעה: ${toShortId(proposal?.id) || fallback || ''}`.trim();
+};
+
 const isProjectEligibleForP2 = (project) => (
   Boolean(project?.id)
   && Boolean(project?.client_id)
@@ -86,7 +117,10 @@ const buildP0ReminderInput = (proposal) => {
 
   return {
     title: `להשלים הצעת מחיר עבור ${clientName}`,
-    description: 'הצעת המחיר נפתחה אך עדיין לא הוגשה.',
+    description: buildProposalReminderContextDescription(
+      proposal,
+      'טיוטה',
+    ),
     client_name: clientName,
     client_id: proposal.client_id || '',
     project_name: proposal.project_name || '',
@@ -105,7 +139,10 @@ const buildP3ReminderInput = (proposal) => {
 
   return {
     title: `לשלוח הצעת מחיר ללקוח ${clientName}`,
-    description: 'הצעת המחיר קיימת במערכת אך עדיין לא סומן שנשלחה ללקוח.',
+    description: buildProposalReminderContextDescription(
+      proposal,
+      'טרם נשלחה',
+    ),
     client_name: clientName,
     client_id: proposal.client_id || '',
     project_name: proposal.project_name || '',
@@ -150,7 +187,10 @@ const buildP4ReminderInput = (proposal) => {
 
   return {
     title: `לוודא שהלקוח ראה את הצעת המחיר עבור ${clientName}`,
-    description: 'הצעת המחיר נשלחה, אך עדיין אין סימון שהלקוח ראה אותה.',
+    description: buildProposalReminderContextDescription(
+      proposal,
+      'נשלחה וממתינה לאישור צפייה',
+    ),
     client_name: clientName,
     client_id: proposal.client_id || '',
     project_name: proposal.project_name || '',

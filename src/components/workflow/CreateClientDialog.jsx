@@ -34,6 +34,7 @@ export default function CreateClientDialog({
   initialName = '',
   sourceInquiryId = '',
   onClientCreated,
+  onCreateClient,
 }) {
   const [formData, setFormData] = useState({ ...EMPTY_FORM, name: initialName });
   const [isSaving, setIsSaving] = useState(false);
@@ -70,8 +71,11 @@ export default function CreateClientDialog({
         payload.source_inquiry_id = sourceInquiryId;
       }
 
-      const client = await base44.entities.Client.create(payload);
-      onClientCreated?.(client);
+      const client = onCreateClient
+        ? await onCreateClient(payload)
+        : await base44.entities.Client.create(payload);
+
+      await onClientCreated?.(client);
       onOpenChange(false);
     } catch (error) {
       console.error('[CreateClientDialog] failed to create client', error);

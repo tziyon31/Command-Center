@@ -164,7 +164,7 @@ export async function hasInquiryProject(inquiryId, cache = {}) {
 /**
  * R1: remind to complete and submit an inquiry when it is not submitted.
  */
-async function runR1ReminderRuleForInquiry(inquiry) {
+async function runR1ReminderRuleForInquiry(inquiry, cache = {}) {
   if (!inquiry?.id) {
     return { status: 'skipped', action: null, reason: 'no_inquiry_id', rule: 'r1' };
   }
@@ -250,7 +250,7 @@ async function runR2ReminderRuleForInquiry(inquiry, cache = {}) {
 }
 
 export async function runInquiryReminderRulesForInquiry(inquiry, cache = {}) {
-  const r1 = await runR1ReminderRuleForInquiry(inquiry);
+  const r1 = await runR1ReminderRuleForInquiry(inquiry, cache);
   const r2 = await runR2ReminderRuleForInquiry(inquiry, cache);
 
   return {

@@ -36,6 +36,7 @@ export default function ProjectClientSection({
       clientName: client.name,
       sourceInquiryId: client.source_inquiry_id || sourceInquiryId || '',
       fillProjectName: true,
+      createdClient: client,
     });
   };
 

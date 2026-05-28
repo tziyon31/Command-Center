@@ -92,6 +92,66 @@ const getActiveDays = (activeSince) => {
   return Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
 };
 
+const shortId = (value) => String(value || '').slice(0, 6);
+
+const formatShortDate = (value) => {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+
+  return new Intl.DateTimeFormat('he-IL', {
+    day: '2-digit',
+    month: '2-digit',
+    year: '2-digit',
+  }).format(date);
+};
+
+const startsWithKey = (conditionKey, prefix) =>
+  String(conditionKey || '').startsWith(prefix);
+
+const buildReminderContextLine = (reminder) => {
+  const conditionKey = reminder?.condition_key || '';
+  const sourceType = reminder?.source_type || '';
+  const projectName = String(reminder?.project_name || '').trim();
+  const clientName = String(reminder?.client_name || '').trim();
+  const description = String(reminder?.description || '').trim();
+
+  if (
+    startsWithKey(conditionKey, 'proposal_incomplete:')
+    || startsWithKey(conditionKey, 'proposal_not_sent:')
+    || startsWithKey(conditionKey, 'proposal_not_seen:')
+  ) {
+    if (projectName) return `הצעה · פרויקט: ${projectName}`;
+
+    if (description && !description.startsWith('הצעת המחיר')) {
+      return `הצעה · ${description}`;
+    }
+
+    const createdDate = formatShortDate(reminder?.created_date || reminder?.submitted_at || reminder?.active_since);
+    if (createdDate) return `הצעה · נוצרה ${createdDate}`;
+    return `הצעה · מזהה ${shortId(reminder?.source_id)}`;
+  }
+
+  if (
+    startsWithKey(conditionKey, 'project_needs_proposal:')
+    || sourceType === 'project'
+  ) {
+    if (projectName) return `פרויקט: ${projectName}`;
+    return `פרויקט: ${shortId(reminder?.source_id)}`;
+  }
+
+  if (
+    startsWithKey(conditionKey, 'client_needs_project:')
+    || sourceType === 'client'
+  ) {
+    if (clientName) return `לקוח: ${clientName}`;
+    return null;
+  }
+
+  if (projectName) return `פרויקט: ${projectName}`;
+  return null;
+};
+
 export default function ReminderCard({ reminder, onSnoozed, className }) {
   const navigate = useNavigate();
   const [isSnoozing, setIsSnoozing] = useState(false);
@@ -101,6 +161,7 @@ export default function ReminderCard({ reminder, onSnoozed, className }) {
   const activeDays = getActiveDays(reminder.active_since);
   const frequencyLabel = FREQUENCY_LABELS[reminder.frequency] || reminder.frequency || 'יומי';
   const nextRemindAtLabel = formatShortDateTime(reminder.next_remind_at);
+  const contextLine = buildReminderContextLine(reminder);
 
   const handleActionClick = () => {
     const actionUrl = reminder.action_url;
@@ -185,8 +246,8 @@ export default function ReminderCard({ reminder, onSnoozed, className }) {
 
         <div className="mt-1.5 space-y-0.5 text-xs text-muted-foreground">
           <p className="truncate">{reminder.client_name}</p>
-          {reminder.project_name && (
-            <p className="truncate">פרויקט: {reminder.project_name}</p>
+          {contextLine && (
+            <p className="truncate">{contextLine}</p>
           )}
         </div>
 

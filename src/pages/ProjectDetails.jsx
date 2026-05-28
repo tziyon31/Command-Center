@@ -40,6 +40,7 @@ import ProjectClientSection from '@/components/workflow/ProjectClientSection';
 import ProjectCreateFormFields from '@/components/workflow/ProjectCreateFormFields';
 import { assertProjectHasClientId } from '@/lib/projectValidation';
 import { runClientReminderRulesForClient } from '@/lib/clientReminderRules';
+import { runInquiryReminderRulesForInquiry } from '@/lib/inquiryReminderRules';
 import { syncProposalReminderRulesAfterProjectSave } from '@/lib/proposalReminderRules';
 import { buildProjectCreateFormFromSearchParams } from '@/lib/projectDefaults';
 import { buildProjectCreatePayloadFromForm } from '@/lib/projectCreatePayload';
@@ -257,7 +258,13 @@ export default function ProjectDetails() {
     setCollectionTargetDate(getCollectionTargetDateForInput(project));
   }, [isCollectionDialogOpen, project]);
 
-  const applyProjectClientChange = ({ clientId, clientName, sourceInquiryId: nextSourceId, fillProjectName }, mode) => {
+  const applyProjectClientChange = ({
+    clientId,
+    clientName,
+    sourceInquiryId: nextSourceId,
+    fillProjectName,
+    createdClient,
+  }, mode) => {
     const applyToForm = (prev) => ({
       ...prev,
       client_id: clientId,
@@ -276,6 +283,25 @@ export default function ProjectDetails() {
     }
 
     queryClient.invalidateQueries({ queryKey: ['clients'] });
+
+    if (createdClient) {
+      const syncRules = async () => {
+        if (createdClient.source_inquiry_id) {
+          const inquiries = await base44.entities.Inquiry.filter({ id: createdClient.source_inquiry_id });
+          if (inquiries?.[0]) {
+            await runInquiryReminderRulesForInquiry(inquiries[0], { clients: [createdClient] });
+          }
+        } else {
+          await runClientReminderRulesForClient(createdClient);
+        }
+
+        await queryClient.invalidateQueries({ queryKey: ['reminders'] });
+      };
+
+      void syncRules().catch((error) => {
+        console.error('[ProjectDetails] failed to sync reminders after inline client create', error);
+      });
+    }
   };
 
   const syncClientReminderAfterProjectSave = async (clientId) => {

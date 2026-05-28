@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Plus, Search } from 'lucide-react';
 import { assertProjectHasClientId } from '@/lib/projectValidation';
 import { runClientReminderRulesForClient } from '@/lib/clientReminderRules';
+import { runInquiryReminderRulesForInquiry } from '@/lib/inquiryReminderRules';
 import { syncProposalReminderRulesAfterProjectSave } from '@/lib/proposalReminderRules';
 import { buildInitialProjectForm, EMPTY_PROJECT_FORM } from '@/lib/projectDefaults';
 import { buildProjectCreatePayloadFromForm } from '@/lib/projectCreatePayload';
@@ -98,6 +99,26 @@ export default function Projects() {
       source_inquiry_id: prev.source_inquiry_id || update.sourceInquiryId || '',
     }));
     queryClient.invalidateQueries({ queryKey: ['clients'] });
+
+    if (update?.createdClient) {
+      const syncRules = async () => {
+        const createdClient = update.createdClient;
+        if (createdClient.source_inquiry_id) {
+          const inquiries = await base44.entities.Inquiry.filter({ id: createdClient.source_inquiry_id });
+          if (inquiries?.[0]) {
+            await runInquiryReminderRulesForInquiry(inquiries[0], { clients: [createdClient] });
+          }
+        } else {
+          await runClientReminderRulesForClient(createdClient);
+        }
+
+        await queryClient.invalidateQueries({ queryKey: ['reminders'] });
+      };
+
+      void syncRules().catch((error) => {
+        console.error('[Projects] failed to sync reminders after inline client create', error);
+      });
+    }
   };
 
   const handleDialogOpenChange = (open) => {
