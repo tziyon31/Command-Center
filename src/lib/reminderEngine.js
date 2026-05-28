@@ -185,6 +185,7 @@ const REMINDER_CONDITION_PREFIX_BY_ENTITY_TYPE = {
   inquiry: [
     'inquiry_missing_fields:',
     'inquiry_needs_next_step:',
+    'inquiry_needs_proposal:',
   ],
   client: ['client_needs_project:'],
   project: ['project_needs_proposal:'],
@@ -213,6 +214,7 @@ const KNOWN_ORPHAN_SOURCE_TYPES = new Set(
 const CONDITION_KEY_PREFIX_COUNTS = [
   { label: 'inquiry_missing_fields', prefix: 'inquiry_missing_fields:' },
   { label: 'inquiry_needs_next_step', prefix: 'inquiry_needs_next_step:' },
+  { label: 'inquiry_needs_proposal', prefix: 'inquiry_needs_proposal:' },
   { label: 'client_needs_project', prefix: 'client_needs_project:' },
   { label: 'project_needs_proposal', prefix: 'project_needs_proposal:' },
   { label: 'proposal_incomplete', prefix: 'proposal_incomplete:' },
@@ -240,6 +242,7 @@ const RECONCILIATION_STORAGE_KEYS = {
 const REMINDER_PREFIXES = {
   R1: 'inquiry_missing_fields:',
   R2: 'inquiry_needs_next_step:',
+  P1: 'inquiry_needs_proposal:',
   R4: 'client_needs_project:',
   P2: 'project_needs_proposal:',
   P0: 'proposal_incomplete:',
@@ -1838,6 +1841,32 @@ const evaluateReminderBusinessValidity = async (reminder, cache) => {
     return { valid: !(hasClient && hasProject), reason: hasClient && hasProject ? 'condition_cleared' : 'valid' };
   }
 
+  if (conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.P1)) {
+    const inquiriesById = await ensureEntityMap(cache, 'Inquiry');
+    if (!inquiriesById) return { valid: true, reason: 'inquiry_loader_failed' };
+
+    const inquiry = inquiriesById.get(sourceId);
+    if (!inquiry) return { valid: false, reason: 'source_deleted' };
+
+    if (
+      inquiry.form_status !== 'submitted'
+      || inquiry.form_status === 'cancelled'
+      || inquiry.status === 'cancelled'
+      || !toTrimmedValue(inquiry.client_name)
+    ) {
+      return { valid: false, reason: 'condition_cleared' };
+    }
+
+    const proposalsById = await ensureEntityMap(cache, 'Proposal');
+    if (!proposalsById) return { valid: true, reason: 'proposal_loader_failed' };
+
+    const hasProposal = [...proposalsById.values()].some(
+      (proposal) => proposal.source_inquiry_id === inquiry.id && proposal.form_status !== 'cancelled',
+    );
+
+    return { valid: !hasProposal, reason: hasProposal ? 'condition_cleared' : 'valid' };
+  }
+
   return { valid: true, reason: 'unsupported_condition_key' };
 };
 
@@ -1982,6 +2011,29 @@ export async function runReminderReconciliationNow(reason = 'manual') {
       ensureEntityMap(cache, 'Project'),
       ensureEntityMap(cache, 'Proposal'),
     ]);
+
+    const inquiriesById = cache.InquiryById;
+    const proposalsById = cache.ProposalById;
+    const remainingBeforeP1 = Math.max(RECONCILIATION_MAX_MUTATIONS_PER_RUN - result.mutationCount, 0);
+
+    if (remainingBeforeP1 > 0 && inquiriesById && proposalsById) {
+      const { runProposalReminderRulesForInquiries } = await import('@/lib/proposalReminderRules');
+      const p1Summary = await runProposalReminderRulesForInquiries(
+        [...inquiriesById.values()],
+        [...proposalsById.values()],
+        {
+          cache,
+          maxMutations: remainingBeforeP1,
+        },
+      );
+
+      result.mutationCount += Number(p1Summary.mutationCount || 0);
+
+      if (p1Summary.hasMore || p1Summary.rateLimited || result.mutationCount >= RECONCILIATION_MAX_MUTATIONS_PER_RUN) {
+        result.hasMore = true;
+        return result;
+      }
+    }
 
     const openReminders = (cache.reminders || []).filter(
       (reminder) => isOpenReminderStatus(reminder?.status),

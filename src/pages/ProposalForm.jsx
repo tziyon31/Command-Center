@@ -23,6 +23,7 @@ import CreateProjectDialog from '@/components/workflow/CreateProjectDialog';
 import ProposalOpenSignedProposal from '@/components/workflow/ProposalOpenSignedProposal';
 import { formatProjectSelectLabel } from '@/lib/projectSelectLabel';
 import {
+  runProposalReminderRulesForInquiry,
   runProposalReminderRulesForProposal,
   syncProposalReminderRulesAfterProjectSave,
 } from '@/lib/proposalReminderRules';
@@ -249,6 +250,12 @@ export default function ProposalForm() {
 
     try {
       await runProposalReminderRulesForProposal(saved);
+      if (saved.source_inquiry_id) {
+        const inquiries = await base44.entities.Inquiry.filter({ id: saved.source_inquiry_id });
+        if (inquiries?.[0]) {
+          await runProposalReminderRulesForInquiry(inquiries[0], { proposals: [saved] });
+        }
+      }
       queryClient.invalidateQueries({ queryKey: ['reminders'] });
     } catch (error) {
       console.error('[ProposalForm] failed to sync proposal reminder rules', error);

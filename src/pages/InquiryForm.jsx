@@ -19,6 +19,7 @@ import {
   formatCopiedAt,
 } from '@/lib/inquiryCopy';
 import { runInquiryReminderRulesForInquiry } from '@/lib/inquiryReminderRules';
+import { runProposalReminderRulesForInquiry } from '@/lib/proposalReminderRules';
 import {
   findClientBySourceInquiryId,
   findProjectBySourceInquiryId,
@@ -541,6 +542,10 @@ export default function InquiryForm() {
       queryClient.invalidateQueries(['inquiry', submittedInquiryId]);
 
       await syncInquiryReminderRules(submittedInquiryId);
+      if (savedInquiry?.id) {
+        await runProposalReminderRulesForInquiry(savedInquiry);
+      }
+      queryClient.invalidateQueries({ queryKey: ['reminders'] });
 
       alert('הטופס הוגש בהצלחה');
     } catch (error) {

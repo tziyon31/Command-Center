@@ -14,6 +14,7 @@ export const PROPOSAL_INCOMPLETE_CONDITION_PREFIX = 'proposal_incomplete:';
 export const PROPOSAL_NOT_SENT_CONDITION_PREFIX = 'proposal_not_sent:';
 export const PROPOSAL_NOT_SEEN_CONDITION_PREFIX = 'proposal_not_seen:';
 export const PROJECT_NEEDS_PROPOSAL_CONDITION_PREFIX = 'project_needs_proposal:';
+export const INQUIRY_NEEDS_PROPOSAL_CONDITION_PREFIX = 'inquiry_needs_proposal:';
 
 const INACTIVE_PROJECT_STATUSES = new Set(['cancelled']);
 
@@ -33,11 +34,21 @@ export function getProjectNeedsProposalConditionKey(projectId) {
   return `${PROJECT_NEEDS_PROPOSAL_CONDITION_PREFIX}${projectId}`;
 }
 
+export function getInquiryNeedsProposalConditionKey(inquiryId) {
+  return `${INQUIRY_NEEDS_PROPOSAL_CONDITION_PREFIX}${inquiryId}`;
+}
+
 const hasTrimmedClientName = (value) => Boolean(String(value || '').trim());
 
 const hasNonCancelledProposalForProject = (projectId, proposals = []) => (
   proposals.some(
     (proposal) => proposal.project_id === projectId && proposal.form_status !== 'cancelled',
+  )
+);
+
+const hasNonCancelledProposalForInquiry = (inquiryId, proposals = []) => (
+  proposals.some(
+    (proposal) => proposal.source_inquiry_id === inquiryId && proposal.form_status !== 'cancelled',
   )
 );
 
@@ -204,6 +215,25 @@ const buildP4ReminderInput = (proposal) => {
   };
 };
 
+const buildP1ReminderInput = (inquiry) => {
+  const clientName = inquiry.client_name.trim();
+
+  return {
+    title: `לפתוח הצעת מחיר עבור ${clientName}`,
+    description: 'הפנייה הוגשה אך עדיין לא נפתחה לה הצעת מחיר.',
+    client_name: clientName,
+    client_id: '',
+    project_name: '',
+    project_id: '',
+    source_type: 'inquiry',
+    source_id: inquiry.id,
+    condition_key: getInquiryNeedsProposalConditionKey(inquiry.id),
+    action_url: `/ProposalForm?source_inquiry_id=${inquiry.id}&client_name=${encodeURIComponent(clientName)}`,
+    action_label: 'פתח הצעת מחיר',
+    frequency: 'daily',
+  };
+};
+
 async function runP0ReminderRuleForProposal(proposal, cache = {}) {
   const conditionKey = getProposalIncompleteConditionKey(proposal?.id);
 
@@ -256,7 +286,7 @@ async function runP3ReminderRuleForProposal(proposal, cache = {}) {
     const result = await ensureReminderForCondition(
       false,
       { condition_key: conditionKey },
-      { immediate: false },
+      withReminderCache(cache, { immediate: false }),
     );
 
     return {
@@ -275,7 +305,7 @@ async function runP3ReminderRuleForProposal(proposal, cache = {}) {
   const result = await ensureReminderForCondition(
     conditionIsTrue,
     conditionIsTrue ? buildP3ReminderInput(proposal) : { condition_key: conditionKey },
-    { immediate: conditionIsTrue },
+    withReminderCache(cache, { immediate: conditionIsTrue }),
   );
 
   return {
@@ -390,6 +420,91 @@ async function runP2ReminderRuleForProject(project, cache = {}) {
   };
 }
 
+export async function runProposalReminderRulesForInquiry(inquiry, cache = {}) {
+  if (!inquiry?.id) {
+    return { status: 'skipped', action: null, reason: 'no_inquiry_id', rule: 'p1' };
+  }
+
+  const conditionKey = getInquiryNeedsProposalConditionKey(inquiry.id);
+  const proposals = cache.proposals ?? await base44.entities.Proposal.list();
+  const clientName = String(inquiry.client_name || '').trim();
+  const isCancelledInquiry = inquiry.form_status === 'cancelled' || inquiry.status === 'cancelled';
+  const hasProposal = hasNonCancelledProposalForInquiry(inquiry.id, proposals);
+
+  const conditionIsTrue = (
+    inquiry.form_status === 'submitted'
+    && !isCancelledInquiry
+    && Boolean(clientName)
+    && !hasProposal
+  );
+
+  const result = await ensureReminderForCondition(
+    conditionIsTrue,
+    conditionIsTrue ? buildP1ReminderInput(inquiry) : { condition_key: conditionKey },
+    withReminderCache(cache, { immediate: conditionIsTrue }),
+  );
+
+  return {
+    status: conditionIsTrue ? 'applied' : 'cleared',
+    action: classifyRuleAction(result),
+    conditionKey,
+    rule: 'p1',
+  };
+}
+
+export async function runProposalReminderRulesForInquiries(
+  inquiries = [],
+  proposals = [],
+  options = {},
+) {
+  const summary = {
+    checked: 0,
+    created: 0,
+    updated: 0,
+    resolved: 0,
+    skipped: 0,
+    errors: 0,
+    rateLimited: false,
+    hasMore: false,
+    mutationCount: 0,
+  };
+
+  const maxMutations = Number.isFinite(options.maxMutations)
+    ? Number(options.maxMutations)
+    : Number.POSITIVE_INFINITY;
+  const cache = options.cache || {};
+  cache.proposals = proposals;
+
+  for (const inquiry of inquiries) {
+    if (summary.rateLimited) break;
+    if (summary.mutationCount >= maxMutations) {
+      summary.hasMore = true;
+      break;
+    }
+
+    summary.checked += 1;
+
+    try {
+      const result = await runProposalReminderRulesForInquiry(inquiry, cache);
+      tallyRuleResult(summary, result);
+
+      if (result.action === 'created' || result.action === 'updated' || result.action === 'resolved') {
+        summary.mutationCount += 1;
+      }
+    } catch (error) {
+      summary.errors += 1;
+      console.error('[ProposalReminderRules] P1 failed for inquiry', inquiry?.id, error);
+
+      if (isRateLimitError(error)) {
+        summary.rateLimited = true;
+        break;
+      }
+    }
+  }
+
+  return summary;
+}
+
 export async function syncProposalReminderRulesAfterProjectSave(project) {
   try {
     return await runProposalReminderRulesForProject(project);
@@ -462,12 +577,14 @@ export async function runProposalReminderRulesForAll(cache = {}) {
   let proposals = [];
   let projects = [];
   let clients = [];
+  let inquiries = [];
 
   try {
-    [proposals, projects, clients] = await Promise.all([
+    [proposals, projects, clients, inquiries] = await Promise.all([
       base44.entities.Proposal.list(),
       base44.entities.Project.list(),
       base44.entities.Client.list(),
+      base44.entities.Inquiry.list(),
     ]);
   } catch (error) {
     console.error('[ProposalReminderRules] failed to load entities', error);
@@ -478,6 +595,7 @@ export async function runProposalReminderRulesForAll(cache = {}) {
   cache.proposals = proposals;
   cache.clients = clients;
   cache.projects = projects;
+  cache.inquiries = inquiries;
 
   try {
     await loadReminderEngineCache(cache);
@@ -519,6 +637,28 @@ export async function runProposalReminderRulesForAll(cache = {}) {
         break;
       }
     }
+  }
+
+  const remainingMutationBudget = Number.isFinite(cache?.maxMutations)
+    ? Math.max(cache.maxMutations - summary.created - summary.updated - summary.resolved, 0)
+    : Number.POSITIVE_INFINITY;
+
+  const p1Summary = await runProposalReminderRulesForInquiries(
+    inquiries,
+    proposals,
+    {
+      cache,
+      maxMutations: remainingMutationBudget,
+    },
+  );
+  summary.checked += p1Summary.checked;
+  summary.created += p1Summary.created;
+  summary.updated += p1Summary.updated;
+  summary.resolved += p1Summary.resolved;
+  summary.skipped += p1Summary.skipped;
+  summary.errors += p1Summary.errors;
+  if (p1Summary.rateLimited) {
+    summary.rateLimited = true;
   }
 
   for (const proposal of proposals) {
