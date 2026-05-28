@@ -23,10 +23,10 @@ import CreateProjectDialog from '@/components/workflow/CreateProjectDialog';
 import ProposalOpenSignedProposal from '@/components/workflow/ProposalOpenSignedProposal';
 import { formatProjectSelectLabel } from '@/lib/projectSelectLabel';
 import {
-  cancelRemindersForProposal,
   runProposalReminderRulesForProposal,
   syncProposalReminderRulesAfterProjectSave,
 } from '@/lib/proposalReminderRules';
+import { cancelRemindersForDeletedSource } from '@/lib/reminderEngine';
 
 const EMPTY_FORM = {
   client_id: '',
@@ -453,7 +453,7 @@ export default function ProposalForm() {
       await base44.entities.Proposal.delete(recordId);
 
       try {
-        await cancelRemindersForProposal(recordId);
+        await cancelRemindersForDeletedSource('proposal', recordId);
         queryClient.invalidateQueries({ queryKey: ['reminders'] });
       } catch (error) {
         console.error('[ProposalForm] failed to cancel proposal reminders', error);

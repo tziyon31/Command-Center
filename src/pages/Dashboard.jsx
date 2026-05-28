@@ -1,4 +1,4 @@
-import React, { useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
@@ -24,15 +24,12 @@ import QuoteBreakdownCard from '../components/dashboard/QuoteBreakdownCard.jsx';
 import TodayTasksCard from '../components/dashboard/TodayTasksCard.jsx';
 import ReminderPanel from '../components/reminders/ReminderPanel.jsx';
 import {
-  cleanupDuplicateConditionKeyReminders,
-  cleanupOrphanReminders,
+  createReminderEngineCache,
   isRateLimitError,
-  loadReminderEngineCache,
   loadVisibleReminders,
+  runReminderReconciliationInBackground,
+  validateVisibleReminders,
 } from '@/lib/reminderEngine';
-import { runInquiryReminderRulesForAll } from '@/lib/inquiryReminderRules';
-import { runClientReminderRulesForAll } from '@/lib/clientReminderRules';
-import { runProposalReminderRulesForAll } from '@/lib/proposalReminderRules';
 import { cn } from '@/lib/utils';
 
 const OPEN_PROPOSAL_STATUSES = ['pricing', 'waiting'];
@@ -228,70 +225,38 @@ export default function Dashboard() {
   } = useQuery({
     queryKey: ['reminders', 'visible'],
     queryFn: async () => {
-      const scanCache = {};
+      const cache = createReminderEngineCache();
+      const visible = await loadVisibleReminders({ cache });
 
       try {
-        await loadReminderEngineCache(scanCache);
-      } catch (error) {
-        console.error('[Dashboard] failed to preload reminder cache', error);
+        const validation = await validateVisibleReminders(visible, {
+          cache,
+          applyMutations: true,
+        });
 
-        if (isRateLimitError(error)) {
+        if (validation.hasMutations) {
           return loadVisibleReminders();
         }
-      }
 
-      try {
-        await runInquiryReminderRulesForAll(scanCache);
+        return validation.visible;
       } catch (error) {
-        console.error('[Dashboard] inquiry reminder rules failed', error);
-      }
-
-      try {
-        await runClientReminderRulesForAll(scanCache);
-      } catch (error) {
-        console.error('[Dashboard] client reminder rules failed', error);
-      }
-
-      try {
-        const proposalSummary = await runProposalReminderRulesForAll(scanCache);
-
-        if (proposalSummary?.rateLimited) {
-          console.warn('[Dashboard] proposal rules stopped due to rate limit');
+        if (isRateLimitError(error)) {
+          console.warn('[Dashboard] visible reminder validation skipped due to rate limit');
+          return visible;
         }
-      } catch (error) {
-        console.error('[Dashboard] proposal reminder rules failed', error);
+
+        console.warn('[Dashboard] visible reminder validation failed', error);
+        return visible;
       }
-
-      try {
-        const orphanCleanup = await cleanupOrphanReminders({
-          dryRun: true,
-          cache: scanCache,
-        });
-
-        if (orphanCleanup.wouldCancel > 0) {
-          console.info('[Dashboard] orphan cleanup dry-run', orphanCleanup);
-        }
-      } catch (error) {
-        console.error('[Dashboard] orphan reminder cleanup failed', error);
-      }
-
-      try {
-        const duplicateCleanup = await cleanupDuplicateConditionKeyReminders({
-          dryRun: true,
-          cache: scanCache,
-        });
-
-        if (duplicateCleanup.wouldCancelDuplicates > 0) {
-          console.info('[Dashboard] duplicate cleanup dry-run', duplicateCleanup);
-        }
-      } catch (error) {
-        console.error('[Dashboard] duplicate reminder cleanup failed', error);
-      }
-
-      return loadVisibleReminders({ cache: scanCache });
     },
     enabled: canSeeFullDashboard && !!currentUser,
   });
+
+  useEffect(() => {
+    if (!canSeeFullDashboard || !currentUser) return;
+
+    void runReminderReconciliationInBackground('dashboard_load');
+  }, [canSeeFullDashboard, currentUser, visibleReminders.length]);
 
   const todayOpenTasks = useMemo(() => {
     const today = new Date().toISOString().split('T')[0];

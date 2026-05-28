@@ -223,6 +223,30 @@ const CONDITION_KEY_PREFIX_COUNTS = [
 /** Default true: Dashboard must not mutate reminders until dry-run is verified. */
 export const REMINDER_CLEANUP_DRY_RUN_DEFAULT = true;
 
+const RECONCILIATION_COOLDOWN_MS = 10 * 60 * 1000;
+const RECONCILIATION_RATE_LIMIT_COOLDOWN_MS = 2 * 60 * 1000;
+const RECONCILIATION_STALE_LOCK_MS = 5 * 60 * 1000;
+const RECONCILIATION_HAS_MORE_COOLDOWN_MS = 90 * 1000;
+const RECONCILIATION_MAX_MUTATIONS_PER_RUN = 25;
+
+const RECONCILIATION_STORAGE_KEYS = {
+  LAST_RUN_AT: 'lastReminderReconciliationAt',
+  LAST_ERROR_AT: 'lastReminderReconciliationErrorAt',
+  LAST_ERROR_TYPE: 'lastReminderReconciliationErrorType',
+  LOCK: 'reminderReconciliationLock',
+  HAS_MORE: 'reminderReconciliationHasMore',
+};
+
+const REMINDER_PREFIXES = {
+  R1: 'inquiry_missing_fields:',
+  R2: 'inquiry_needs_next_step:',
+  R4: 'client_needs_project:',
+  P2: 'project_needs_proposal:',
+  P0: 'proposal_incomplete:',
+  P3: 'proposal_not_sent:',
+  P4: 'proposal_not_seen:',
+};
+
 const DATE_LIKE_CONDITION_KEY_PATTERN =
   /\d{4}[-/]\d{2}[-/]\d{2}|\d{4}-\d{2}-\d{2}|:20\d{2}|:today|:tomorrow|:date/i;
 
@@ -438,7 +462,7 @@ export function pickPrimaryReminderForConditionKey(reminders, now = new Date()) 
 /**
  * Cancels all non-cancelled reminders linked to a deleted source (soft cancel, not hard delete).
  */
-export async function cancelRemindersForDeletedSource(sourceType, sourceId) {
+export async function cancelRemindersForDeletedSource(sourceType, sourceId, options = {}) {
   if (!sourceType || !sourceId) {
     return {
       ...emptyCancelRemindersSummary(),
@@ -449,10 +473,12 @@ export async function cancelRemindersForDeletedSource(sourceType, sourceId) {
 
   const summary = emptyCancelRemindersSummary();
 
-  let reminders = [];
+  let reminders = options.cache?.reminders ?? null;
 
   try {
-    reminders = await base44.entities.Reminder.list();
+    if (!reminders) {
+      reminders = await base44.entities.Reminder.list();
+    }
   } catch (error) {
     summary.errors += 1;
     throw error;
@@ -575,6 +601,9 @@ export async function cancelOrphanRemindersForSourceType(
  */
 export async function cleanupOrphanReminders(options = {}) {
   const dryRun = options.dryRun ?? REMINDER_CLEANUP_DRY_RUN_DEFAULT;
+  const maxMutations = Number.isFinite(options.maxMutations)
+    ? Number(options.maxMutations)
+    : Number.POSITIVE_INFINITY;
 
   const summary = {
     dryRun,
@@ -588,6 +617,7 @@ export async function cleanupOrphanReminders(options = {}) {
     loaderStatus: {},
     errors: [],
     wouldCancelReminders: [],
+    hasMore: false,
   };
 
   let reminders = options.cache?.reminders ?? null;
@@ -663,6 +693,11 @@ export async function cleanupOrphanReminders(options = {}) {
     try {
       await cancelReminder(reminder.id, 'source_deleted');
       summary.cancelled += 1;
+
+      if (summary.cancelled >= maxMutations) {
+        summary.hasMore = true;
+        break;
+      }
     } catch (error) {
       summary.errors.push({
         reminderId: reminder.id,
@@ -693,6 +728,9 @@ export async function cleanupOrphanReminders(options = {}) {
 export async function cleanupDuplicateConditionKeyReminders(options = {}) {
   const now = options.now ?? new Date();
   const dryRun = options.dryRun ?? REMINDER_CLEANUP_DRY_RUN_DEFAULT;
+  const maxMutations = Number.isFinite(options.maxMutations)
+    ? Number(options.maxMutations)
+    : Number.POSITIVE_INFINITY;
 
   const summary = {
     dryRun,
@@ -703,6 +741,7 @@ export async function cleanupDuplicateConditionKeyReminders(options = {}) {
     skippedEmptyConditionKey: 0,
     errors: [],
     wouldCancelReminders: [],
+    hasMore: false,
   };
 
   let reminders = options.cache?.reminders ?? null;
@@ -779,6 +818,11 @@ export async function cleanupDuplicateConditionKeyReminders(options = {}) {
       try {
         await cancelReminder(reminder.id, 'duplicate_condition_key_cleanup');
         summary.cancelledDuplicates += 1;
+
+        if (summary.cancelledDuplicates >= maxMutations) {
+          summary.hasMore = true;
+          break;
+        }
       } catch (error) {
         summary.errors.push({
           reminderId: reminder.id,
@@ -791,6 +835,10 @@ export async function cleanupDuplicateConditionKeyReminders(options = {}) {
           error,
         );
       }
+    }
+
+    if (summary.hasMore) {
+      break;
     }
   }
 
@@ -1307,6 +1355,79 @@ export async function loadReminderEngineCache(cache = null, options = {}) {
   return target;
 }
 
+const hasBrowserStorage = () => (
+  typeof globalThis !== 'undefined'
+  && globalThis.localStorage
+  && typeof globalThis.localStorage.getItem === 'function'
+);
+
+const readStorage = (key) => {
+  if (!hasBrowserStorage()) return null;
+
+  try {
+    return globalThis.localStorage.getItem(key);
+  } catch (_error) {
+    return null;
+  }
+};
+
+const writeStorage = (key, value) => {
+  if (!hasBrowserStorage()) return;
+
+  try {
+    globalThis.localStorage.setItem(key, value);
+  } catch (_error) {
+    // ignore storage quota/runtime errors
+  }
+};
+
+const removeStorage = (key) => {
+  if (!hasBrowserStorage()) return;
+
+  try {
+    globalThis.localStorage.removeItem(key);
+  } catch (_error) {
+    // ignore storage/runtime errors
+  }
+};
+
+const parseStorageTimestamp = (value) => {
+  if (!value) return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+};
+
+const nowMs = () => Date.now();
+
+const conditionKeyStartsWith = (conditionKey, prefix) =>
+  String(conditionKey || '').startsWith(prefix);
+
+const ensureEntityMap = async (cache, entityName) => {
+  const key = `${entityName}ById`;
+  const statusKey = `${entityName}LoadStatus`;
+
+  if (cache[key]) {
+    return cache[key];
+  }
+  if (cache[statusKey] === 'failed') {
+    return null;
+  }
+
+  try {
+    const entity = base44.entities[entityName];
+    const items = entity && typeof entity.list === 'function' ? await entity.list() : [];
+    const map = new Map((items || []).map((item) => [item.id, item]));
+
+    cache[key] = map;
+    cache[statusKey] = 'loaded';
+    return map;
+  } catch (error) {
+    cache[statusKey] = 'failed';
+    console.warn('[ReminderEngine] failed to load entity map', { entityName }, error);
+    return null;
+  }
+};
+
 export function findReminderByConditionKeyInCache(cache, conditionKey, now = new Date()) {
   const normalizedKey = conditionKey ? String(conditionKey).trim() : '';
 
@@ -1404,13 +1525,14 @@ const parseDailyReminderTimeParts = (timeValue) => {
   };
 };
 
-function computeNextReminderAt({
-  frequency = 'daily',
-  immediate = false,
-  settings = null,
-  now = new Date(),
-  next_remind_at: nextRemindAt,
-} = {}) {
+function computeNextReminderAt(params = {}) {
+  const {
+    frequency = 'daily',
+    immediate = false,
+    settings = null,
+    now = new Date(),
+    nextRemindAt,
+  } = params;
   if (immediate) {
     return now.toISOString();
   }
@@ -1502,7 +1624,7 @@ export async function upsertReminder(input, options = {}) {
     immediate: options.immediate === true,
     settings,
     now,
-    next_remind_at: input.next_remind_at,
+    nextRemindAt: input.next_remind_at,
   });
 
   if (!existing) {
@@ -1616,6 +1738,387 @@ export async function ensureReminderForCondition(conditionIsTrue, reminderInput,
   }
 
   return resolveReminderByConditionKey(conditionKey, 'condition_cleared', options);
+}
+
+const toTrimmedValue = (value) => String(value || '').trim();
+
+const evaluateReminderBusinessValidity = async (reminder, cache) => {
+  const conditionKey = toTrimmedValue(reminder?.condition_key);
+  const sourceType = toTrimmedValue(reminder?.source_type);
+  const sourceId = toTrimmedValue(reminder?.source_id);
+
+  if (!conditionKey || !sourceType || !sourceId) {
+    return { valid: true, reason: 'missing_fields_skip' };
+  }
+
+  if (conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.P0)) {
+    const proposalsById = await ensureEntityMap(cache, 'Proposal');
+    if (!proposalsById) return { valid: true, reason: 'proposal_loader_failed' };
+    const proposal = proposalsById.get(sourceId);
+    if (!proposal) return { valid: false, reason: 'source_deleted' };
+
+    const invalid = proposal.form_status === 'submitted' || proposal.form_status === 'cancelled';
+    return { valid: !invalid, reason: invalid ? 'condition_cleared' : 'valid' };
+  }
+
+  if (conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.P3)) {
+    const proposalsById = await ensureEntityMap(cache, 'Proposal');
+    if (!proposalsById) return { valid: true, reason: 'proposal_loader_failed' };
+    const proposal = proposalsById.get(sourceId);
+    if (!proposal) return { valid: false, reason: 'source_deleted' };
+
+    const invalid = proposal.proposal_sent_to_client === true;
+    return { valid: !invalid, reason: invalid ? 'condition_cleared' : 'valid' };
+  }
+
+  if (conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.P4)) {
+    const proposalsById = await ensureEntityMap(cache, 'Proposal');
+    if (!proposalsById) return { valid: true, reason: 'proposal_loader_failed' };
+    const proposal = proposalsById.get(sourceId);
+    if (!proposal) return { valid: false, reason: 'source_deleted' };
+
+    const invalid = proposal.client_saw_proposal === true;
+    return { valid: !invalid, reason: invalid ? 'condition_cleared' : 'valid' };
+  }
+
+  if (conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.P2)) {
+    const projectsById = await ensureEntityMap(cache, 'Project');
+    if (!projectsById) return { valid: true, reason: 'project_loader_failed' };
+    const project = projectsById.get(sourceId);
+    if (!project) return { valid: false, reason: 'source_deleted' };
+
+    const proposalsById = await ensureEntityMap(cache, 'Proposal');
+    if (!proposalsById) return { valid: true, reason: 'proposal_loader_failed' };
+    const hasProposal = [...proposalsById.values()].some(
+      (proposal) => proposal.project_id === project.id && proposal.form_status !== 'cancelled',
+    );
+    return { valid: !hasProposal, reason: hasProposal ? 'condition_cleared' : 'valid' };
+  }
+
+  if (conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.R4)) {
+    const clientsById = await ensureEntityMap(cache, 'Client');
+    if (!clientsById) return { valid: true, reason: 'client_loader_failed' };
+    const client = clientsById.get(sourceId);
+    if (!client) return { valid: false, reason: 'source_deleted' };
+
+    const projectsById = await ensureEntityMap(cache, 'Project');
+    if (!projectsById) return { valid: true, reason: 'project_loader_failed' };
+    const hasProject = [...projectsById.values()].some((project) => project.client_id === client.id);
+    return { valid: !hasProject, reason: hasProject ? 'condition_cleared' : 'valid' };
+  }
+
+  if (conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.R1)) {
+    const inquiriesById = await ensureEntityMap(cache, 'Inquiry');
+    if (!inquiriesById) return { valid: true, reason: 'inquiry_loader_failed' };
+    const inquiry = inquiriesById.get(sourceId);
+    if (!inquiry) return { valid: false, reason: 'source_deleted' };
+
+    const clientName = toTrimmedValue(inquiry.client_name);
+    const detailsMissing = !toTrimmedValue(inquiry.details);
+    const invalid = !clientName || inquiry.form_status === 'submitted' || inquiry.form_status === 'cancelled' || !detailsMissing;
+    return { valid: !invalid, reason: invalid ? 'condition_cleared' : 'valid' };
+  }
+
+  if (conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.R2)) {
+    const inquiriesById = await ensureEntityMap(cache, 'Inquiry');
+    if (!inquiriesById) return { valid: true, reason: 'inquiry_loader_failed' };
+    const inquiry = inquiriesById.get(sourceId);
+    if (!inquiry) return { valid: false, reason: 'source_deleted' };
+
+    const clientName = toTrimmedValue(inquiry.client_name);
+    if (!clientName || inquiry.form_status !== 'submitted') {
+      return { valid: false, reason: 'condition_cleared' };
+    }
+
+    const clientsById = await ensureEntityMap(cache, 'Client');
+    const projectsById = await ensureEntityMap(cache, 'Project');
+    if (!clientsById || !projectsById) return { valid: true, reason: 'related_loader_failed' };
+    const hasClient = [...clientsById.values()].some((client) => client.source_inquiry_id === inquiry.id);
+    const hasProject = [...projectsById.values()].some((project) => project.source_inquiry_id === inquiry.id);
+    return { valid: !(hasClient && hasProject), reason: hasClient && hasProject ? 'condition_cleared' : 'valid' };
+  }
+
+  return { valid: true, reason: 'unsupported_condition_key' };
+};
+
+export async function validateVisibleReminders(reminders, options = {}) {
+  const summary = {
+    checked: 0,
+    hiddenInvalid: 0,
+    closed: 0,
+    errors: [],
+    hasMutations: false,
+  };
+
+  if (!Array.isArray(reminders) || reminders.length === 0) {
+    return { ...summary, visible: [] };
+  }
+
+  const cache = options.cache || {};
+  const visible = [];
+
+  for (const reminder of reminders) {
+    summary.checked += 1;
+
+    try {
+      const verdict = await evaluateReminderBusinessValidity(reminder, cache);
+
+      if (verdict.valid) {
+        visible.push(reminder);
+        continue;
+      }
+
+      summary.hiddenInvalid += 1;
+
+      if (!reminder?.id || options.applyMutations !== true) {
+        continue;
+      }
+
+      const resolvedReason = verdict.reason === 'source_deleted' ? 'source_deleted' : 'condition_cleared';
+      await cancelReminder(reminder.id, resolvedReason);
+      summary.closed += 1;
+      summary.hasMutations = true;
+    } catch (error) {
+      summary.errors.push({
+        reminderId: reminder?.id || null,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      visible.push(reminder);
+      console.warn('[ReminderEngine] validateVisibleReminders skipped reminder on error', {
+        reminderId: reminder?.id,
+        condition_key: reminder?.condition_key,
+      }, error);
+    }
+  }
+
+  return { ...summary, visible };
+}
+
+let reminderReconciliationPromise = null;
+
+const getLockPayload = () => {
+  const raw = readStorage(RECONCILIATION_STORAGE_KEYS.LOCK);
+  if (!raw) return null;
+
+  try {
+    return JSON.parse(raw);
+  } catch (_error) {
+    return null;
+  }
+};
+
+const isLockActive = (payload, now = nowMs()) => {
+  if (!payload?.startedAt) return false;
+  return now - payload.startedAt < RECONCILIATION_STALE_LOCK_MS;
+};
+
+const acquireReconciliationLock = (reason) => {
+  const now = nowMs();
+  const current = getLockPayload();
+
+  if (current && isLockActive(current, now)) {
+    return false;
+  }
+
+  writeStorage(RECONCILIATION_STORAGE_KEYS.LOCK, JSON.stringify({ startedAt: now, reason }));
+  return true;
+};
+
+const releaseReconciliationLock = () => {
+  removeStorage(RECONCILIATION_STORAGE_KEYS.LOCK);
+};
+
+const shouldSkipReconciliationByCooldown = (now = nowMs()) => {
+  const lastRunAt = parseStorageTimestamp(readStorage(RECONCILIATION_STORAGE_KEYS.LAST_RUN_AT));
+  const lastErrorAt = parseStorageTimestamp(readStorage(RECONCILIATION_STORAGE_KEYS.LAST_ERROR_AT));
+  const lastErrorType = readStorage(RECONCILIATION_STORAGE_KEYS.LAST_ERROR_TYPE);
+  const hasMore = readStorage(RECONCILIATION_STORAGE_KEYS.HAS_MORE) === '1';
+
+  if (lastErrorType === 'rate_limit' && lastErrorAt && now - lastErrorAt < RECONCILIATION_RATE_LIMIT_COOLDOWN_MS) {
+    return true;
+  }
+
+  if (hasMore && lastRunAt && now - lastRunAt < RECONCILIATION_HAS_MORE_COOLDOWN_MS) {
+    return true;
+  }
+
+  if (lastRunAt && now - lastRunAt < RECONCILIATION_COOLDOWN_MS) {
+    return true;
+  }
+
+  return false;
+};
+
+const countMutationsFromSummary = (result) => {
+  if (!result || typeof result !== 'object') return 0;
+  return Number(result.cancelled || 0) + Number(result.cancelledDuplicates || 0);
+};
+
+export async function runReminderReconciliationNow(reason = 'manual') {
+  const result = {
+    reason,
+    startedAt: nowIso(),
+    skipped: false,
+    skipReason: null,
+    mutationCount: 0,
+    maxMutationsPerRun: RECONCILIATION_MAX_MUTATIONS_PER_RUN,
+    hasMore: false,
+    errors: [],
+  };
+
+  if (!acquireReconciliationLock(reason)) {
+    result.skipped = true;
+    result.skipReason = 'lock_active';
+    return result;
+  }
+
+  const cache = {};
+
+  try {
+    await loadReminderEngineCache(cache);
+    await Promise.all([
+      ensureEntityMap(cache, 'Inquiry'),
+      ensureEntityMap(cache, 'Client'),
+      ensureEntityMap(cache, 'Project'),
+      ensureEntityMap(cache, 'Proposal'),
+    ]);
+
+    const openReminders = (cache.reminders || []).filter(
+      (reminder) => isOpenReminderStatus(reminder?.status),
+    );
+
+    for (const reminder of openReminders) {
+      if (result.mutationCount >= RECONCILIATION_MAX_MUTATIONS_PER_RUN) {
+        result.hasMore = true;
+        break;
+      }
+
+      const verdict = await evaluateReminderBusinessValidity(reminder, cache);
+      if (verdict.valid) continue;
+
+      await cancelReminder(
+        reminder.id,
+        verdict.reason === 'source_deleted' ? 'source_deleted' : 'condition_cleared',
+      );
+      result.mutationCount += 1;
+    }
+
+    if (result.hasMore) {
+      return result;
+    }
+
+    const orphanResult = await cleanupOrphanReminders({
+      dryRun: false,
+      cache,
+      maxMutations: Math.max(RECONCILIATION_MAX_MUTATIONS_PER_RUN - result.mutationCount, 0),
+    });
+    result.mutationCount += countMutationsFromSummary(orphanResult);
+
+    if (orphanResult.hasMore || result.mutationCount >= RECONCILIATION_MAX_MUTATIONS_PER_RUN) {
+      result.hasMore = true;
+      return result;
+    }
+
+    await loadReminderEngineCache(cache);
+    const remainingBudget = Math.max(RECONCILIATION_MAX_MUTATIONS_PER_RUN - result.mutationCount, 0);
+    const duplicateResult = await cleanupDuplicateConditionKeyReminders({
+      dryRun: false,
+      cache,
+      maxMutations: remainingBudget,
+    });
+    result.mutationCount += countMutationsFromSummary(duplicateResult);
+
+    if (duplicateResult.hasMore || result.mutationCount >= RECONCILIATION_MAX_MUTATIONS_PER_RUN) {
+      result.hasMore = true;
+      return result;
+    }
+  } catch (error) {
+    const errorType = isRateLimitError(error) ? 'rate_limit' : 'unknown';
+    writeStorage(RECONCILIATION_STORAGE_KEYS.LAST_ERROR_AT, String(nowMs()));
+    writeStorage(RECONCILIATION_STORAGE_KEYS.LAST_ERROR_TYPE, errorType);
+    result.errors.push(error instanceof Error ? error.message : String(error));
+  } finally {
+    writeStorage(RECONCILIATION_STORAGE_KEYS.LAST_RUN_AT, String(nowMs()));
+    writeStorage(RECONCILIATION_STORAGE_KEYS.HAS_MORE, result.hasMore ? '1' : '0');
+    releaseReconciliationLock();
+  }
+
+  return result;
+}
+
+export function runReminderReconciliationInBackground(reason = 'dashboard_load') {
+  const now = nowMs();
+
+  if (reminderReconciliationPromise) {
+    return reminderReconciliationPromise;
+  }
+
+  if (shouldSkipReconciliationByCooldown(now)) {
+    return Promise.resolve({ skipped: true, skipReason: 'cooldown' });
+  }
+
+  reminderReconciliationPromise = new Promise((resolve) => {
+    const runner = async () => {
+      try {
+        const result = await runReminderReconciliationNow(reason);
+        resolve(result);
+      } finally {
+        reminderReconciliationPromise = null;
+      }
+    };
+
+    if (typeof globalThis !== 'undefined' && typeof globalThis.requestIdleCallback === 'function') {
+      globalThis.requestIdleCallback(() => {
+        void runner();
+      }, { timeout: 1500 });
+      return;
+    }
+
+    setTimeout(() => {
+      void runner();
+    }, 0);
+  });
+
+  return reminderReconciliationPromise;
+}
+
+export async function inspectReminderByTitle(title) {
+  const normalizedTitle = toTrimmedValue(title);
+  if (!normalizedTitle) return null;
+
+  const reminders = await base44.entities.Reminder.list();
+  const reminder = reminders.find((item) => toTrimmedValue(item.title) === normalizedTitle);
+  if (!reminder) return null;
+
+  const result = {
+    title: reminder.title,
+    condition_key: reminder.condition_key,
+    source_type: reminder.source_type,
+    source_id: reminder.source_id,
+    status: reminder.status,
+    action_url: reminder.action_url,
+    stale: null,
+    reason: null,
+  };
+
+  if (reminder.source_type === 'proposal' && reminder.source_id) {
+    const proposals = await base44.entities.Proposal.filter({ id: reminder.source_id });
+    const proposal = proposals?.[0] || null;
+
+    if (proposal) {
+      const verdict = await evaluateReminderBusinessValidity(reminder, {});
+      result.stale = verdict.valid === false;
+      result.reason = verdict.reason;
+      result.proposal = {
+        id: proposal.id,
+        form_status: proposal.form_status,
+        proposal_sent_to_client: proposal.proposal_sent_to_client,
+        client_saw_proposal: proposal.client_saw_proposal,
+      };
+    }
+  }
+
+  return result;
 }
 
 const buildFoundationTestInput = (conditionKey) => ({

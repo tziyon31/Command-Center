@@ -375,9 +375,9 @@ export async function runProposalReminderRulesForProject(project, cache = {}) {
 }
 
 export async function runProposalReminderRulesForProposal(proposal, cache = {}) {
-  const p0 = await runP0ReminderRuleForProposal(proposal);
-  const p3 = await runP3ReminderRuleForProposal(proposal);
-  const p4 = await runP4ReminderRuleForProposal(proposal);
+  const p0 = await runP0ReminderRuleForProposal(proposal, cache);
+  const p3 = await runP3ReminderRuleForProposal(proposal, cache);
+  const p4 = await runP4ReminderRuleForProposal(proposal, cache);
 
   let p2 = null;
 
