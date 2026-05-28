@@ -7,6 +7,8 @@ import {
   hasOpenReminderForConditionKey,
   isRateLimitError,
   loadReminderEngineCache,
+  REMINDER_STATUS,
+  resolveReminder,
 } from '@/lib/reminderEngine';
 import { buildProposalFormPageUrl, buildSignedProposalFormPageUrl } from '@/lib/workflowNavigation';
 
@@ -44,6 +46,38 @@ export function getProposalNeedsSignedProposalConditionKey(proposalId) {
 }
 
 const hasTrimmedClientName = (value) => Boolean(String(value || '').trim());
+const normalize = (value) => String(value || '').trim().toLowerCase();
+
+export function isSignedProposal(signedProposal) {
+  return Boolean(
+    signedProposal
+    && signedProposal.has_signed_offer_or_order === true
+    && signedProposal.signed_at,
+  );
+}
+
+export function hasSignedProposalForProject(project, signedProposals = []) {
+  if (!project) return false;
+
+  return signedProposals.some((signedProposal) => {
+    if (!isSignedProposal(signedProposal)) return false;
+
+    const sameProjectId = (
+      signedProposal.project_id
+      && project.id
+      && signedProposal.project_id === project.id
+    );
+
+    const sameClientAndProjectName = (
+      signedProposal.client_id
+      && project.client_id
+      && signedProposal.client_id === project.client_id
+      && normalize(signedProposal.project_name) === normalize(project.project_name || project.name)
+    );
+
+    return sameProjectId || sameClientAndProjectName;
+  });
+}
 
 const hasNonCancelledProposalForProject = (projectId, proposals = []) => (
   proposals.some(
@@ -63,6 +97,7 @@ const hasNonCancelledSignedProposalForProposal = (proposal, signedProposals = []
 
   return signedProposals.some((signedProposal) => {
     if (signedProposal?.form_status === 'cancelled') return false;
+    if (!isSignedProposal(signedProposal)) return false;
     if (String(signedProposal?.proposal_id || '').trim() === proposal.id) return true;
     return Boolean(projectId) && String(signedProposal?.project_id || '').trim() === projectId;
   });
@@ -298,9 +333,16 @@ async function runP0ReminderRuleForProposal(proposal, cache = {}) {
     };
   }
 
+  const signedProposals = cache.signedProposals ?? await base44.entities.SignedProposal.list();
+  const hasSignedForProject = hasSignedProposalForProject(
+    { id: proposal.project_id, client_id: proposal.client_id, name: proposal.project_name },
+    signedProposals,
+  );
+
   const conditionIsTrue = (
     proposal.form_status !== 'submitted'
     && proposal.form_status !== 'cancelled'
+    && !hasSignedForProject
   );
 
   const result = await ensureReminderForCondition(
@@ -339,9 +381,16 @@ async function runP3ReminderRuleForProposal(proposal, cache = {}) {
     };
   }
 
+  const signedProposals = cache.signedProposals ?? await base44.entities.SignedProposal.list();
+  const hasSignedForProject = hasSignedProposalForProject(
+    { id: proposal.project_id, client_id: proposal.client_id, name: proposal.project_name },
+    signedProposals,
+  );
+
   const conditionIsTrue = (
     proposal.form_status === 'submitted'
     && proposal.proposal_sent_to_client !== true
+    && !hasSignedForProject
   );
 
   const result = await ensureReminderForCondition(
@@ -380,10 +429,17 @@ async function runP4ReminderRuleForProposal(proposal, cache = {}) {
     };
   }
 
+  const signedProposals = cache.signedProposals ?? await base44.entities.SignedProposal.list();
+  const hasSignedForProject = hasSignedProposalForProject(
+    { id: proposal.project_id, client_id: proposal.client_id, name: proposal.project_name },
+    signedProposals,
+  );
+
   const conditionIsTrue = (
     proposal.form_status === 'submitted'
     && proposal.proposal_sent_to_client === true
     && proposal.client_saw_proposal !== true
+    && !hasSignedForProject
   );
 
   const result = await ensureReminderForCondition(
@@ -452,15 +508,10 @@ export async function runSignedProposalNeedReminderRuleForProposal(proposal, cac
   return runSP1ReminderRuleForProposal(proposal, cache);
 }
 
-const hasNonCancelledSignedProposalForProject = (projectId, signedProposals = []) => (
-  signedProposals.some(
-    (sp) => sp.project_id === projectId && sp.form_status !== 'cancelled',
-  )
-);
-
 async function runP2ReminderRuleForProject(project, cache = {}) {
   const conditionKey = getProjectNeedsProposalConditionKey(project?.id);
   const proposals = cache.proposals ?? [];
+  const signedProposals = cache.signedProposals ?? await base44.entities.SignedProposal.list();
 
   if (!project?.id) {
     return { status: 'skipped', action: null, reason: 'no_project_id', rule: 'p2' };
@@ -493,14 +544,9 @@ async function runP2ReminderRuleForProject(project, cache = {}) {
     };
   }
 
-  // אם יש הצעת מחיר חתומה לפרויקט — הפרויקט כבר עבר שלב הצעת מחיר, אין תזכורת
-  const signedProposals = cache.signedProposals ?? await base44.entities.SignedProposal.list();
-  const hasSignedProposal = hasNonCancelledSignedProposalForProject(project.id, signedProposals);
-
-  const conditionIsTrue = (
-    !hasNonCancelledProposalForProject(project.id, proposals)
-    && !hasSignedProposal
-  );
+  const hasProposal = hasNonCancelledProposalForProject(project.id, proposals);
+  const hasSignedProposal = hasSignedProposalForProject(project, signedProposals);
+  const conditionIsTrue = !hasProposal && !hasSignedProposal;
 
   if (!conditionIsTrue && cache?.reminders) {
     if (!hasOpenReminderForConditionKey(cache, conditionKey)) {
@@ -861,12 +907,17 @@ export async function syncSignedProposalReminderRules(signedProposal, cache = {}
 
   let proposals = cache.proposals;
   let signedProposals = cache.signedProposals;
+  let reminders = cache.reminders;
 
   if (!proposals) {
     proposals = await base44.entities.Proposal.list();
   }
   if (!signedProposals) {
     signedProposals = await base44.entities.SignedProposal.list();
+  }
+  if (!reminders) {
+    const loadedCache = await loadReminderEngineCache(cache);
+    reminders = loadedCache.reminders || [];
   }
 
   const candidates = proposals.filter((proposal) => (
@@ -880,6 +931,31 @@ export async function syncSignedProposalReminderRules(signedProposal, cache = {}
       proposals,
       signedProposals,
     });
+  }
+
+  const proposalIds = new Set(candidates.map((proposal) => proposal.id));
+  const projectIds = new Set(candidates.map((proposal) => proposal.project_id).filter(Boolean));
+  const proposalPrefixes = [
+    PROPOSAL_INCOMPLETE_CONDITION_PREFIX,
+    PROPOSAL_NOT_SENT_CONDITION_PREFIX,
+    PROPOSAL_NOT_SEEN_CONDITION_PREFIX,
+    PROJECT_NEEDS_PROPOSAL_CONDITION_PREFIX,
+  ];
+  const shouldResolve = (reminder) => {
+    if (!reminder?.condition_key) return false;
+    if (reminder.status !== REMINDER_STATUS.ACTIVE && reminder.status !== REMINDER_STATUS.SNOOZED) {
+      return false;
+    }
+    if (!proposalPrefixes.some((prefix) => reminder.condition_key.startsWith(prefix))) {
+      return false;
+    }
+    if (proposalIds.has(reminder.source_id)) return true;
+    return Boolean(reminder.project_id) && projectIds.has(reminder.project_id);
+  };
+
+  for (const reminder of reminders || []) {
+    if (!shouldResolve(reminder)) continue;
+    await resolveReminder(reminder.id, 'signed_proposal_exists');
   }
 
   return { checked: candidates.length };

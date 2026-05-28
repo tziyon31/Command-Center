@@ -20,9 +20,13 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { ArrowRight } from 'lucide-react';
+import CreateClientDialog from '@/components/workflow/CreateClientDialog';
+import CreateProjectDialog from '@/components/workflow/CreateProjectDialog';
+import { formatProjectSelectLabel } from '@/lib/projectSelectLabel';
 
 const EMPTY_FORM = {
   proposal_id: '',
+  client_id: '',
   project_id: '',
   project_name: '',
   client_name: '',
@@ -49,6 +53,7 @@ const readSearchParams = () => {
     id: params.get('id') || '',
     prefill: {
       proposal_id: params.get('proposal_id') || '',
+      client_id: params.get('client_id') || '',
       project_id: params.get('project_id') || '',
       project_name: params.get('project_name') || '',
       client_name: params.get('client_name') || '',
@@ -77,6 +82,7 @@ const toIsoFromDatetimeLocal = (localValue) => {
 
 const signedProposalToForm = (record) => ({
   proposal_id: record?.proposal_id || '',
+  client_id: record?.client_id || '',
   project_id: record?.project_id || '',
   project_name: record?.project_name || '',
   client_name: record?.client_name || '',
@@ -88,6 +94,7 @@ const signedProposalToForm = (record) => ({
 
 const buildDraftPayload = (formData) => ({
   proposal_id: formData.proposal_id.trim(),
+  client_id: formData.client_id.trim(),
   project_id: formData.project_id.trim(),
   project_name: formData.project_name.trim(),
   client_name: formData.client_name.trim(),
@@ -119,6 +126,8 @@ export default function SignedProposalForm() {
   const [isSaving, setIsSaving] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isCreateClientOpen, setIsCreateClientOpen] = useState(false);
+  const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
 
   const isEditMode = Boolean(recordId);
   const isSubmitted = formStatus === 'submitted';
@@ -144,6 +153,17 @@ export default function SignedProposalForm() {
     queryFn: () => base44.entities.Client.list(),
   });
 
+  const selectedProjectLabel = React.useMemo(() => {
+    if (!formData.project_id) return null;
+    const project = projects.find((item) => item.id === formData.project_id);
+    return project ? formatProjectSelectLabel(project) : (formData.project_name || null);
+  }, [projects, formData.project_id, formData.project_name]);
+
+  const filteredProjects = React.useMemo(() => {
+    if (!formData.client_id) return projects;
+    return projects.filter((project) => project.client_id === formData.client_id);
+  }, [projects, formData.client_id]);
+
   useEffect(() => {
     if (!record) return;
 
@@ -162,12 +182,60 @@ export default function SignedProposalForm() {
       ...prev,
       project_id: project.id,
       project_name: project.name || prev.project_name,
+      client_id: project.client_id || prev.client_id,
       client_name: linkedClient?.name || prev.client_name,
       source_inquiry_id: prev.source_inquiry_id || project.source_inquiry_id || '',
     }));
   };
 
-  const persistRecord = async (payload, { navigateAfterCreate = false } = {}) => {
+  const handleClientSelect = (selectedClientId) => {
+    const client = clients.find((item) => item.id === selectedClientId);
+    if (!client) return;
+
+    setFormData((prev) => ({
+      ...prev,
+      client_id: client.id,
+      client_name: client.name,
+      project_id: '',
+      project_name: '',
+      source_inquiry_id: prev.source_inquiry_id || client.source_inquiry_id || '',
+    }));
+  };
+
+  const handleNewClientCreated = async (client) => {
+    setFormData((prev) => ({
+      ...prev,
+      client_id: client.id,
+      client_name: client.name,
+      project_id: '',
+      project_name: '',
+      source_inquiry_id: prev.source_inquiry_id || client.source_inquiry_id || '',
+    }));
+
+    await queryClient.invalidateQueries({ queryKey: ['clients'] });
+    await queryClient.invalidateQueries({ queryKey: ['client-details', client.id] });
+    await queryClient.invalidateQueries({ queryKey: ['signed-proposals'] });
+    setIsCreateClientOpen(false);
+  };
+
+  const handleNewProjectCreated = async (project, client) => {
+    setFormData((prev) => ({
+      ...prev,
+      project_id: project.id,
+      project_name: project.name || '',
+      client_id: project.client_id || prev.client_id,
+      client_name: client?.name || prev.client_name,
+      source_inquiry_id: prev.source_inquiry_id || project.source_inquiry_id || client?.source_inquiry_id || '',
+    }));
+
+    await queryClient.invalidateQueries({ queryKey: ['projects'] });
+    await queryClient.invalidateQueries({ queryKey: ['project', project.id] });
+    await queryClient.invalidateQueries({ queryKey: ['project-details', project.id] });
+    await queryClient.invalidateQueries({ queryKey: ['signed-proposals'] });
+    setIsCreateProjectOpen(false);
+  };
+
+  const persistRecord = async (payload) => {
     if (recordId) {
       return base44.entities.SignedProposal.update(recordId, payload);
     }
@@ -187,6 +255,7 @@ export default function SignedProposalForm() {
     try {
       await syncSignedProposalReminderRules(savedRecord);
       await queryClient.invalidateQueries({ queryKey: ['reminders'] });
+      await queryClient.invalidateQueries({ queryKey: ['reminders', 'visible'] });
     } catch (error) {
       console.error('[SignedProposalForm] failed to sync signed-proposal reminder rules', error);
     }
@@ -209,10 +278,17 @@ export default function SignedProposalForm() {
 
       try {
         const saved = await persistRecord(buildSubmittedUpdatePayload());
+        if (saved?.id && saved?.project_id) {
+          await base44.entities.Project.update(saved.project_id, {
+            source_signed_proposal_id: saved.id,
+          });
+        }
         setFormStatus(saved?.form_status || 'submitted');
         setSubmittedAt(saved?.submitted_at || submittedAt || '');
         queryClient.invalidateQueries({ queryKey: ['signed-proposals'] });
         queryClient.invalidateQueries({ queryKey: ['signed-proposal', recordId || saved?.id] });
+        queryClient.invalidateQueries({ queryKey: ['projects'] });
+        queryClient.invalidateQueries({ queryKey: ['proposals'] });
         await syncSignedProposalReminders(saved);
         alert('השינויים נשמרו');
       } catch (error) {
@@ -231,6 +307,8 @@ export default function SignedProposalForm() {
       setFormStatus(saved?.form_status || 'draft');
       queryClient.invalidateQueries({ queryKey: ['signed-proposals'] });
       queryClient.invalidateQueries({ queryKey: ['signed-proposal', recordId || saved?.id] });
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['proposals'] });
       await syncSignedProposalReminders(saved);
       alert('הטיוטה נשמרה');
     } catch (error) {
@@ -260,6 +338,11 @@ export default function SignedProposalForm() {
       };
 
       const saved = await persistRecord(payload);
+      if (saved?.id && saved?.project_id) {
+        await base44.entities.Project.update(saved.project_id, {
+          source_signed_proposal_id: saved.id,
+        });
+      }
       setFormStatus(saved?.form_status || 'submitted');
       setSubmittedAt(saved?.submitted_at || payload.submitted_at || '');
       setFormData((prev) => ({
@@ -269,6 +352,10 @@ export default function SignedProposalForm() {
       }));
       queryClient.invalidateQueries({ queryKey: ['signed-proposals'] });
       queryClient.invalidateQueries({ queryKey: ['signed-proposal', recordId || saved?.id] });
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['proposals'] });
+      queryClient.invalidateQueries({ queryKey: ['project', saved?.project_id || formData.project_id] });
+      queryClient.invalidateQueries({ queryKey: ['project-details', saved?.project_id || formData.project_id] });
       await syncSignedProposalReminders(saved);
       alert('הטופס הוגש בהצלחה');
     } catch (error) {
@@ -344,23 +431,75 @@ export default function SignedProposalForm() {
           <CardContent>
             <form onSubmit={handleSaveDraft} className="space-y-4">
               <div className="space-y-2">
+                <Label htmlFor="signed-client-select">לקוח</Label>
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 items-center">
+                  <Select
+                    value={formData.client_id || undefined}
+                    onValueChange={handleClientSelect}
+                    disabled={isBusy}
+                  >
+                    <SelectTrigger id="signed-client-select">
+                      <SelectValue placeholder="בחר לקוח קיים" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {clients.map((client) => (
+                        <SelectItem key={client.id} value={client.id}>
+                          {client.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0 whitespace-nowrap"
+                    onClick={() => setIsCreateClientOpen(true)}
+                    disabled={isBusy}
+                  >
+                    לקוח חדש
+                  </Button>
+                </div>
+              </div>
+
+              <div className="space-y-2">
                 <Label htmlFor="project-select">פרויקט</Label>
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 items-center">
                 <Select
                   value={formData.project_id || undefined}
                   onValueChange={applyProjectSelection}
                   disabled={isBusy}
                 >
                   <SelectTrigger id="project-select">
-                    <SelectValue placeholder="בחר פרויקט" />
+                    <SelectValue placeholder={formData.client_id ? 'בחר פרויקט של הלקוח' : 'בחר פרויקט'}>
+                      {selectedProjectLabel}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    {projects.map((project) => (
+                    {filteredProjects.map((project) => (
                       <SelectItem key={project.id} value={project.id}>
-                        {project.name || project.id}
+                        {formatProjectSelectLabel(project)}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0 whitespace-nowrap"
+                  onClick={() => {
+                    if (!formData.client_id?.trim()) {
+                      alert('יש לבחור או ליצור לקוח לפני יצירת פרויקט');
+                      return;
+                    }
+                    setIsCreateProjectOpen(true);
+                  }}
+                  disabled={isBusy}
+                >
+                  פרויקט חדש
+                </Button>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
@@ -450,6 +589,33 @@ export default function SignedProposalForm() {
           </CardContent>
         </Card>
       </div>
+      <CreateClientDialog
+        open={isCreateClientOpen}
+        onOpenChange={setIsCreateClientOpen}
+        initialName={formData.client_name}
+        sourceInquiryId={formData.source_inquiry_id}
+        onClientCreated={handleNewClientCreated}
+      />
+
+      <CreateProjectDialog
+        open={isCreateProjectOpen}
+        onOpenChange={setIsCreateProjectOpen}
+        initialClientId={formData.client_id}
+        initialClientName={formData.client_name}
+        initialProjectName={formData.project_name || formData.client_name}
+        sourceInquiryId={formData.source_inquiry_id}
+        onProjectCreated={handleNewProjectCreated}
+        onCreateProject={async (payload) => {
+          const projectPayload = {
+            ...payload,
+            client_name: formData.client_name || '',
+          };
+          if (recordId) {
+            projectPayload.source_signed_proposal_id = recordId;
+          }
+          return base44.entities.Project.create(projectPayload);
+        }}
+      />
     </div>
   );
 }

@@ -1138,6 +1138,35 @@ export async function ensureReminderForCondition(conditionIsTrue, reminderInput,
 }
 
 const toTrimmedValue = (value) => String(value || '').trim();
+const normalizeReminderValue = (value) => String(value || '').trim().toLowerCase();
+
+const isSignedProposalRecord = (signedProposal) => Boolean(
+  signedProposal
+  && signedProposal.has_signed_offer_or_order === true
+  && signedProposal.signed_at,
+);
+
+const hasSignedProposalForProjectRecord = (project, signedProposals = []) => (
+  signedProposals.some((signedProposal) => {
+    if (!isSignedProposalRecord(signedProposal)) return false;
+    if (signedProposal.form_status === 'cancelled') return false;
+
+    const sameProjectId = (
+      toTrimmedValue(signedProposal.project_id)
+      && toTrimmedValue(project?.id)
+      && toTrimmedValue(signedProposal.project_id) === toTrimmedValue(project?.id)
+    );
+
+    const sameClientAndProjectName = (
+      toTrimmedValue(signedProposal.client_id)
+      && toTrimmedValue(project?.client_id)
+      && toTrimmedValue(signedProposal.client_id) === toTrimmedValue(project?.client_id)
+      && normalizeReminderValue(signedProposal.project_name) === normalizeReminderValue(project?.name || project?.project_name)
+    );
+
+    return sameProjectId || sameClientAndProjectName;
+  })
+);
 
 const evaluateReminderBusinessValidity = async (reminder, cache) => {
   const conditionKey = toTrimmedValue(reminder?.condition_key);
@@ -1151,7 +1180,15 @@ const evaluateReminderBusinessValidity = async (reminder, cache) => {
     if (!proposalsById) return { valid: true, reason: 'proposal_loader_failed' };
     const proposal = proposalsById.get(sourceId);
     if (!proposal) return { valid: false, reason: 'source_deleted' };
-    const invalid = proposal.form_status === 'submitted' || proposal.form_status === 'cancelled';
+    const signedProposalsById = await ensureEntityMap(cache, 'SignedProposal');
+    const signedProposals = signedProposalsById ? [...signedProposalsById.values()] : [];
+    const hasSignedProposal = hasSignedProposalForProjectRecord({
+      id: proposal.project_id,
+      client_id: proposal.client_id,
+      name: proposal.project_name,
+    }, signedProposals);
+
+    const invalid = proposal.form_status === 'submitted' || proposal.form_status === 'cancelled' || hasSignedProposal;
     return { valid: !invalid, reason: invalid ? 'condition_cleared' : 'valid' };
   }
 
@@ -1160,7 +1197,14 @@ const evaluateReminderBusinessValidity = async (reminder, cache) => {
     if (!proposalsById) return { valid: true, reason: 'proposal_loader_failed' };
     const proposal = proposalsById.get(sourceId);
     if (!proposal) return { valid: false, reason: 'source_deleted' };
-    const invalid = proposal.proposal_sent_to_client === true;
+    const signedProposalsById = await ensureEntityMap(cache, 'SignedProposal');
+    const signedProposals = signedProposalsById ? [...signedProposalsById.values()] : [];
+    const hasSignedProposal = hasSignedProposalForProjectRecord({
+      id: proposal.project_id,
+      client_id: proposal.client_id,
+      name: proposal.project_name,
+    }, signedProposals);
+    const invalid = proposal.proposal_sent_to_client === true || hasSignedProposal;
     return { valid: !invalid, reason: invalid ? 'condition_cleared' : 'valid' };
   }
 
@@ -1169,7 +1213,14 @@ const evaluateReminderBusinessValidity = async (reminder, cache) => {
     if (!proposalsById) return { valid: true, reason: 'proposal_loader_failed' };
     const proposal = proposalsById.get(sourceId);
     if (!proposal) return { valid: false, reason: 'source_deleted' };
-    const invalid = proposal.client_saw_proposal === true;
+    const signedProposalsById = await ensureEntityMap(cache, 'SignedProposal');
+    const signedProposals = signedProposalsById ? [...signedProposalsById.values()] : [];
+    const hasSignedProposal = hasSignedProposalForProjectRecord({
+      id: proposal.project_id,
+      client_id: proposal.client_id,
+      name: proposal.project_name,
+    }, signedProposals);
+    const invalid = proposal.client_saw_proposal === true || hasSignedProposal;
     return { valid: !invalid, reason: invalid ? 'condition_cleared' : 'valid' };
   }
 

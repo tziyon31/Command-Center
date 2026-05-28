@@ -24,6 +24,7 @@ export default function CreateProjectDialog({
   initialProjectName = '',
   sourceInquiryId = '',
   onProjectCreated,
+  onCreateProject,
 }) {
   const queryClient = useQueryClient();
   const [formData, setFormData] = useState(() => buildInitialProjectForm());
@@ -81,7 +82,9 @@ export default function CreateProjectDialog({
         formStatus: 'draft',
       });
 
-      const project = await base44.entities.Project.create(payload);
+      const project = onCreateProject
+        ? await onCreateProject(payload)
+        : await base44.entities.Project.create(payload);
       const client = clients.find((item) => item.id === project?.client_id);
 
       if (client) {
