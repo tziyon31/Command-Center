@@ -227,7 +227,17 @@ export async function findReminderTestLeftovers() {
     signedProposals: [],
     workStages: [],
     reminders: [],
+    remindersByStatus: {
+      active: [],
+      snoozed: [],
+      resolved: [],
+      cancelled: [],
+      other: [],
+    },
     total: 0,
+    totalReminderLeftovers: 0,
+    openReminderLeftovers: 0,
+    note: '',
   };
 
   const matchesPrefix = (value) => String(value || '').includes(TEST_REMINDER_FLOW_PREFIX);
@@ -263,15 +273,27 @@ export async function findReminderTestLeftovers() {
       || matchesPrefix(reminder?.project_name)
       || matchesPrefix(reminder?.condition_key)
     );
-    if (matched && reminder?.id) {
-      report.reminders.push({
-        id: reminder.id,
-        condition_key: reminder.condition_key,
-        status: reminder.status,
-      });
-    }
+    if (!matched || !reminder?.id) continue;
+
+    const entry = {
+      id: reminder.id,
+      condition_key: reminder.condition_key,
+      status: reminder.status,
+    };
+    report.reminders.push(entry);
+
+    const status = String(reminder.status || '').toLowerCase();
+    if (status === REMINDER_STATUS.ACTIVE) report.remindersByStatus.active.push(entry);
+    else if (status === REMINDER_STATUS.SNOOZED) report.remindersByStatus.snoozed.push(entry);
+    else if (status === REMINDER_STATUS.RESOLVED) report.remindersByStatus.resolved.push(entry);
+    else if (status === REMINDER_STATUS.CANCELLED) report.remindersByStatus.cancelled.push(entry);
+    else report.remindersByStatus.other.push(entry);
   }
 
+  report.totalReminderLeftovers = report.reminders.length;
+  report.openReminderLeftovers = (
+    report.remindersByStatus.active.length + report.remindersByStatus.snoozed.length
+  );
   report.total = (
     report.inquiries.length
     + report.clients.length
@@ -281,6 +303,9 @@ export async function findReminderTestLeftovers() {
     + report.workStages.length
     + report.reminders.length
   );
+  report.note = report.openReminderLeftovers === 0
+    ? 'No open test reminder leftovers'
+    : 'Open test reminder leftovers detected';
 
   return report;
 }
@@ -609,6 +634,29 @@ async function runWorkStageProjectRules(ctx, projectId, reason = 'work_stage_pro
   await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runWorkStageReminderRulesForProject(projectId, ctx.cache);
   }, reason);
+}
+
+async function createTestProjectWithClient(ctx, label) {
+  const client = await createTestClient(ctx, ctx.createdEntities, {
+    name: `${TEST_REMINDER_FLOW_PREFIX} ${label} client`,
+  });
+  const project = await createTestProject(ctx, ctx.createdEntities, {
+    name: `${TEST_REMINDER_FLOW_PREFIX} ${label} project`,
+    client_id: client.id,
+    client_name: client.name,
+  });
+
+  return { client, project };
+}
+
+async function createTestWorkStageForProject(ctx, project, client, overrides = {}) {
+  return createTestWorkStage(ctx, ctx.createdEntities, {
+    project_id: project.id,
+    project_name: project.name,
+    client_id: client?.id || project.client_id || '',
+    client_name: client?.name || project.client_name || project.name || '',
+    ...overrides,
+  });
 }
 
 async function createTestProjectWithSignedProposal(ctx, label) {
@@ -1252,17 +1300,13 @@ async function runTest12(ctx) {
 }
 
 async function runTest13(ctx) {
-  const project = await createTestProject(ctx, ctx.createdEntities, {
-    name: `${TEST_REMINDER_FLOW_PREFIX} completion project`,
-  });
-  let stage = await createTestWorkStage(ctx, ctx.createdEntities, {
+  const { client, project } = await createTestProjectWithClient(ctx, 'completion');
+  let stage = await createTestWorkStageForProject(ctx, project, client, {
     title: `${TEST_REMINDER_FLOW_PREFIX} completion stage`,
-    project_id: project.id,
-    project_name: project.name,
     order_index: 1,
   });
 
-  await recalculateTestProjectWorkStages(ctx, project.id);
+  await syncTestProjectStages(ctx, project.id);
   let fetched = await fetchTestWorkStage(ctx, stage.id);
   ctx.steps.push({
     name: 'Test 13 – stage not completed with zero approvals',
@@ -1277,7 +1321,7 @@ async function runTest13(ctx) {
     client_approved: true,
     draftsman_approved: false,
   });
-  await recalculateTestProjectWorkStages(ctx, project.id);
+  await syncTestProjectStages(ctx, project.id);
   fetched = await fetchTestWorkStage(ctx, stage.id);
   ctx.steps.push({
     name: 'Test 13 – stage not completed with two approvals',
@@ -1290,7 +1334,7 @@ async function runTest13(ctx) {
   stage = await updateTestWorkStage(ctx, ctx.createdEntities, stage, {
     draftsman_approved: true,
   });
-  await recalculateTestProjectWorkStages(ctx, project.id);
+  await syncTestProjectStages(ctx, project.id);
   fetched = await fetchTestWorkStage(ctx, stage.id);
   ctx.steps.push({
     name: 'Test 13 – stage completed with three approvals',
@@ -1342,27 +1386,22 @@ async function runTest14(ctx) {
 }
 
 async function runTest15(ctx) {
-  const project = await createTestProject(ctx, ctx.createdEntities, {
-    name: `${TEST_REMINDER_FLOW_PREFIX} active project`,
-  });
+  const { client, project } = await createTestProjectWithClient(ctx, 'active');
 
-  const stage1 = await createTestWorkStage(ctx, ctx.createdEntities, {
+  const stage1 = await createTestWorkStageForProject(ctx, project, client, {
     title: `${TEST_REMINDER_FLOW_PREFIX} active 1`,
-    project_id: project.id,
     order_index: 1,
   });
-  const stage2 = await createTestWorkStage(ctx, ctx.createdEntities, {
+  const stage2 = await createTestWorkStageForProject(ctx, project, client, {
     title: `${TEST_REMINDER_FLOW_PREFIX} active 2`,
-    project_id: project.id,
     order_index: 2,
   });
-  const stage3 = await createTestWorkStage(ctx, ctx.createdEntities, {
+  const stage3 = await createTestWorkStageForProject(ctx, project, client, {
     title: `${TEST_REMINDER_FLOW_PREFIX} active 3`,
-    project_id: project.id,
     order_index: 3,
   });
 
-  await recalculateTestProjectWorkStages(ctx, project.id);
+  await syncTestProjectStages(ctx, project.id);
   let stages = await loadTestWorkStagesForProject(ctx, project.id);
   let active = getActiveWorkStage(stages);
   ctx.steps.push({
@@ -1378,7 +1417,7 @@ async function runTest15(ctx) {
     client_approved: true,
     draftsman_approved: true,
   });
-  await recalculateTestProjectWorkStages(ctx, project.id);
+  await syncTestProjectStages(ctx, project.id);
   stages = await loadTestWorkStagesForProject(ctx, project.id);
   active = getActiveWorkStage(stages);
   const stage3Status = normalizeWorkStageStatuses(stages).find((item) => item.id === stage3.id)?.status;
@@ -1401,31 +1440,26 @@ async function runTest15(ctx) {
 }
 
 async function runTest16(ctx) {
-  const project = await createTestProject(ctx, ctx.createdEntities, {
-    name: `${TEST_REMINDER_FLOW_PREFIX} reorder project`,
-  });
+  const { client, project } = await createTestProjectWithClient(ctx, 'reorder');
 
-  const stage1 = await createTestWorkStage(ctx, ctx.createdEntities, {
+  const stage1 = await createTestWorkStageForProject(ctx, project, client, {
     title: `${TEST_REMINDER_FLOW_PREFIX} reorder A`,
-    project_id: project.id,
     order_index: 1,
   });
-  const stage2 = await createTestWorkStage(ctx, ctx.createdEntities, {
+  const stage2 = await createTestWorkStageForProject(ctx, project, client, {
     title: `${TEST_REMINDER_FLOW_PREFIX} reorder B`,
-    project_id: project.id,
     order_index: 2,
   });
-  const stage3 = await createTestWorkStage(ctx, ctx.createdEntities, {
+  const stage3 = await createTestWorkStageForProject(ctx, project, client, {
     title: `${TEST_REMINDER_FLOW_PREFIX} reorder C`,
-    project_id: project.id,
     order_index: 3,
   });
 
-  await recalculateTestProjectWorkStages(ctx, project.id);
+  await syncTestProjectStages(ctx, project.id);
   await updateTestWorkStage(ctx, ctx.createdEntities, stage3, { order_index: 1 });
   await updateTestWorkStage(ctx, ctx.createdEntities, stage1, { order_index: 2 });
   await updateTestWorkStage(ctx, ctx.createdEntities, stage2, { order_index: 3 });
-  await recalculateTestProjectWorkStages(ctx, project.id);
+  await syncTestProjectStages(ctx, project.id);
 
   const stages = await loadTestWorkStagesForProject(ctx, project.id);
   const active = getActiveWorkStage(stages);
@@ -1641,6 +1675,55 @@ async function runTest22(ctx) {
   ));
 }
 
+const REMINDER_INTEGRATION_TEST_DEFINITIONS = [
+  { name: 'Test 1', fn: runTest1 },
+  { name: 'Test 2', fn: runTest2 },
+  { name: 'Test 3', fn: runTest3 },
+  { name: 'Test 4', fn: runTest4 },
+  { name: 'Test 5', fn: runTest5 },
+  { name: 'Test 6', fn: runTest6 },
+  { name: 'Test 7', fn: runTest7 },
+  { name: 'Test 8', fn: runTest8 },
+  { name: 'Test 9', fn: runTest9 },
+  { name: 'Test 10', fn: runTest10 },
+  { name: 'Test 11', fn: runTest11 },
+  { name: 'Test 12', fn: runTest12 },
+  { name: 'Test 13', fn: runTest13 },
+  { name: 'Test 14', fn: runTest14 },
+  { name: 'Test 15', fn: runTest15 },
+  { name: 'Test 16', fn: runTest16 },
+  { name: 'Test 17', fn: runTest17 },
+  { name: 'Test 18', fn: runTest18 },
+  { name: 'Test 19', fn: runTest19 },
+  { name: 'Test 20', fn: runTest20 },
+  { name: 'Test 21', fn: runTest21 },
+  { name: 'Test 22', fn: runTest22 },
+];
+
+function buildTestRunSummary(steps, testDefinitions, testRunLog = []) {
+  const passedSteps = steps.filter((step) => step.passed).length;
+  const failedSteps = steps.filter((step) => !step.passed).length;
+  const stepsByTest = {};
+
+  for (const step of steps) {
+    const match = String(step.name || '').match(/^(Test \d+)/);
+    if (!match) continue;
+    if (!stepsByTest[match[1]]) stepsByTest[match[1]] = [];
+    stepsByTest[match[1]].push(step);
+  }
+
+  return {
+    totalSteps: steps.length,
+    passedSteps,
+    failedSteps,
+    testNames: testDefinitions.map((test) => test.name),
+    testsWithSteps: Object.keys(stepsByTest),
+    testsRan: testRunLog.filter((entry) => entry.status === 'ran').map((entry) => entry.name),
+    testsSkipped: testRunLog.filter((entry) => entry.status === 'skipped_rate_limit').map((entry) => entry.name),
+    testsErrored: testRunLog.filter((entry) => entry.status === 'error').map((entry) => entry.name),
+  };
+}
+
 export async function runReminderIntegrationTests() {
   if (!acquireReminderIntegrationTestLock()) {
     return {
@@ -1672,6 +1755,7 @@ export async function runReminderIntegrationTests() {
     steps,
     errors,
     rateLimited: false,
+    testRunLog: [],
   };
 
   let cleanup = {
@@ -1684,43 +1768,41 @@ export async function runReminderIntegrationTests() {
     await safeRequest(ctx, 'initial_cache_load', () => loadReminderEngineCache(cache));
     initializeTestRunnerCache(cache);
 
-    const tests = [
-      runTest1,
-      runTest2,
-      runTest3,
-      runTest4,
-      runTest5,
-      runTest6,
-      runTest7,
-      runTest8,
-      runTest9,
-      runTest10,
-      runTest11,
-      runTest12,
-      runTest13,
-      runTest14,
-      runTest15,
-      runTest16,
-      runTest17,
-      runTest18,
-      runTest19,
-      runTest20,
-      runTest21,
-      runTest22,
-    ];
+    const tests = REMINDER_INTEGRATION_TEST_DEFINITIONS;
 
-    for (const testFn of tests) {
-      if (ctx.rateLimited) break;
+    for (const test of tests) {
+      if (ctx.rateLimited) {
+        ctx.steps.push({
+          name: `${test.name} – skipped (rate limit)`,
+          passed: false,
+          expected: 'run test',
+          actual: 'skipped due to rate limit',
+          details: { test: test.name },
+        });
+        ctx.testRunLog.push({ name: test.name, status: 'skipped_rate_limit' });
+        continue;
+      }
 
       try {
-        await testFn(ctx);
+        await test.fn(ctx);
+        ctx.testRunLog.push({ name: test.name, status: 'ran' });
       } catch (error) {
-        await guardRateLimit(error, ctx);
+        if (isRateLimitError(error)) {
+          markRateLimited(ctx, test.name);
+        }
+
+        ctx.steps.push({
+          name: `${test.name} – runner error`,
+          passed: false,
+          expected: 'test completes without error',
+          actual: error instanceof Error ? error.message : String(error),
+          details: { test: test.name },
+        });
+        ctx.testRunLog.push({ name: test.name, status: 'error' });
         errors.push({
-          test: testFn.name,
+          test: test.name,
           message: error instanceof Error ? error.message : String(error),
         });
-        break;
       }
     }
   } catch (error) {
@@ -1764,11 +1846,33 @@ export async function runReminderIntegrationTests() {
       }
 
       try {
-        if (!ctx.rateLimited) {
-          const leftovers = await findReminderTestLeftovers();
-          if (leftovers.total > 0) {
-            console.info('[ReminderTestRunner] leftover test data report (read-only)', leftovers);
-          }
+        const leftovers = await findReminderTestLeftovers();
+        if (leftovers.total > 0) {
+          console.info('[ReminderTestRunner] leftover test data report (read-only)', {
+            note: leftovers.note,
+            total: leftovers.total,
+            totalReminderLeftovers: leftovers.totalReminderLeftovers,
+            openReminderLeftovers: leftovers.openReminderLeftovers,
+            remindersByStatus: {
+              active: leftovers.remindersByStatus.active.length,
+              snoozed: leftovers.remindersByStatus.snoozed.length,
+              resolved: leftovers.remindersByStatus.resolved.length,
+              cancelled: leftovers.remindersByStatus.cancelled.length,
+              other: leftovers.remindersByStatus.other.length,
+            },
+            openReminders: [
+              ...leftovers.remindersByStatus.active,
+              ...leftovers.remindersByStatus.snoozed,
+            ],
+            entities: {
+              inquiries: leftovers.inquiries.length,
+              clients: leftovers.clients.length,
+              projects: leftovers.projects.length,
+              proposals: leftovers.proposals.length,
+              signedProposals: leftovers.signedProposals.length,
+              workStages: leftovers.workStages.length,
+            },
+          });
         }
       } catch (leftoverError) {
         console.warn('[ReminderTestRunner] failed to scan leftovers', leftoverError);
@@ -1783,6 +1887,9 @@ export async function runReminderIntegrationTests() {
   }
 
   const finishedAtMs = Date.now();
+  const summary = buildTestRunSummary(steps, REMINDER_INTEGRATION_TEST_DEFINITIONS, ctx.testRunLog || []);
+  console.info('[ReminderTestRunner] summary', summary);
+
   const passed = steps.length > 0
     && steps.every((step) => step.passed)
     && !ctx.rateLimited
@@ -1796,6 +1903,7 @@ export async function runReminderIntegrationTests() {
     finishedAt: new Date(finishedAtMs).toISOString(),
     durationMs: finishedAtMs - startedAtMs,
     steps,
+    summary,
     createdEntities,
     cleanup,
     errors,

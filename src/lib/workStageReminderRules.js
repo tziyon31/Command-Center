@@ -103,7 +103,7 @@ const buildWorkStageActionUrl = (stage) => buildWorkStagesPageUrl({
 });
 
 const buildWorkStageReminderBase = (stage) => ({
-  client_name: stage.client_name || '',
+  client_name: String(stage.client_name || stage.project_name || '').trim(),
   client_id: stage.client_id || '',
   project_name: stage.project_name || '',
   project_id: stage.project_id || '',
@@ -112,6 +112,10 @@ const buildWorkStageReminderBase = (stage) => ({
   action_url: buildWorkStageActionUrl(stage),
   action_label: 'פתח שלבי עבודה',
 });
+
+const hasWorkStageReminderClientName = (stage) => (
+  Boolean(String(stage?.client_name || stage?.project_name || '').trim())
+);
 
 const buildWS1ReminderInput = (stage) => {
   const title = stage.title || 'ללא שם';
@@ -310,30 +314,32 @@ export async function runWorkStageActiveReminderRulesForStage(stage, cache = {},
   const completed = isStageCompleted(stage);
   const isActive = !cancelled && !completed && stage.id === activeStageId;
   const hasTargetDate = Boolean(String(stage.target_date || '').trim());
+  const canCreateReminder = hasWorkStageReminderClientName(stage);
 
-  const ws1Condition = isActive && !hasTargetDate;
-  const ws2Condition = isActive && hasTargetDate;
+  const ws1ShouldBeOpen = isActive && !hasTargetDate && canCreateReminder;
+  const ws2ShouldBeOpen = isActive && hasTargetDate && canCreateReminder;
 
   const ws1Result = await ensureReminderForCondition(
-    ws1Condition,
-    ws1Condition ? buildWS1ReminderInput(stage) : { condition_key: ws1Key },
-    withReminderCache(cache, { immediate: ws1Condition }),
+    ws1ShouldBeOpen,
+    ws1ShouldBeOpen ? buildWS1ReminderInput(stage) : { condition_key: ws1Key },
+    withReminderCache(cache, { immediate: ws1ShouldBeOpen }),
   );
 
-  const ws2Built = ws2Condition ? buildWS2ReminderInput(stage) : null;
+  const ws2Built = ws2ShouldBeOpen ? buildWS2ReminderInput(stage) : null;
   const ws2Result = await ensureReminderForCondition(
-    ws2Condition,
+    ws2ShouldBeOpen,
     ws2Built?.input || { condition_key: ws2Key },
     withReminderCache(cache, {
-      immediate: ws2Condition ? ws2Built?.immediate === true : false,
+      immediate: ws2ShouldBeOpen ? ws2Built?.immediate === true : false,
     }),
   );
 
   return {
-    status: ws1Condition || ws2Condition ? 'applied' : 'cleared',
+    status: ws1ShouldBeOpen || ws2ShouldBeOpen ? 'applied' : 'cleared',
     ws1: { action: classifyRuleAction(ws1Result), conditionKey: ws1Key, rule: 'ws1' },
     ws2: { action: classifyRuleAction(ws2Result), conditionKey: ws2Key, rule: 'ws2' },
     rule: 'ws',
+    skippedReason: !canCreateReminder && isActive ? 'missing_client_name' : null,
   };
 }
 

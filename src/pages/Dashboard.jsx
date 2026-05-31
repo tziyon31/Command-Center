@@ -273,6 +273,9 @@ export default function Dashboard() {
       }
 
       console.table(result.steps);
+      if (result.summary) {
+        console.info('[Dashboard] reminder test summary', result.summary);
+      }
 
       if (result.rateLimited || result.errors.some((item) => String(item.message || '').includes('Rate limit'))) {
         toast({
