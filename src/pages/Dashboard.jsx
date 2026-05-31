@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { base44 } from '@/api/base44Client';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
@@ -31,6 +31,8 @@ import {
   validateVisibleReminders,
 } from '@/lib/reminderEngine';
 import { cn } from '@/lib/utils';
+import { runReminderIntegrationTests } from '@/lib/reminderTestRunner';
+import { toast } from '@/components/ui/use-toast';
 
 const OPEN_PROPOSAL_STATUSES = ['pricing', 'waiting'];
 const WON_PROPOSAL_STATUSES = ['signed'];
@@ -175,6 +177,8 @@ export default function Dashboard() {
   const [quotePeriod, setQuotePeriod] = React.useState('year');
   const [collectionPeriod, setCollectionPeriod] = React.useState('year');
   const [dashboardMode, setDashboardMode] = React.useState('metrics_focus');
+  const [reminderTestRunning, setReminderTestRunning] = useState(false);
+  const [reminderTestStatus, setReminderTestStatus] = useState('');
   const navigate = useNavigate();
   const collectionDueNowCardRef = useRef(null);
 
@@ -217,6 +221,7 @@ export default function Dashboard() {
 
   const isTaskWorker = currentUser?.role === 'task_worker';
   const canSeeFullDashboard = !isTaskWorker;
+  const canRunReminderTests = currentUser?.role === 'admin';
 
   const {
     data: visibleReminders = [],
@@ -251,6 +256,41 @@ export default function Dashboard() {
     },
     enabled: canSeeFullDashboard && !!currentUser,
   });
+
+  const handleRunReminderTests = async () => {
+    if (reminderTestRunning) return;
+
+    setReminderTestRunning(true);
+    setReminderTestStatus('Running reminder tests...');
+
+    try {
+      const result = await runReminderIntegrationTests();
+      console.table(result.steps);
+
+      if (result.passed) {
+        toast({ title: 'Reminder tests passed' });
+      } else {
+        toast({
+          title: 'Reminder tests failed - check console',
+          variant: 'destructive',
+        });
+      }
+
+      if (!result.cleanup?.passed) {
+        console.warn('[Dashboard] reminder test cleanup incomplete', result.cleanup);
+      }
+    } catch (error) {
+      console.error('[Dashboard] reminder integration tests failed', error);
+      toast({
+        title: 'Reminder tests failed - check console',
+        variant: 'destructive',
+      });
+    } finally {
+      setReminderTestRunning(false);
+      setReminderTestStatus('');
+      refetchReminders();
+    }
+  };
 
   useEffect(() => {
     if (!canSeeFullDashboard || !currentUser) return;
@@ -742,6 +782,26 @@ export default function Dashboard() {
           />
         </div>
       </div>
+
+      {canRunReminderTests && (
+        <div className="fixed bottom-4 left-4 z-40 flex flex-col items-start gap-1">
+          {reminderTestStatus ? (
+            <span className="rounded-md bg-background/90 px-2 py-1 text-xs text-muted-foreground shadow-sm border">
+              {reminderTestStatus}
+            </span>
+          ) : null}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 px-3 text-xs opacity-70 hover:opacity-100 shadow-sm"
+            disabled={reminderTestRunning}
+            onClick={() => { void handleRunReminderTests(); }}
+          >
+            Test Reminders
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
