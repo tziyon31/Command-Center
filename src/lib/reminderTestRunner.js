@@ -21,6 +21,9 @@ import {
 import { linkProjectToValidSignedProposal } from '@/lib/signedProposalLifecycle';
 import {
   getSignedProposalNeedsWorkStagesConditionKey,
+  getWorkStageNeedsCheckConditionKey,
+  getWorkStageTargetDateConditionKey,
+  runWorkStageReminderRulesForProject,
   runWorkStageReminderRulesForSignedProposal,
 } from '@/lib/workStageReminderRules';
 import {
@@ -395,6 +398,33 @@ function assertReminderClosed(ctx, name, conditionKey) {
   };
 }
 
+function assertOpenReminderFields(ctx, name, conditionKey, expected = {}) {
+  trackConditionKey(ctx, conditionKey);
+  const reminder = findReminderByConditionKeyInCache(ctx.cache, conditionKey);
+  const open = hasOpenReminderForConditionKey(ctx.cache, conditionKey);
+  const checks = [open];
+
+  if (expected.frequency) {
+    checks.push(reminder?.frequency === expected.frequency);
+  }
+  if (expected.titleIncludes) {
+    checks.push(String(reminder?.title || '').includes(expected.titleIncludes));
+  }
+  if (expected.actionUrlIncludes) {
+    checks.push(String(reminder?.action_url || '').includes(expected.actionUrlIncludes));
+  }
+
+  return {
+    name,
+    passed: checks.every(Boolean),
+    expected: JSON.stringify(expected),
+    actual: reminder
+      ? `${reminder.status} / ${reminder.frequency || '(no frequency)'} / ${reminder.title || ''} / ${reminder.action_url || ''}`
+      : 'not found',
+    details: { conditionKey, reminderId: reminder?.id || null },
+  };
+}
+
 function assertNoDuplicateOpenReminders(ctx, name) {
   const duplicates = [];
 
@@ -556,6 +586,50 @@ async function runRuleAndRefreshRemindersOnce(ctx, fn, reason = 'rules') {
   if (!ctx.rateLimited) {
     await refreshReminderSnapshot(ctx, reason);
   }
+}
+
+async function syncTestProjectStages(ctx, projectId) {
+  const result = await safeRequest(
+    ctx,
+    'recalculate_work_stages',
+    () => recalculateProjectWorkStages(projectId),
+  );
+  const stages = result?.normalized || await loadTestWorkStagesForProject(ctx, projectId);
+  ctx.createdEntities.workStages = [
+    ...ctx.createdEntities.workStages.filter(
+      (stage) => String(stage.project_id || '') !== String(projectId),
+    ),
+    ...stages,
+  ];
+  applyTestEntitiesToCache(ctx.cache, ctx.createdEntities);
+  return stages;
+}
+
+async function runWorkStageProjectRules(ctx, projectId, reason = 'work_stage_project_rules') {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
+    await runWorkStageReminderRulesForProject(projectId, ctx.cache);
+  }, reason);
+}
+
+async function createTestProjectWithSignedProposal(ctx, label) {
+  const client = await createTestClient(ctx, ctx.createdEntities, {
+    name: `${TEST_REMINDER_FLOW_PREFIX} ${label} client`,
+  });
+  const project = await createTestProject(ctx, ctx.createdEntities, {
+    name: `${TEST_REMINDER_FLOW_PREFIX} ${label} project`,
+    client_id: client.id,
+    client_name: client.name,
+  });
+  const signedProposal = await createTestSignedProposal(ctx, ctx.createdEntities, {
+    client_id: client.id,
+    project_id: project.id,
+    client_name: client.name,
+    project_name: project.name,
+    has_signed_offer_or_order: true,
+    form_status: 'submitted',
+  });
+
+  return { client, project, signedProposal };
 }
 
 async function cleanupTestReminders(ctx, createdEntities, trackedConditionKeys) {
@@ -1373,6 +1447,200 @@ async function runTest16(ctx) {
   });
 }
 
+async function runTest17(ctx) {
+  const { project } = await createTestProjectWithSignedProposal(ctx, 'WS1');
+  const stage = await createTestWorkStage(ctx, ctx.createdEntities, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} WS1 stage`,
+    project_id: project.id,
+    project_name: project.name,
+    order_index: 1,
+  });
+
+  await syncTestProjectStages(ctx, project.id);
+  await runWorkStageProjectRules(ctx, project.id, 'test17_ws_rules');
+
+  const ws1Key = getWorkStageNeedsCheckConditionKey(stage.id);
+  ctx.steps.push(assertOpenReminderFields(
+    ctx,
+    'Test 17 – WS1 created for active stage without target_date',
+    ws1Key,
+    {
+      frequency: 'weekly',
+      actionUrlIncludes: `project_id=${project.id}`,
+    },
+  ));
+  ctx.steps.push(assertOpenReminderFields(
+    ctx,
+    'Test 17 – WS1 action_url includes stage_id',
+    ws1Key,
+    { actionUrlIncludes: `stage_id=${stage.id}` },
+  ));
+}
+
+async function runTest18(ctx) {
+  const { project } = await createTestProjectWithSignedProposal(ctx, 'WS1 to WS2');
+  const stage = await createTestWorkStage(ctx, ctx.createdEntities, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} WS1/WS2 stage`,
+    project_id: project.id,
+    project_name: project.name,
+    order_index: 1,
+  });
+
+  await syncTestProjectStages(ctx, project.id);
+  await runWorkStageProjectRules(ctx, project.id, 'test18_ws1');
+
+  const ws1Key = getWorkStageNeedsCheckConditionKey(stage.id);
+  const ws2Key = getWorkStageTargetDateConditionKey(stage.id);
+  ctx.steps.push(assertReminderExists(ctx, 'Test 18 – WS1 open before target_date', ws1Key));
+
+  const targetDate = new Date();
+  targetDate.setDate(targetDate.getDate() + 5);
+  await updateTestWorkStage(ctx, ctx.createdEntities, stage, {
+    target_date: targetDate.toISOString().split('T')[0],
+  });
+  await syncTestProjectStages(ctx, project.id);
+  await runWorkStageProjectRules(ctx, project.id, 'test18_ws2');
+
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 18 – WS1 closed after target_date added', ws1Key));
+  ctx.steps.push(assertReminderExists(ctx, 'Test 18 – WS2 created after target_date added', ws2Key));
+}
+
+async function runTest19(ctx) {
+  const { project } = await createTestProjectWithSignedProposal(ctx, 'WS2 complete');
+  const targetDate = new Date();
+  targetDate.setDate(targetDate.getDate() + 3);
+
+  const stage = await createTestWorkStage(ctx, ctx.createdEntities, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} WS2 complete stage`,
+    project_id: project.id,
+    project_name: project.name,
+    order_index: 1,
+    target_date: targetDate.toISOString().split('T')[0],
+  });
+
+  await syncTestProjectStages(ctx, project.id);
+  await runWorkStageProjectRules(ctx, project.id, 'test19_ws2_open');
+
+  const ws2Key = getWorkStageTargetDateConditionKey(stage.id);
+  ctx.steps.push(assertReminderExists(ctx, 'Test 19 – WS2 exists before completion', ws2Key));
+
+  await updateTestWorkStage(ctx, ctx.createdEntities, stage, {
+    aaron_approved: true,
+    client_approved: true,
+    draftsman_approved: true,
+  });
+  await syncTestProjectStages(ctx, project.id);
+  await runWorkStageProjectRules(ctx, project.id, 'test19_ws2_close');
+
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 19 – WS2 closed after stage completed', ws2Key));
+}
+
+async function runTest20(ctx) {
+  const { project } = await createTestProjectWithSignedProposal(ctx, 'WS active only');
+  const stage1 = await createTestWorkStage(ctx, ctx.createdEntities, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} WS active 1`,
+    project_id: project.id,
+    project_name: project.name,
+    order_index: 1,
+  });
+  const stage2 = await createTestWorkStage(ctx, ctx.createdEntities, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} WS active 2`,
+    project_id: project.id,
+    project_name: project.name,
+    order_index: 2,
+  });
+  const stage3 = await createTestWorkStage(ctx, ctx.createdEntities, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} WS active 3`,
+    project_id: project.id,
+    project_name: project.name,
+    order_index: 3,
+  });
+
+  const stages = await syncTestProjectStages(ctx, project.id);
+  const active = getActiveWorkStage(stages);
+  await runWorkStageProjectRules(ctx, project.id, 'test20_ws_active_only');
+
+  ctx.steps.push(assertReminderExists(
+    ctx,
+    'Test 20 – active stage has WS1 reminder',
+    getWorkStageNeedsCheckConditionKey(active?.id || stage1.id),
+  ));
+  ctx.steps.push(assertReminderClosed(
+    ctx,
+    'Test 20 – pending stage 2 has no WS1',
+    getWorkStageNeedsCheckConditionKey(stage2.id),
+  ));
+  ctx.steps.push(assertReminderClosed(
+    ctx,
+    'Test 20 – pending stage 3 has no WS1',
+    getWorkStageNeedsCheckConditionKey(stage3.id),
+  ));
+  ctx.steps.push(assertReminderClosed(
+    ctx,
+    'Test 20 – pending stage 2 has no WS2',
+    getWorkStageTargetDateConditionKey(stage2.id),
+  ));
+}
+
+async function runTest21(ctx) {
+  const { project } = await createTestProjectWithSignedProposal(ctx, 'WS reorder');
+  const stage1 = await createTestWorkStage(ctx, ctx.createdEntities, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} WS reorder A`,
+    project_id: project.id,
+    project_name: project.name,
+    order_index: 1,
+  });
+  const stage2 = await createTestWorkStage(ctx, ctx.createdEntities, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} WS reorder B`,
+    project_id: project.id,
+    project_name: project.name,
+    order_index: 2,
+  });
+
+  await syncTestProjectStages(ctx, project.id);
+  await runWorkStageProjectRules(ctx, project.id, 'test21_before_reorder');
+
+  const ws1Stage1Key = getWorkStageNeedsCheckConditionKey(stage1.id);
+  const ws1Stage2Key = getWorkStageNeedsCheckConditionKey(stage2.id);
+  ctx.steps.push(assertReminderExists(ctx, 'Test 21 – WS1 on first active stage before reorder', ws1Stage1Key));
+
+  await updateTestWorkStage(ctx, ctx.createdEntities, stage2, { order_index: 1 });
+  await updateTestWorkStage(ctx, ctx.createdEntities, stage1, { order_index: 2 });
+  await syncTestProjectStages(ctx, project.id);
+  await runWorkStageProjectRules(ctx, project.id, 'test21_after_reorder');
+
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 21 – previous active stage WS1 closed after reorder', ws1Stage1Key));
+  ctx.steps.push(assertReminderExists(ctx, 'Test 21 – new active stage WS1 created after reorder', ws1Stage2Key));
+}
+
+async function runTest22(ctx) {
+  const { project } = await createTestProjectWithSignedProposal(ctx, 'WS overdue');
+  const overdueDate = new Date();
+  overdueDate.setDate(overdueDate.getDate() - 2);
+
+  const stage = await createTestWorkStage(ctx, ctx.createdEntities, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} WS overdue stage`,
+    project_id: project.id,
+    project_name: project.name,
+    order_index: 1,
+    target_date: overdueDate.toISOString().split('T')[0],
+  });
+
+  await syncTestProjectStages(ctx, project.id);
+  await runWorkStageProjectRules(ctx, project.id, 'test22_overdue');
+
+  const ws2Key = getWorkStageTargetDateConditionKey(stage.id);
+  ctx.steps.push(assertOpenReminderFields(
+    ctx,
+    'Test 22 – overdue active stage uses daily WS2',
+    ws2Key,
+    {
+      frequency: 'daily',
+      titleIncludes: 'עבר את תאריך היעד',
+    },
+  ));
+}
+
 export async function runReminderIntegrationTests() {
   if (!acquireReminderIntegrationTestLock()) {
     return {
@@ -1433,6 +1701,12 @@ export async function runReminderIntegrationTests() {
       runTest14,
       runTest15,
       runTest16,
+      runTest17,
+      runTest18,
+      runTest19,
+      runTest20,
+      runTest21,
+      runTest22,
     ];
 
     for (const testFn of tests) {

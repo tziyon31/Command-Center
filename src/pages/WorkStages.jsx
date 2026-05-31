@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowRight, ArrowDown, ArrowUp } from 'lucide-react';
@@ -26,6 +26,7 @@ import {
   loadWorkStagesForProject,
   recalculateProjectWorkStages,
 } from '@/lib/workStageSync';
+import { cn } from '@/lib/utils';
 
 const STATUS_LABELS = {
   pending: 'ממתין',
@@ -48,13 +49,14 @@ const readSearchParams = () => {
   return {
     projectId: params.get('project_id') || '',
     signedProposalId: params.get('signed_proposal_id') || '',
+    stageId: params.get('stage_id') || '',
   };
 };
 
 export default function WorkStages() {
   const location = useLocation();
   const queryClient = useQueryClient();
-  const [{ projectId, signedProposalId }] = useState(() => readSearchParams());
+  const [{ projectId, signedProposalId, stageId }] = useState(() => readSearchParams());
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingStage, setEditingStage] = useState(null);
   const [busyStageId, setBusyStageId] = useState(null);
@@ -68,6 +70,11 @@ export default function WorkStages() {
     const params = new URLSearchParams(location.search);
     return params.get('signed_proposal_id') || signedProposalId;
   }, [location.search, signedProposalId]);
+
+  const resolvedStageId = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    return params.get('stage_id') || stageId;
+  }, [location.search, stageId]);
 
   const { data: project, isLoading: isLoadingProject } = useQuery({
     queryKey: ['project', resolvedProjectId],
@@ -102,6 +109,15 @@ export default function WorkStages() {
     () => getActiveWorkStage(workStages),
     [workStages],
   );
+
+  useEffect(() => {
+    if (!resolvedStageId || isLoadingStages) return;
+
+    const row = document.getElementById(`work-stage-row-${resolvedStageId}`);
+    if (!row) return;
+
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [resolvedStageId, isLoadingStages, workStages.length]);
 
   const handleAfterMutation = async () => {
     await recalculateProjectWorkStages(resolvedProjectId);
@@ -279,7 +295,13 @@ export default function WorkStages() {
                   {sortedStages.map((stage, index) => {
                     const normalized = normalizedStages.find((item) => item.id === stage.id) || stage;
                     return (
-                      <TableRow key={stage.id}>
+                      <TableRow
+                        key={stage.id}
+                        id={`work-stage-row-${stage.id}`}
+                        className={cn(
+                          resolvedStageId === stage.id && 'bg-primary/5 ring-1 ring-primary/30',
+                        )}
+                      >
                         <TableCell>{stage.order_index ?? index + 1}</TableCell>
                         <TableCell>{stage.title}</TableCell>
                         <TableCell>

@@ -89,10 +89,11 @@ export const buildClientFormPageUrl = ({ name, sourceInquiryId }) => {
   return createPageUrl(queryString ? `ClientForm?${queryString}` : 'ClientForm');
 };
 
-export const buildWorkStagesPageUrl = ({ projectId, signedProposalId }) => {
+export const buildWorkStagesPageUrl = ({ projectId, signedProposalId, stageId }) => {
   const query = new URLSearchParams();
   if (projectId) query.set('project_id', projectId);
   if (signedProposalId) query.set('signed_proposal_id', signedProposalId);
+  if (stageId) query.set('stage_id', stageId);
   const queryString = query.toString();
   return createPageUrl(queryString ? `WorkStages?${queryString}` : 'WorkStages');
 };

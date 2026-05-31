@@ -2,6 +2,10 @@ import { base44 } from '@/api/base44Client';
 import { evaluateP2ReminderValidity } from '@/lib/reminderEngineP2';
 import { isValidSignedProposal } from '@/lib/signedProposalValidation';
 import { hasNonCancelledWorkStageForProject } from '@/lib/workStageReminderRules';
+import {
+  getActiveWorkStage,
+  isWorkStageCompleted,
+} from '@/lib/workStageLogic';
 
 export const REMINDER_STATUS = {
   ACTIVE: 'active',
@@ -199,6 +203,10 @@ const REMINDER_CONDITION_PREFIX_BY_ENTITY_TYPE = {
     'proposal_needs_signed_proposal:',
   ],
   signed_proposal: ['signed_proposal_needs_work_stages:'],
+  work_stage: [
+    'work_stage_needs_check:',
+    'work_stage_target_date:',
+  ],
 };
 
 const ORPHAN_ENTITY_LOADERS = [
@@ -207,6 +215,7 @@ const ORPHAN_ENTITY_LOADERS = [
   { sourceType: 'project', entityName: 'Project' },
   { sourceType: 'proposal', entityName: 'Proposal' },
   { sourceType: 'signed_proposal', entityName: 'SignedProposal' },
+  { sourceType: 'work_stage', entityName: 'WorkStage' },
 ];
 
 const KNOWN_ORPHAN_SOURCE_TYPES = new Set(
@@ -224,6 +233,8 @@ const CONDITION_KEY_PREFIX_COUNTS = [
   { label: 'proposal_not_seen', prefix: 'proposal_not_seen:' },
   { label: 'proposal_needs_signed_proposal', prefix: 'proposal_needs_signed_proposal:' },
   { label: 'signed_proposal_needs_work_stages', prefix: 'signed_proposal_needs_work_stages:' },
+  { label: 'work_stage_needs_check', prefix: 'work_stage_needs_check:' },
+  { label: 'work_stage_target_date', prefix: 'work_stage_target_date:' },
 ];
 
 /** Default true: Dashboard must not mutate reminders until dry-run is verified. */
@@ -265,6 +276,8 @@ const REMINDER_PREFIXES = {
   P4: 'proposal_not_seen:',
   SP1: 'proposal_needs_signed_proposal:',
   R7: 'signed_proposal_needs_work_stages:',
+  WS1: 'work_stage_needs_check:',
+  WS2: 'work_stage_target_date:',
 };
 
 const DATE_LIKE_CONDITION_KEY_PATTERN =
@@ -1279,6 +1292,33 @@ const evaluateReminderBusinessValidity = async (reminder, cache) => {
     const workStages = workStagesById ? [...workStagesById.values()] : [];
     const hasWorkStages = hasNonCancelledWorkStageForProject(signedProposal.project_id, workStages);
     return { valid: !hasWorkStages, reason: hasWorkStages ? 'condition_cleared' : 'valid' };
+  }
+
+  if (conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.WS1)
+    || conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.WS2)) {
+    const isWS1 = conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.WS1);
+    const stageId = conditionKey.slice(isWS1 ? REMINDER_PREFIXES.WS1.length : REMINDER_PREFIXES.WS2.length);
+    const workStagesById = await ensureEntityMap(cache, 'WorkStage');
+    if (!workStagesById) return { valid: true, reason: 'work_stage_loader_failed' };
+
+    const stage = workStagesById.get(stageId);
+    if (!stage) return { valid: false, reason: 'source_deleted' };
+    if (stage.status === 'cancelled' || stage.status === 'completed' || isWorkStageCompleted(stage)) {
+      return { valid: false, reason: 'condition_cleared' };
+    }
+
+    const projectStages = [...workStagesById.values()].filter(
+      (item) => toTrimmedValue(item.project_id) === toTrimmedValue(stage.project_id),
+    );
+    const activeStage = getActiveWorkStage(projectStages);
+    const isActive = activeStage?.id === stage.id;
+    if (!isActive) return { valid: false, reason: 'condition_cleared' };
+
+    const hasTargetDate = Boolean(toTrimmedValue(stage.target_date));
+    if (isWS1 && hasTargetDate) return { valid: false, reason: 'condition_cleared' };
+    if (!isWS1 && !hasTargetDate) return { valid: false, reason: 'condition_cleared' };
+
+    return { valid: true, reason: 'valid' };
   }
 
   // P2: פרויקט צריך הצעת מחיר — מאמת גם שאין SignedProposal

@@ -1,6 +1,12 @@
 import { base44 } from '@/api/base44Client';
 import { isValidSignedProposal } from '@/lib/signedProposalValidation';
 import {
+  getActiveWorkStage,
+  isWorkStageCompleted,
+  normalizeWorkStageStatuses,
+  WORK_STAGE_STATUS,
+} from '@/lib/workStageLogic';
+import {
   ensureReminderForCondition,
   isRateLimitError,
   loadReminderEngineCache,
@@ -8,9 +14,21 @@ import {
 import { buildWorkStagesPageUrl } from '@/lib/workflowNavigation';
 
 export const SIGNED_PROPOSAL_NEEDS_WORK_STAGES_PREFIX = 'signed_proposal_needs_work_stages:';
+export const WORK_STAGE_NEEDS_CHECK_PREFIX = 'work_stage_needs_check:';
+export const WORK_STAGE_TARGET_DATE_PREFIX = 'work_stage_target_date:';
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 export function getSignedProposalNeedsWorkStagesConditionKey(signedProposalId) {
   return `${SIGNED_PROPOSAL_NEEDS_WORK_STAGES_PREFIX}${signedProposalId}`;
+}
+
+export function getWorkStageNeedsCheckConditionKey(stageId) {
+  return `${WORK_STAGE_NEEDS_CHECK_PREFIX}${stageId}`;
+}
+
+export function getWorkStageTargetDateConditionKey(stageId) {
+  return `${WORK_STAGE_TARGET_DATE_PREFIX}${stageId}`;
 }
 
 export function hasNonCancelledWorkStageForProject(projectId, workStages = []) {
@@ -19,7 +37,7 @@ export function hasNonCancelledWorkStageForProject(projectId, workStages = []) {
 
   return workStages.some(
     (stage) => String(stage?.project_id || '').trim() === normalizedProjectId
-      && stage?.status !== 'cancelled',
+      && stage?.status !== WORK_STAGE_STATUS.CANCELLED,
   );
 }
 
@@ -34,6 +52,171 @@ const classifyRuleAction = (engineResult) => {
 const withReminderCache = (cache, options = {}) => (
   cache?.reminders ? { ...options, cache } : options
 );
+
+const tallyRuleAction = (summary, action) => {
+  if (action === 'created') summary.created += 1;
+  else if (action === 'updated') summary.updated += 1;
+  else if (action === 'resolved') summary.resolved += 1;
+  else summary.skipped += 1;
+
+  if (action === 'created' || action === 'updated' || action === 'resolved') {
+    summary.mutationCount += 1;
+  }
+};
+
+const parseTargetDate = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+
+  const dateOnly = raw.split('T')[0];
+  const parsed = new Date(dateOnly);
+  if (Number.isNaN(parsed.getTime())) return null;
+
+  parsed.setHours(0, 0, 0, 0);
+  return parsed;
+};
+
+const startOfToday = (now = new Date()) => {
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  return today;
+};
+
+const daysUntilTargetDate = (targetDateRaw, now = new Date()) => {
+  const target = parseTargetDate(targetDateRaw);
+  if (!target) return null;
+
+  const today = startOfToday(now);
+  return Math.round((target.getTime() - today.getTime()) / MS_PER_DAY);
+};
+
+const subtractDays = (date, days) => {
+  const result = new Date(date);
+  result.setDate(result.getDate() - days);
+  return result;
+};
+
+const buildWorkStageActionUrl = (stage) => buildWorkStagesPageUrl({
+  projectId: stage.project_id,
+  signedProposalId: stage.signed_proposal_id,
+  stageId: stage.id,
+});
+
+const buildWorkStageReminderBase = (stage) => ({
+  client_name: stage.client_name || '',
+  client_id: stage.client_id || '',
+  project_name: stage.project_name || '',
+  project_id: stage.project_id || '',
+  source_type: 'work_stage',
+  source_id: stage.id,
+  action_url: buildWorkStageActionUrl(stage),
+  action_label: 'פתח שלבי עבודה',
+});
+
+const buildWS1ReminderInput = (stage) => {
+  const title = stage.title || 'ללא שם';
+
+  return {
+    ...buildWorkStageReminderBase(stage),
+    title: `האם הסתיים שלב העבודה ${title}?`,
+    description: 'שלב העבודה הפעיל בפרויקט עדיין ללא תאריך יעד. יש לבדוק אם השלב הסתיים או לקבוע לו תאריך יעד.',
+    condition_key: getWorkStageNeedsCheckConditionKey(stage.id),
+    frequency: 'weekly',
+  };
+};
+
+export function computeWS2ReminderSchedule(stage, now = new Date()) {
+  const title = stage.title || 'ללא שם';
+  const days = daysUntilTargetDate(stage.target_date, now);
+
+  if (days === null) {
+    return {
+      frequency: 'due_date_based',
+      next_remind_at: now.toISOString(),
+      title: `שלב העבודה ${title} מתקרב לתאריך היעד`,
+      description: 'שלב העבודה הפעיל בפרויקט כולל תאריך יעד. יש לבדוק התקדמות או להשלים את האישורים הנדרשים.',
+      immediate: true,
+    };
+  }
+
+  if (days > 7) {
+    const target = parseTargetDate(stage.target_date);
+    return {
+      frequency: 'due_date_based',
+      next_remind_at: subtractDays(target, 7).toISOString(),
+      title: `שלב העבודה ${title} מתקרב לתאריך היעד`,
+      description: 'שלב העבודה הפעיל בפרויקט כולל תאריך יעד. יש לבדוק התקדמות או להשלים את האישורים הנדרשים.',
+      immediate: false,
+    };
+  }
+
+  if (days <= 0) {
+    return {
+      frequency: 'daily',
+      next_remind_at: now.toISOString(),
+      title: `שלב העבודה ${title} עבר את תאריך היעד. האם הסתיים?`,
+      description: 'שלב העבודה הפעיל בפרויקט כולל תאריך יעד. יש לבדוק התקדמות או להשלים את האישורים הנדרשים.',
+      immediate: true,
+    };
+  }
+
+  if (days === 1) {
+    return {
+      frequency: 'due_date_based',
+      next_remind_at: now.toISOString(),
+      title: `שלב העבודה ${title} מתקרב לתאריך היעד מחר`,
+      description: 'שלב העבודה הפעיל בפרויקט כולל תאריך יעד. יש לבדוק התקדמות או להשלים את האישורים הנדרשים.',
+      immediate: true,
+    };
+  }
+
+  return {
+    frequency: 'due_date_based',
+    next_remind_at: now.toISOString(),
+    title: `שלב העבודה ${title} מתקרב לתאריך היעד`,
+    description: 'שלב העבודה הפעיל בפרויקט כולל תאריך יעד. יש לבדוק התקדמות או להשלים את האישורים הנדרשים.',
+    immediate: true,
+  };
+};
+
+const buildWS2ReminderInput = (stage, now = new Date()) => {
+  const schedule = computeWS2ReminderSchedule(stage, now);
+
+  return {
+    input: {
+      ...buildWorkStageReminderBase(stage),
+      title: schedule.title,
+      description: schedule.description,
+      condition_key: getWorkStageTargetDateConditionKey(stage.id),
+      frequency: schedule.frequency,
+      next_remind_at: schedule.next_remind_at,
+    },
+    immediate: schedule.immediate,
+  };
+};
+
+const isStageCompleted = (stage) => (
+  stage?.status === WORK_STAGE_STATUS.COMPLETED || isWorkStageCompleted(stage)
+);
+
+const getProjectWorkStages = (projectId, cache = {}) => {
+  const normalizedProjectId = String(projectId || '').trim();
+  const workStages = cache.workStages ?? [];
+
+  return workStages.filter(
+    (stage) => String(stage?.project_id || '').trim() === normalizedProjectId,
+  );
+};
+
+const mergeProjectStagesIntoCache = (projectId, normalizedStages, cache = {}) => {
+  const normalizedProjectId = String(projectId || '').trim();
+  const workStages = cache.workStages ?? [];
+  const otherStages = workStages.filter(
+    (stage) => String(stage?.project_id || '').trim() !== normalizedProjectId,
+  );
+  cache.workStages = [...otherStages, ...normalizedStages];
+  return cache.workStages;
+};
 
 const buildR7ReminderInput = (signedProposal) => {
   const projectName = String(signedProposal.project_name || '').trim();
@@ -88,13 +271,14 @@ export async function runWorkStageReminderRulesForSignedProposal(signedProposal,
   };
 }
 
-export async function runWorkStageReminderRulesForProject(projectId, cache = {}) {
+async function runR7ReminderRulesForProject(projectId, cache = {}) {
   const normalizedProjectId = String(projectId || '').trim();
   if (!normalizedProjectId) return [];
 
   let signedProposals = cache.signedProposals;
   if (!signedProposals) {
     signedProposals = await base44.entities.SignedProposal.list();
+    cache.signedProposals = signedProposals;
   }
 
   const related = signedProposals.filter(
@@ -106,6 +290,77 @@ export async function runWorkStageReminderRulesForProject(projectId, cache = {})
     results.push(await runWorkStageReminderRulesForSignedProposal(signedProposal, cache));
   }
   return results;
+}
+
+export async function runWorkStageActiveReminderRulesForStage(stage, cache = {}, options = {}) {
+  const activeStageId = options.activeStageId ?? null;
+  const ws1Key = getWorkStageNeedsCheckConditionKey(stage?.id);
+  const ws2Key = getWorkStageTargetDateConditionKey(stage?.id);
+
+  if (!stage?.id) {
+    return {
+      status: 'skipped',
+      ws1: { action: null },
+      ws2: { action: null },
+      rule: 'ws',
+    };
+  }
+
+  const cancelled = stage.status === WORK_STAGE_STATUS.CANCELLED;
+  const completed = isStageCompleted(stage);
+  const isActive = !cancelled && !completed && stage.id === activeStageId;
+  const hasTargetDate = Boolean(String(stage.target_date || '').trim());
+
+  const ws1Condition = isActive && !hasTargetDate;
+  const ws2Condition = isActive && hasTargetDate;
+
+  const ws1Result = await ensureReminderForCondition(
+    ws1Condition,
+    ws1Condition ? buildWS1ReminderInput(stage) : { condition_key: ws1Key },
+    withReminderCache(cache, { immediate: ws1Condition }),
+  );
+
+  const ws2Built = ws2Condition ? buildWS2ReminderInput(stage) : null;
+  const ws2Result = await ensureReminderForCondition(
+    ws2Condition,
+    ws2Built?.input || { condition_key: ws2Key },
+    withReminderCache(cache, {
+      immediate: ws2Condition ? ws2Built?.immediate === true : false,
+    }),
+  );
+
+  return {
+    status: ws1Condition || ws2Condition ? 'applied' : 'cleared',
+    ws1: { action: classifyRuleAction(ws1Result), conditionKey: ws1Key, rule: 'ws1' },
+    ws2: { action: classifyRuleAction(ws2Result), conditionKey: ws2Key, rule: 'ws2' },
+    rule: 'ws',
+  };
+}
+
+export async function runWorkStageActiveReminderRulesForProject(projectId, cache = {}) {
+  const normalizedProjectId = String(projectId || '').trim();
+  if (!normalizedProjectId) return { ws: [] };
+
+  const projectStages = getProjectWorkStages(normalizedProjectId, cache);
+  const normalized = normalizeWorkStageStatuses(projectStages);
+  mergeProjectStagesIntoCache(normalizedProjectId, normalized, cache);
+
+  const activeStage = getActiveWorkStage(normalized);
+  const wsResults = [];
+
+  for (const stage of normalized) {
+    wsResults.push(await runWorkStageActiveReminderRulesForStage(stage, cache, {
+      activeStageId: activeStage?.id || null,
+    }));
+  }
+
+  return { ws: wsResults };
+}
+
+export async function runWorkStageReminderRulesForProject(projectId, cache = {}) {
+  const r7 = await runR7ReminderRulesForProject(projectId, cache);
+  const active = await runWorkStageActiveReminderRulesForProject(projectId, cache);
+  return { r7, ws: active.ws };
 }
 
 export async function runWorkStageReminderRulesForAll(cache = {}, options = {}) {
@@ -159,14 +414,46 @@ export async function runWorkStageReminderRulesForAll(cache = {}, options = {}) 
 
     try {
       const result = await runWorkStageReminderRulesForSignedProposal(signedProposal, cache);
+      tallyRuleAction(summary, result.action);
+    } catch (error) {
+      summary.errors += 1;
+      if (isRateLimitError(error)) {
+        summary.rateLimited = true;
+        break;
+      }
+    }
+  }
 
-      if (result.action === 'created') summary.created += 1;
-      else if (result.action === 'updated') summary.updated += 1;
-      else if (result.action === 'resolved') summary.resolved += 1;
-      else summary.skipped += 1;
+  const projectIds = [...new Set(
+    workStages
+      .map((stage) => String(stage?.project_id || '').trim())
+      .filter(Boolean),
+  )];
 
-      if (result.action === 'created' || result.action === 'updated' || result.action === 'resolved') {
-        summary.mutationCount += 1;
+  for (const projectId of projectIds) {
+    if (summary.rateLimited || summary.mutationCount >= maxMutations) {
+      summary.hasMore = true;
+      break;
+    }
+
+    summary.checked += 1;
+
+    try {
+      const { ws } = await runWorkStageActiveReminderRulesForProject(projectId, cache);
+
+      for (const result of ws) {
+        if (summary.mutationCount >= maxMutations) {
+          summary.hasMore = true;
+          break;
+        }
+
+        tallyRuleAction(summary, result.ws1?.action);
+        if (summary.mutationCount >= maxMutations) {
+          summary.hasMore = true;
+          break;
+        }
+
+        tallyRuleAction(summary, result.ws2?.action);
       }
     } catch (error) {
       summary.errors += 1;
