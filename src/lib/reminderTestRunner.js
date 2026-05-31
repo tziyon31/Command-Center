@@ -362,6 +362,7 @@ async function invalidateTestSignedProposal(ctx, signedProposal, proposal) {
   if (ctx.rateLimited) return;
 
   await safeRequest(ctx, 'reopen_sp1_after_delete', () => runSignedProposalNeedReminderRuleForProposal(proposal, ctx.cache));
+  await refreshReminderSnapshot(ctx, 'invalidate_test_signed_proposal');
 }
 
 function trackConditionKey(ctx, conditionKey) {
@@ -548,10 +549,13 @@ async function loadTestWorkStagesForProject(ctx, projectId) {
   return safeRequest(ctx, 'load_work_stages', () => loadWorkStagesForProject(projectId));
 }
 
-async function runRulesStep(ctx, fn, reason = 'rules') {
+async function runRuleAndRefreshRemindersOnce(ctx, fn, reason = 'rules') {
   if (ctx.rateLimited) return;
   applyTestEntitiesToCache(ctx.cache, ctx.createdEntities);
   await safeRequest(ctx, reason, fn);
+  if (!ctx.rateLimited) {
+    await refreshReminderSnapshot(ctx, reason);
+  }
 }
 
 async function cleanupTestReminders(ctx, createdEntities, trackedConditionKeys) {
@@ -697,7 +701,7 @@ async function runTest1(ctx) {
     form_status: 'draft',
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runInquiryReminderRulesForInquiry(inquiry, ctx.cache);
   });
 
@@ -712,7 +716,7 @@ async function runTest1(ctx) {
     form_status: 'submitted',
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runInquiryReminderRulesForInquiry(submitted, ctx.cache);
   });
 
@@ -730,7 +734,7 @@ async function runTest2(ctx) {
     form_status: 'submitted',
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runInquiryReminderRulesForInquiry(inquiry, ctx.cache);
   });
 
@@ -745,7 +749,7 @@ async function runTest2(ctx) {
     source_inquiry_id: inquiry.id,
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runInquiryReminderRulesForInquiry(inquiry, ctx.cache);
   });
 
@@ -761,7 +765,7 @@ async function runTest2(ctx) {
     source_inquiry_id: inquiry.id,
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runInquiryReminderRulesForInquiry(inquiry, ctx.cache);
   });
 
@@ -777,7 +781,7 @@ async function runTest3(ctx) {
     name: `${TEST_REMINDER_FLOW_PREFIX} R4`,
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runClientReminderRulesForClient(client, ctx.cache);
   });
 
@@ -792,7 +796,7 @@ async function runTest3(ctx) {
     client_id: client.id,
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runClientReminderRulesForClient(client, ctx.cache);
   });
 
@@ -810,7 +814,7 @@ async function runTest4(ctx) {
     form_status: 'submitted',
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runProposalReminderRulesForInquiry(inquiry, ctx.cache);
     await runInquiryReminderRulesForInquiry(inquiry, ctx.cache);
   });
@@ -827,7 +831,7 @@ async function runTest4(ctx) {
     form_status: 'draft',
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runProposalReminderRulesForInquiry(inquiry, ctx.cache);
   });
 
@@ -840,7 +844,7 @@ async function runTest5(ctx) {
     name: `${TEST_REMINDER_FLOW_PREFIX} P2 R4 guard`,
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runClientReminderRulesForClient(r4Client, ctx.cache);
   });
 
@@ -855,7 +859,7 @@ async function runTest5(ctx) {
     client_id: client.id,
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runProposalReminderRulesForProject(project, ctx.cache);
   });
 
@@ -871,7 +875,7 @@ async function runTest5(ctx) {
     form_status: 'draft',
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runProposalReminderRulesForProject(project, ctx.cache);
   });
 
@@ -885,7 +889,7 @@ async function runTest6(ctx) {
     form_status: 'draft',
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runProposalReminderRulesForProposal(proposal, ctx.cache);
   });
 
@@ -897,7 +901,7 @@ async function runTest6(ctx) {
     proposal_sent_to_client: false,
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runProposalReminderRulesForProposal(proposal, ctx.cache);
   });
 
@@ -910,7 +914,7 @@ async function runTest6(ctx) {
     client_saw_proposal: false,
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runProposalReminderRulesForProposal(proposal, ctx.cache);
   });
 
@@ -922,7 +926,7 @@ async function runTest6(ctx) {
     client_saw_proposal: true,
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runProposalReminderRulesForProposal(proposal, ctx.cache);
   });
 
@@ -947,7 +951,7 @@ async function runTest7(ctx) {
     client_saw_proposal: true,
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runSignedProposalNeedReminderRuleForProposal(proposal, ctx.cache);
   });
 
@@ -965,7 +969,7 @@ async function runTest7(ctx) {
     form_status: 'submitted',
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runSignedProposalNeedReminderRuleForProposal(proposal, ctx.cache);
   });
 
@@ -989,7 +993,7 @@ async function runTest8(ctx) {
     proposal_sent_to_client: true,
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runSignedProposalNeedReminderRuleForProposal(proposal, ctx.cache);
   });
 
@@ -1006,7 +1010,7 @@ async function runTest8(ctx) {
     form_status: 'draft',
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runSignedProposalNeedReminderRuleForProposal(proposal, ctx.cache);
     await runProposalReminderRulesForProposal(proposal, ctx.cache);
   });
@@ -1023,7 +1027,7 @@ async function runTest10(ctx) {
     name: `${TEST_REMINDER_FLOW_PREFIX} orphan`,
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runClientReminderRulesForClient(client, ctx.cache);
   });
 
@@ -1074,7 +1078,7 @@ async function runTest11(ctx) {
     client_saw_proposal: true,
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runSignedProposalNeedReminderRuleForProposal(proposal, ctx.cache);
   });
 
@@ -1093,7 +1097,7 @@ async function runTest11(ctx) {
 
   await safeRequest(ctx, 'link_project_signed_proposal', () => linkProjectToValidSignedProposal(signedProposal));
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runSignedProposalNeedReminderRuleForProposal(proposal, ctx.cache);
   });
 
@@ -1149,7 +1153,7 @@ async function runTest12(ctx) {
     form_status: 'submitted',
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runWorkStageReminderRulesForSignedProposal(signedProposal, ctx.cache);
   });
 
@@ -1166,7 +1170,7 @@ async function runTest12(ctx) {
     order_index: 1,
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runWorkStageReminderRulesForSignedProposal(signedProposal, ctx.cache);
   });
 
@@ -1235,7 +1239,7 @@ async function runTest14(ctx) {
     has_signed_offer_or_order: true,
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runWorkStageReminderRulesForSignedProposal(draftSignedProposal, ctx.cache);
   });
 
@@ -1252,7 +1256,7 @@ async function runTest14(ctx) {
     has_signed_offer_or_order: true,
   });
 
-  await runRulesStep(ctx, async () => {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
     await runWorkStageReminderRulesForSignedProposal(cancelledSignedProposal, ctx.cache);
   });
 

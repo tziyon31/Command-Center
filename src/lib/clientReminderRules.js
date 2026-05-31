@@ -74,7 +74,7 @@ export async function runClientReminderRulesForClient(client, cache = {}) {
     const result = await ensureReminderForCondition(
       false,
       { condition_key: conditionKey },
-      { immediate: false },
+      withReminderCache(cache, { immediate: false }),
     );
 
     return {
@@ -94,7 +94,7 @@ export async function runClientReminderRulesForClient(client, cache = {}) {
   const result = await ensureReminderForCondition(
     conditionIsTrue,
     reminderInput,
-    { immediate: false },
+    withReminderCache(cache, { immediate: conditionIsTrue }),
   );
 
   return {
