@@ -617,7 +617,7 @@ async function syncTestProjectStages(ctx, projectId) {
   const result = await safeRequest(
     ctx,
     'recalculate_work_stages',
-    () => recalculateProjectWorkStages(projectId),
+    () => recalculateProjectWorkStages(projectId, { cache: ctx.cache }),
   );
   const stages = result?.normalized || await loadTestWorkStagesForProject(ctx, projectId);
   ctx.createdEntities.workStages = [

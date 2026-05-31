@@ -1167,12 +1167,6 @@ export async function ensureReminderForCondition(conditionIsTrue, reminderInput,
   if (conditionIsTrue === true) return upsertReminder(reminderInput, options);
 
   const conditionKey = reminderInput?.condition_key;
-
-  if (options.cache?.remindersByConditionKey && conditionKey) {
-    const existing = findReminderByConditionKeyInCache(options.cache, conditionKey);
-    if (!existing || isTerminalReminderStatus(existing.status)) return { action: 'not_found' };
-  }
-
   return resolveReminderByConditionKey(conditionKey, 'condition_cleared', options);
 }
 

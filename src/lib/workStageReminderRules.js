@@ -8,8 +8,13 @@ import {
 } from '@/lib/workStageLogic';
 import {
   ensureReminderForCondition,
+  hasOpenReminderForConditionKey,
   isRateLimitError,
   loadReminderEngineCache,
+  REMINDER_STATUS,
+  resolveReminder,
+  resolveReminderByConditionKey,
+  upsertReminderInCache,
 } from '@/lib/reminderEngine';
 import { buildWorkStagesPageUrl } from '@/lib/workflowNavigation';
 
@@ -203,6 +208,34 @@ const isStageCompleted = (stage) => (
   stage?.status === WORK_STAGE_STATUS.COMPLETED || isWorkStageCompleted(stage)
 );
 
+const isOpenReminderStatus = (status) =>
+  status === REMINDER_STATUS.ACTIVE || status === REMINDER_STATUS.SNOOZED;
+
+const closeWorkStageReminderIfOpen = async (cache, conditionKey) => {
+  const normalizedKey = String(conditionKey || '').trim();
+  if (!normalizedKey) return { action: 'skipped' };
+
+  const options = withReminderCache(cache, {});
+  let lastResult = { action: 'not_found' };
+
+  if (options.cache?.remindersByConditionKey) {
+    const reminders = options.cache.remindersByConditionKey.get(normalizedKey) || [];
+    for (const reminder of reminders) {
+      if (!reminder?.id || !isOpenReminderStatus(reminder.status)) continue;
+      const resolved = await resolveReminder(reminder.id, 'condition_cleared');
+      upsertReminderInCache(options.cache, resolved);
+      lastResult = { action: 'resolved', reminder: resolved };
+    }
+    if (lastResult.action === 'resolved') return lastResult;
+  }
+
+  if (options.cache && hasOpenReminderForConditionKey(options.cache, normalizedKey)) {
+    return resolveReminderByConditionKey(normalizedKey, 'condition_cleared', options);
+  }
+
+  return resolveReminderByConditionKey(normalizedKey, 'condition_cleared', options);
+};
+
 const getProjectWorkStages = (projectId, cache = {}) => {
   const normalizedProjectId = String(projectId || '').trim();
   const workStages = cache.workStages ?? [];
@@ -312,27 +345,42 @@ export async function runWorkStageActiveReminderRulesForStage(stage, cache = {},
 
   const cancelled = stage.status === WORK_STAGE_STATUS.CANCELLED;
   const completed = isStageCompleted(stage);
-  const isActive = !cancelled && !completed && stage.id === activeStageId;
+  const isActive = !cancelled
+    && !completed
+    && stage.status === WORK_STAGE_STATUS.ACTIVE
+    && stage.id === activeStageId;
   const hasTargetDate = Boolean(String(stage.target_date || '').trim());
   const canCreateReminder = hasWorkStageReminderClientName(stage);
 
   const ws1ShouldBeOpen = isActive && !hasTargetDate && canCreateReminder;
   const ws2ShouldBeOpen = isActive && hasTargetDate && canCreateReminder;
 
-  const ws1Result = await ensureReminderForCondition(
-    ws1ShouldBeOpen,
-    ws1ShouldBeOpen ? buildWS1ReminderInput(stage) : { condition_key: ws1Key },
-    withReminderCache(cache, { immediate: ws1ShouldBeOpen }),
-  );
+  let ws1Result = { action: 'not_found' };
+  let ws2Result = { action: 'not_found' };
 
-  const ws2Built = ws2ShouldBeOpen ? buildWS2ReminderInput(stage) : null;
-  const ws2Result = await ensureReminderForCondition(
-    ws2ShouldBeOpen,
-    ws2Built?.input || { condition_key: ws2Key },
-    withReminderCache(cache, {
-      immediate: ws2ShouldBeOpen ? ws2Built?.immediate === true : false,
-    }),
-  );
+  if (!ws1ShouldBeOpen) {
+    ws1Result = await closeWorkStageReminderIfOpen(cache, ws1Key);
+  }
+  if (!ws2ShouldBeOpen) {
+    ws2Result = await closeWorkStageReminderIfOpen(cache, ws2Key);
+  }
+
+  if (ws1ShouldBeOpen) {
+    ws1Result = await ensureReminderForCondition(
+      true,
+      buildWS1ReminderInput(stage),
+      withReminderCache(cache, { immediate: true }),
+    );
+  }
+
+  if (ws2ShouldBeOpen) {
+    const ws2Built = buildWS2ReminderInput(stage);
+    ws2Result = await ensureReminderForCondition(
+      true,
+      ws2Built.input,
+      withReminderCache(cache, { immediate: ws2Built.immediate === true }),
+    );
+  }
 
   return {
     status: ws1ShouldBeOpen || ws2ShouldBeOpen ? 'applied' : 'cleared',
