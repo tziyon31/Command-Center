@@ -920,6 +920,16 @@ export async function loadReminderEngineCache(cache = null, options = {}) {
   return target;
 }
 
+/** Reload only Reminder rows — avoids repeated ReminderSettings.list during test checkpoints. */
+export async function reloadRemindersInCache(cache) {
+  if (!cache) return cache;
+
+  const reminders = await base44.entities.Reminder.list();
+  cache.reminders = reminders;
+  rebuildReminderConditionKeyIndex(cache);
+  return cache;
+}
+
 const hasBrowserStorage = () => (
   typeof globalThis !== 'undefined' && globalThis.localStorage && typeof globalThis.localStorage.getItem === 'function'
 );

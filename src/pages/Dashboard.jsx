@@ -26,6 +26,7 @@ import ReminderPanel from '../components/reminders/ReminderPanel.jsx';
 import {
   createReminderEngineCache,
   isRateLimitError,
+  isReminderIntegrationTestRunning,
   loadVisibleReminders,
   runReminderReconciliationInBackground,
   validateVisibleReminders,
@@ -309,6 +310,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!canSeeFullDashboard || !currentUser) return;
+    if (isReminderIntegrationTestRunning()) return;
 
     void runReminderReconciliationInBackground('dashboard_load');
   }, [canSeeFullDashboard, currentUser, visibleReminders.length]);

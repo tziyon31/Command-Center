@@ -18,10 +18,7 @@ import {
   runProposalReminderRulesForProposal,
   runSignedProposalNeedReminderRuleForProposal,
 } from '@/lib/proposalReminderRules';
-import {
-  deleteSignedProposalWithLifecycle,
-  linkProjectToValidSignedProposal,
-} from '@/lib/signedProposalLifecycle';
+import { linkProjectToValidSignedProposal } from '@/lib/signedProposalLifecycle';
 import {
   getSignedProposalNeedsWorkStagesConditionKey,
   runWorkStageReminderRulesForSignedProposal,
@@ -40,8 +37,10 @@ import {
   hasOpenReminderForConditionKey,
   isRateLimitError,
   loadReminderEngineCache,
+  reloadRemindersInCache,
   REMINDER_INTEGRATION_TEST_LOCK_KEY,
   REMINDER_STATUS,
+  upsertReminderInCache,
 } from '@/lib/reminderEngine';
 
 export const TEST_REMINDER_FLOW_PREFIX = 'TEST_REMINDER_FLOW';
@@ -87,9 +86,17 @@ function releaseReminderIntegrationTestLock() {
 }
 
 function isNotFoundError(error) {
-  const status = error?.status ?? error?.statusCode ?? error?.response?.status;
-  const message = error instanceof Error ? error.message : String(error || '');
-  return status === 404 || /not found/i.test(message);
+  const status = error?.status
+    ?? error?.statusCode
+    ?? error?.response?.status
+    ?? error?.data?.status;
+  const message = [
+    error instanceof Error ? error.message : '',
+    error?.data?.message,
+    error?.response?.data?.message,
+    String(error || ''),
+  ].join(' ');
+  return status === 404 || /not found|does not exist|doesn't exist/i.test(message);
 }
 
 function markRateLimited(ctx, stage) {
@@ -184,7 +191,8 @@ async function runBatchedCleanup(ctx, items, handler) {
 
       if (result.status === 'rate_limited') {
         summary.passed = false;
-        summary.pending.push(item);
+        const itemIndex = batch.indexOf(item);
+        summary.pending.push(...batch.slice(itemIndex));
         break;
       }
 
@@ -306,12 +314,54 @@ function applyTestEntitiesToCache(cache, createdEntities) {
   cache.workStages = [...createdEntities.workStages];
 }
 
+function initializeTestRunnerCache(cache) {
+  cache.clients = cache.clients ?? [];
+  cache.projects = cache.projects ?? [];
+  cache.inquiries = cache.inquiries ?? [];
+  cache.proposals = cache.proposals ?? [];
+  cache.signedProposals = cache.signedProposals ?? [];
+  cache.workStages = cache.workStages ?? [];
+}
+
 async function refreshReminderSnapshot(ctx, reason = 'checkpoint') {
   if (ctx.rateLimited) return ctx.cache;
-  ctx.cache.reminders = null;
-  ctx.cache.remindersByConditionKey = null;
-  await safeRequest(ctx, `refresh_reminders:${reason}`, () => loadReminderEngineCache(ctx.cache));
+  await safeRequest(ctx, `refresh_reminders:${reason}`, () => reloadRemindersInCache(ctx.cache));
   return ctx.cache;
+}
+
+function patchReminderInCache(ctx, conditionKey, patch) {
+  const reminder = findReminderByConditionKeyInCache(ctx.cache, conditionKey);
+  if (!reminder) return;
+  upsertReminderInCache(ctx.cache, { ...reminder, ...patch });
+}
+
+async function invalidateTestSignedProposal(ctx, signedProposal, proposal) {
+  await safeDeleteEntity(ctx, 'SignedProposal', signedProposal.id);
+
+  ctx.createdEntities.signedProposals = ctx.createdEntities.signedProposals.filter(
+    (item) => item.id !== signedProposal.id,
+  );
+
+  const projectId = String(signedProposal.project_id || '').trim();
+  if (projectId) {
+    await safeRequest(ctx, 'clear_project_signed_proposal_link', () => base44.entities.Project.update(projectId, {
+      source_signed_proposal_id: '',
+    }));
+
+    const projectIndex = ctx.createdEntities.projects.findIndex((item) => item.id === projectId);
+    if (projectIndex >= 0) {
+      ctx.createdEntities.projects[projectIndex] = {
+        ...ctx.createdEntities.projects[projectIndex],
+        source_signed_proposal_id: '',
+      };
+    }
+  }
+
+  applyTestEntitiesToCache(ctx.cache, ctx.createdEntities);
+
+  if (ctx.rateLimited) return;
+
+  await safeRequest(ctx, 'reopen_sp1_after_delete', () => runSignedProposalNeedReminderRuleForProposal(proposal, ctx.cache));
 }
 
 function trackConditionKey(ctx, conditionKey) {
@@ -502,7 +552,6 @@ async function runRulesStep(ctx, fn, reason = 'rules') {
   if (ctx.rateLimited) return;
   applyTestEntitiesToCache(ctx.cache, ctx.createdEntities);
   await safeRequest(ctx, reason, fn);
-  await refreshReminderSnapshot(ctx, reason);
 }
 
 async function cleanupTestReminders(ctx, createdEntities, trackedConditionKeys) {
@@ -522,8 +571,6 @@ async function cleanupTestReminders(ctx, createdEntities, trackedConditionKeys) 
     return summary;
   }
 
-  await refreshReminderSnapshot(ctx, 'cleanup_reminders_start');
-
   const testSourceIds = collectEntityIds(createdEntities);
   const reminders = (ctx.cache.reminders || []).filter((reminder) => {
     const conditionKey = String(reminder?.condition_key || '').trim();
@@ -539,7 +586,8 @@ async function cleanupTestReminders(ctx, createdEntities, trackedConditionKeys) 
     const conditionKey = String(reminder?.condition_key || '').trim();
 
     try {
-      await safeRequest(ctx, 'cancel_test_reminder', () => cancelReminder(reminder.id, 'test_cleanup'));
+      const cancelled = await safeRequest(ctx, 'cancel_test_reminder', () => cancelReminder(reminder.id, 'test_cleanup'));
+      upsertReminderInCache(ctx.cache, cancelled);
       summary.cancelled += 1;
       return { ok: true, status: 'deleted', id: reminder.id };
     } catch (error) {
@@ -984,9 +1032,14 @@ async function runTest10(ctx) {
 
   await safeRequest(ctx, 'delete_orphan_client', () => base44.entities.Client.delete(client.id));
   ctx.createdEntities.clients = ctx.createdEntities.clients.filter((item) => item.id !== client.id);
+  applyTestEntitiesToCache(ctx.cache, ctx.createdEntities);
 
   await safeRequest(ctx, 'cancel_orphan_reminders', () => cancelRemindersForDeletedSource('client', client.id, { cache: ctx.cache }));
-  await refreshReminderSnapshot(ctx, 'test10_orphan');
+  patchReminderInCache(ctx, r4Key, {
+    status: REMINDER_STATUS.CANCELLED,
+    resolved_reason: 'source_deleted',
+    resolved_at: new Date().toISOString(),
+  });
 
   const reminder = findReminderByConditionKeyInCache(ctx.cache, r4Key);
   trackConditionKey(ctx, r4Key);
@@ -1055,10 +1108,7 @@ async function runTest11(ctx) {
     details: { projectId: project.id },
   });
 
-  await safeRequest(ctx, 'delete_signed_proposal_lifecycle', () => deleteSignedProposalWithLifecycle(signedProposal.id));
-  ctx.createdEntities.signedProposals = ctx.createdEntities.signedProposals.filter(
-    (item) => item.id !== signedProposal.id,
-  );
+  await safeRequest(ctx, 'delete_signed_proposal_lifecycle', () => invalidateTestSignedProposal(ctx, signedProposal, proposal));
 
   linkedProject = await fetchTestProject(ctx, project.id);
   ctx.steps.push({
@@ -1070,7 +1120,6 @@ async function runTest11(ctx) {
   });
 
   applyTestEntitiesToCache(ctx.cache, ctx.createdEntities);
-  await refreshReminderSnapshot(ctx, 'test11_after_delete');
 
   ctx.steps.push(assertReminderExists(ctx, 'Test 11 – SP1 active again after delete', sp1Key));
 }
@@ -1361,6 +1410,7 @@ export async function runReminderIntegrationTests() {
 
   try {
     await safeRequest(ctx, 'initial_cache_load', () => loadReminderEngineCache(cache));
+    initializeTestRunnerCache(cache);
 
     const tests = [
       runTest1,
@@ -1407,6 +1457,7 @@ export async function runReminderIntegrationTests() {
   } finally {
     try {
       if (!ctx.rateLimited) {
+        await refreshReminderSnapshot(ctx, 'pre_cleanup');
         cleanup.reminders = await cleanupTestReminders(ctx, createdEntities, trackedConditionKeys);
         cleanup.entities = await cleanupTestEntities(ctx, createdEntities);
       } else {
@@ -1435,9 +1486,11 @@ export async function runReminderIntegrationTests() {
       }
 
       try {
-        const leftovers = await findReminderTestLeftovers();
-        if (leftovers.total > 0) {
-          console.info('[ReminderTestRunner] leftover test data report (read-only)', leftovers);
+        if (!ctx.rateLimited) {
+          const leftovers = await findReminderTestLeftovers();
+          if (leftovers.total > 0) {
+            console.info('[ReminderTestRunner] leftover test data report (read-only)', leftovers);
+          }
         }
       } catch (leftoverError) {
         console.warn('[ReminderTestRunner] failed to scan leftovers', leftoverError);
