@@ -58,6 +58,7 @@ import Proposals from './pages/Proposals';
 import ProposalForm from './pages/ProposalForm';
 import SignedProposals from './pages/SignedProposals';
 import SignedProposalForm from './pages/SignedProposalForm';
+import WorkStages from './pages/WorkStages';
 import Users from './pages/Users';
 import __Layout from './Layout.jsx';
 
@@ -74,6 +75,7 @@ export const PAGES = {
     "ProposalForm": ProposalForm,
     "SignedProposals": SignedProposals,
     "SignedProposalForm": SignedProposalForm,
+    "WorkStages": WorkStages,
     "Users": Users,
 }
 

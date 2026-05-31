@@ -24,6 +24,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { ArrowRight } from 'lucide-react';
+import SignedProposalContinueTreatment from '@/components/workflow/SignedProposalContinueTreatment';
+import { runWorkStageReminderRulesForSignedProposal } from '@/lib/workStageReminderRules';
 import CreateClientDialog from '@/components/workflow/CreateClientDialog';
 import CreateProjectDialog from '@/components/workflow/CreateProjectDialog';
 import { formatProjectSelectLabel } from '@/lib/projectSelectLabel';
@@ -258,6 +260,7 @@ export default function SignedProposalForm() {
   const syncSignedProposalReminders = async (savedRecord) => {
     try {
       await syncSignedProposalReminderRules(savedRecord);
+      await runWorkStageReminderRulesForSignedProposal(savedRecord);
       await queryClient.invalidateQueries({ queryKey: ['reminders'] });
       await queryClient.invalidateQueries({ queryKey: ['reminders', 'visible'] });
     } catch (error) {
@@ -591,6 +594,12 @@ export default function SignedProposalForm() {
             </form>
           </CardContent>
         </Card>
+        <SignedProposalContinueTreatment
+          signedProposal={record}
+          formStatus={formStatus}
+          projectId={formData.project_id}
+          hasSignedOfferOrOrder={formData.has_signed_offer_or_order}
+        />
       </div>
       <CreateClientDialog
         open={isCreateClientOpen}

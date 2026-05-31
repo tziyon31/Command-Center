@@ -89,6 +89,14 @@ export const buildClientFormPageUrl = ({ name, sourceInquiryId }) => {
   return createPageUrl(queryString ? `ClientForm?${queryString}` : 'ClientForm');
 };
 
+export const buildWorkStagesPageUrl = ({ projectId, signedProposalId }) => {
+  const query = new URLSearchParams();
+  if (projectId) query.set('project_id', projectId);
+  if (signedProposalId) query.set('signed_proposal_id', signedProposalId);
+  const queryString = query.toString();
+  return createPageUrl(queryString ? `WorkStages?${queryString}` : 'WorkStages');
+};
+
 export const formatExistingProjectsSuffix = (projects, { maxNames = 3 } = {}) => {
   const names = (projects || [])
     .map((project) => project?.name?.trim())

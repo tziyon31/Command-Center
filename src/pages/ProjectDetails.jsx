@@ -44,7 +44,7 @@ import { runInquiryReminderRulesForInquiry } from '@/lib/inquiryReminderRules';
 import { syncProposalReminderRulesAfterProjectSave } from '@/lib/proposalReminderRules';
 import { buildProjectCreateFormFromSearchParams } from '@/lib/projectDefaults';
 import { buildProjectCreatePayloadFromForm } from '@/lib/projectCreatePayload';
-import { buildProposalFormPageUrl, buildSignedProposalFormPageUrl } from '@/lib/workflowNavigation';
+import { buildProposalFormPageUrl, buildSignedProposalFormPageUrl, buildWorkStagesPageUrl } from '@/lib/workflowNavigation';
 
 const toNumber = (value) => {
   const num = Number(value);
@@ -602,6 +602,11 @@ export default function ProjectDetails() {
     sourceInquiryId: project.source_inquiry_id || createSourceInquiryId || '',
   });
 
+  const workStagesUrl = buildWorkStagesPageUrl({
+    projectId: project.id,
+    signedProposalId: project.source_signed_proposal_id || '',
+  });
+
   const refreshProjectData = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['project', projectId] }),
@@ -770,6 +775,9 @@ export default function ProjectDetails() {
                 </Button>
                 <Button asChild variant="outline" disabled={!project.id}>
                   <Link to={signedProposalFormUrl}>פתח הצעה חתומה</Link>
+                </Button>
+                <Button asChild variant="outline" disabled={!project.id}>
+                  <Link to={workStagesUrl}>שלבי עבודה</Link>
                 </Button>
                 <Button
                   type="button"

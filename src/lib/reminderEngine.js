@@ -1,6 +1,7 @@
 import { base44 } from '@/api/base44Client';
 import { evaluateP2ReminderValidity } from '@/lib/reminderEngineP2';
 import { isValidSignedProposal } from '@/lib/signedProposalValidation';
+import { hasNonCancelledWorkStageForProject } from '@/lib/workStageReminderRules';
 
 export const REMINDER_STATUS = {
   ACTIVE: 'active',
@@ -197,6 +198,7 @@ const REMINDER_CONDITION_PREFIX_BY_ENTITY_TYPE = {
     'proposal_not_seen:',
     'proposal_needs_signed_proposal:',
   ],
+  signed_proposal: ['signed_proposal_needs_work_stages:'],
 };
 
 const ORPHAN_ENTITY_LOADERS = [
@@ -221,6 +223,7 @@ const CONDITION_KEY_PREFIX_COUNTS = [
   { label: 'proposal_not_sent', prefix: 'proposal_not_sent:' },
   { label: 'proposal_not_seen', prefix: 'proposal_not_seen:' },
   { label: 'proposal_needs_signed_proposal', prefix: 'proposal_needs_signed_proposal:' },
+  { label: 'signed_proposal_needs_work_stages', prefix: 'signed_proposal_needs_work_stages:' },
 ];
 
 /** Default true: Dashboard must not mutate reminders until dry-run is verified. */
@@ -250,6 +253,7 @@ const REMINDER_PREFIXES = {
   P3: 'proposal_not_sent:',
   P4: 'proposal_not_seen:',
   SP1: 'proposal_needs_signed_proposal:',
+  R7: 'signed_proposal_needs_work_stages:',
 };
 
 const DATE_LIKE_CONDITION_KEY_PATTERN =
@@ -1243,6 +1247,19 @@ const evaluateReminderBusinessValidity = async (reminder, cache) => {
     return { valid: !hasSignedProposal, reason: hasSignedProposal ? 'condition_cleared' : 'valid' };
   }
 
+  if (conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.R7)) {
+    const signedProposalsById = await ensureEntityMap(cache, 'SignedProposal');
+    if (!signedProposalsById) return { valid: true, reason: 'signed_proposal_loader_failed' };
+    const signedProposal = signedProposalsById.get(sourceId);
+    if (!signedProposal) return { valid: false, reason: 'source_deleted' };
+    if (!isValidSignedProposal(signedProposal)) return { valid: false, reason: 'condition_cleared' };
+
+    const workStagesById = await ensureEntityMap(cache, 'WorkStage');
+    const workStages = workStagesById ? [...workStagesById.values()] : [];
+    const hasWorkStages = hasNonCancelledWorkStageForProject(signedProposal.project_id, workStages);
+    return { valid: !hasWorkStages, reason: hasWorkStages ? 'condition_cleared' : 'valid' };
+  }
+
   // P2: פרויקט צריך הצעת מחיר — מאמת גם שאין SignedProposal
   if (conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.P2)) {
     return evaluateP2ReminderValidity(sourceId, cache);
@@ -1386,6 +1403,7 @@ export async function runReminderReconciliationNow(reason = 'manual') {
       ensureEntityMap(cache, 'Project'),
       ensureEntityMap(cache, 'Proposal'),
       ensureEntityMap(cache, 'SignedProposal'),
+      ensureEntityMap(cache, 'WorkStage'),
     ]);
 
     const inquiriesById = cache.InquiryById;
@@ -1407,6 +1425,17 @@ export async function runReminderReconciliationNow(reason = 'manual') {
         if (result.mutationCount >= RECONCILIATION_MAX_MUTATIONS_PER_RUN) { result.hasMore = true; break; }
         const verdict = await runSignedProposalNeedReminderRuleForProposal(proposal, cache);
         if (verdict?.action === 'created' || verdict?.action === 'updated' || verdict?.action === 'resolved') result.mutationCount += 1;
+      }
+    }
+
+    const remainingBeforeR7 = Math.max(RECONCILIATION_MAX_MUTATIONS_PER_RUN - result.mutationCount, 0);
+    if (remainingBeforeR7 > 0 && signedProposalsById) {
+      const { runWorkStageReminderRulesForAll } = await import('@/lib/workStageReminderRules');
+      const r7Summary = await runWorkStageReminderRulesForAll(cache, { maxMutations: remainingBeforeR7 });
+      result.mutationCount += Number(r7Summary.mutationCount || 0);
+      if (r7Summary.hasMore || r7Summary.rateLimited || result.mutationCount >= RECONCILIATION_MAX_MUTATIONS_PER_RUN) {
+        result.hasMore = true;
+        if (result.mutationCount >= RECONCILIATION_MAX_MUTATIONS_PER_RUN) return result;
       }
     }
 

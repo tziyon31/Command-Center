@@ -23,6 +23,16 @@ import {
   linkProjectToValidSignedProposal,
 } from '@/lib/signedProposalLifecycle';
 import {
+  getSignedProposalNeedsWorkStagesConditionKey,
+  runWorkStageReminderRulesForSignedProposal,
+} from '@/lib/workStageReminderRules';
+import {
+  countActiveWorkStages,
+  getActiveWorkStage,
+  normalizeWorkStageStatuses,
+} from '@/lib/workStageLogic';
+import { loadWorkStagesForProject, recalculateProjectWorkStages } from '@/lib/workStageSync';
+import {
   cancelReminder,
   cancelRemindersForDeletedSource,
   createReminderEngineCache,
@@ -43,6 +53,7 @@ const emptyCreatedEntities = () => ({
   projects: [],
   proposals: [],
   signedProposals: [],
+  workStages: [],
 });
 
 const isTestLabel = (value) => String(value || '').startsWith(TEST_REMINDER_FLOW_PREFIX);
@@ -65,6 +76,7 @@ function applyTestEntitiesToCache(cache, createdEntities) {
   cache.projects = [...createdEntities.projects];
   cache.proposals = [...createdEntities.proposals];
   cache.signedProposals = [...createdEntities.signedProposals];
+  cache.workStages = [...createdEntities.workStages];
 }
 
 async function refreshReminderSnapshot(cache) {
@@ -217,6 +229,35 @@ async function createTestSignedProposal(createdEntities, overrides = {}) {
   return signedProposal;
 }
 
+async function createTestWorkStage(createdEntities, overrides = {}) {
+  const stage = await base44.entities.WorkStage.create({
+    title: `${TEST_REMINDER_FLOW_PREFIX} stage`,
+    order_index: 1,
+    status: 'pending',
+    aaron_approved: false,
+    client_approved: false,
+    draftsman_approved: false,
+    invoice_required_on_completion: false,
+    notes: '',
+    ...overrides,
+  });
+  createdEntities.workStages.push(stage);
+  return stage;
+}
+
+async function updateTestWorkStage(createdEntities, stage, patch) {
+  const updated = await base44.entities.WorkStage.update(stage.id, patch);
+  const merged = { ...stage, ...updated, ...patch };
+  const index = createdEntities.workStages.findIndex((item) => item.id === stage.id);
+  if (index >= 0) createdEntities.workStages[index] = merged;
+  return merged;
+}
+
+async function fetchTestWorkStage(stageId) {
+  const results = await base44.entities.WorkStage.filter({ id: stageId });
+  return results?.[0] || null;
+}
+
 async function runRulesStep(ctx, fn) {
   applyTestEntitiesToCache(ctx.cache, ctx.createdEntities);
   await fn();
@@ -279,6 +320,7 @@ async function cleanupTestEntities(createdEntities) {
   const summary = {
     passed: true,
     deleted: {
+      workStages: [],
       signedProposals: [],
       proposals: [],
       projects: [],
@@ -286,6 +328,7 @@ async function cleanupTestEntities(createdEntities) {
       clients: [],
     },
     failed: {
+      workStages: [],
       signedProposals: [],
       proposals: [],
       projects: [],
@@ -316,6 +359,10 @@ async function cleanupTestEntities(createdEntities) {
       console.warn('[ReminderTestRunner] failed to delete test entity', entityName, item.id, error);
     }
   };
+
+  for (const item of [...createdEntities.workStages].reverse()) {
+    await deleteEntity('workStages', 'WorkStage', item, 'title');
+  }
 
   for (const item of [...createdEntities.signedProposals].reverse()) {
     await deleteEntity('signedProposals', 'SignedProposal', item, 'client_name');
@@ -778,6 +825,251 @@ async function runTest11(ctx) {
   ctx.steps.push(assertReminderExists(ctx, 'Test 11 – SP1 active again after delete', sp1Key));
 }
 
+async function runTest12(ctx) {
+  const client = await createTestClient(ctx.createdEntities, {
+    name: `${TEST_REMINDER_FLOW_PREFIX} R7 client`,
+  });
+  const project = await createTestProject(ctx.createdEntities, {
+    name: `${TEST_REMINDER_FLOW_PREFIX} R7 project`,
+    client_id: client.id,
+  });
+  await createTestProposal(ctx.createdEntities, {
+    client_name: client.name,
+    client_id: client.id,
+    project_id: project.id,
+    project_name: project.name,
+    form_status: 'submitted',
+    proposal_sent_to_client: true,
+  });
+  const signedProposal = await createTestSignedProposal(ctx.createdEntities, {
+    client_id: client.id,
+    project_id: project.id,
+    project_name: project.name,
+    client_name: client.name,
+    has_signed_offer_or_order: true,
+    form_status: 'submitted',
+  });
+
+  await runRulesStep(ctx, async () => {
+    await runWorkStageReminderRulesForSignedProposal(signedProposal, ctx.cache);
+  });
+
+  const r7Key = getSignedProposalNeedsWorkStagesConditionKey(signedProposal.id);
+  ctx.steps.push(assertReminderExists(ctx, 'Test 12 – R7 created without work stages', r7Key));
+
+  await createTestWorkStage(ctx.createdEntities, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} R7 stage`,
+    project_id: project.id,
+    project_name: project.name,
+    client_id: client.id,
+    client_name: client.name,
+    signed_proposal_id: signedProposal.id,
+    order_index: 1,
+  });
+
+  await runRulesStep(ctx, async () => {
+    await runWorkStageReminderRulesForSignedProposal(signedProposal, ctx.cache);
+  });
+
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 12 – R7 closed after work stage created', r7Key));
+}
+
+async function runTest13(ctx) {
+  const project = await createTestProject(ctx.createdEntities, {
+    name: `${TEST_REMINDER_FLOW_PREFIX} completion project`,
+  });
+  let stage = await createTestWorkStage(ctx.createdEntities, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} completion stage`,
+    project_id: project.id,
+    project_name: project.name,
+    order_index: 1,
+  });
+
+  await recalculateProjectWorkStages(project.id);
+  let fetched = await fetchTestWorkStage(stage.id);
+  ctx.steps.push({
+    name: 'Test 13 – stage not completed with zero approvals',
+    passed: fetched?.status !== 'completed' && !fetched?.completed_at,
+    expected: 'not completed',
+    actual: `${fetched?.status || 'unknown'} / ${fetched?.completed_at || '(empty)'}`,
+    details: { stageId: stage.id },
+  });
+
+  stage = await updateTestWorkStage(ctx.createdEntities, stage, {
+    aaron_approved: true,
+    client_approved: true,
+    draftsman_approved: false,
+  });
+  await recalculateProjectWorkStages(project.id);
+  fetched = await fetchTestWorkStage(stage.id);
+  ctx.steps.push({
+    name: 'Test 13 – stage not completed with two approvals',
+    passed: fetched?.status !== 'completed',
+    expected: 'not completed',
+    actual: fetched?.status || 'unknown',
+    details: { stageId: stage.id },
+  });
+
+  stage = await updateTestWorkStage(ctx.createdEntities, stage, {
+    draftsman_approved: true,
+  });
+  await recalculateProjectWorkStages(project.id);
+  fetched = await fetchTestWorkStage(stage.id);
+  ctx.steps.push({
+    name: 'Test 13 – stage completed with three approvals',
+    passed: fetched?.status === 'completed' && Boolean(fetched?.completed_at),
+    expected: 'completed with completed_at',
+    actual: `${fetched?.status || 'unknown'} / ${fetched?.completed_at || '(empty)'}`,
+    details: { stageId: stage.id },
+  });
+}
+
+async function runTest14(ctx) {
+  const project = await createTestProject(ctx.createdEntities, {
+    name: `${TEST_REMINDER_FLOW_PREFIX} R7 invalid project`,
+  });
+
+  const draftSignedProposal = await createTestSignedProposal(ctx.createdEntities, {
+    project_id: project.id,
+    project_name: project.name,
+    form_status: 'draft',
+    has_signed_offer_or_order: true,
+  });
+
+  await runRulesStep(ctx, async () => {
+    await runWorkStageReminderRulesForSignedProposal(draftSignedProposal, ctx.cache);
+  });
+
+  ctx.steps.push(assertReminderClosed(
+    ctx,
+    'Test 14 – draft signed proposal does not create R7',
+    getSignedProposalNeedsWorkStagesConditionKey(draftSignedProposal.id),
+  ));
+
+  const cancelledSignedProposal = await createTestSignedProposal(ctx.createdEntities, {
+    project_id: project.id,
+    project_name: project.name,
+    form_status: 'cancelled',
+    has_signed_offer_or_order: true,
+  });
+
+  await runRulesStep(ctx, async () => {
+    await runWorkStageReminderRulesForSignedProposal(cancelledSignedProposal, ctx.cache);
+  });
+
+  ctx.steps.push(assertReminderClosed(
+    ctx,
+    'Test 14 – cancelled signed proposal does not create R7',
+    getSignedProposalNeedsWorkStagesConditionKey(cancelledSignedProposal.id),
+  ));
+}
+
+async function runTest15(ctx) {
+  const project = await createTestProject(ctx.createdEntities, {
+    name: `${TEST_REMINDER_FLOW_PREFIX} active project`,
+  });
+
+  const stage1 = await createTestWorkStage(ctx.createdEntities, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} active 1`,
+    project_id: project.id,
+    order_index: 1,
+  });
+  const stage2 = await createTestWorkStage(ctx.createdEntities, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} active 2`,
+    project_id: project.id,
+    order_index: 2,
+  });
+  const stage3 = await createTestWorkStage(ctx.createdEntities, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} active 3`,
+    project_id: project.id,
+    order_index: 3,
+  });
+
+  await recalculateProjectWorkStages(project.id);
+  let stages = await loadWorkStagesForProject(project.id);
+  let active = getActiveWorkStage(stages);
+  ctx.steps.push({
+    name: 'Test 15 – first incomplete stage is active',
+    passed: active?.id === stage1.id && countActiveWorkStages(stages) === 1,
+    expected: stage1.id,
+    actual: active?.id || 'none',
+    details: { activeCount: countActiveWorkStages(stages) },
+  });
+
+  await updateTestWorkStage(ctx.createdEntities, stage1, {
+    aaron_approved: true,
+    client_approved: true,
+    draftsman_approved: true,
+  });
+  await recalculateProjectWorkStages(project.id);
+  stages = await loadWorkStagesForProject(project.id);
+  active = getActiveWorkStage(stages);
+  const stage3Status = normalizeWorkStageStatuses(stages).find((item) => item.id === stage3.id)?.status;
+
+  ctx.steps.push({
+    name: 'Test 15 – next stage becomes active after completion',
+    passed: active?.id === stage2.id && countActiveWorkStages(stages) === 1,
+    expected: stage2.id,
+    actual: active?.id || 'none',
+    details: { activeCount: countActiveWorkStages(stages) },
+  });
+
+  ctx.steps.push({
+    name: 'Test 15 – later stage stays pending',
+    passed: stage3Status === 'pending',
+    expected: 'pending',
+    actual: stage3Status || 'unknown',
+    details: { stageId: stage3.id },
+  });
+}
+
+async function runTest16(ctx) {
+  const project = await createTestProject(ctx.createdEntities, {
+    name: `${TEST_REMINDER_FLOW_PREFIX} reorder project`,
+  });
+
+  const stage1 = await createTestWorkStage(ctx.createdEntities, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} reorder A`,
+    project_id: project.id,
+    order_index: 1,
+  });
+  const stage2 = await createTestWorkStage(ctx.createdEntities, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} reorder B`,
+    project_id: project.id,
+    order_index: 2,
+  });
+  const stage3 = await createTestWorkStage(ctx.createdEntities, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} reorder C`,
+    project_id: project.id,
+    order_index: 3,
+  });
+
+  await recalculateProjectWorkStages(project.id);
+  await updateTestWorkStage(ctx.createdEntities, stage3, { order_index: 1 });
+  await updateTestWorkStage(ctx.createdEntities, stage1, { order_index: 2 });
+  await updateTestWorkStage(ctx.createdEntities, stage2, { order_index: 3 });
+  await recalculateProjectWorkStages(project.id);
+
+  const stages = await loadWorkStagesForProject(project.id);
+  const active = getActiveWorkStage(stages);
+
+  ctx.steps.push({
+    name: 'Test 16 – reorder recalculates active stage',
+    passed: active?.id === stage3.id,
+    expected: stage3.id,
+    actual: active?.id || 'none',
+    details: { order: stages.map((item) => item.order_index) },
+  });
+
+  ctx.steps.push({
+    name: 'Test 16 – only one active stage after reorder',
+    passed: countActiveWorkStages(stages) === 1,
+    expected: '1',
+    actual: String(countActiveWorkStages(stages)),
+    details: { activeStageId: active?.id || null },
+  });
+}
+
 export async function runReminderIntegrationTests() {
   const startedAtMs = Date.now();
   const startedAt = new Date(startedAtMs).toISOString();
@@ -817,6 +1109,11 @@ export async function runReminderIntegrationTests() {
       runTest9,
       runTest10,
       runTest11,
+      runTest12,
+      runTest13,
+      runTest14,
+      runTest15,
+      runTest16,
     ];
 
     for (const testFn of tests) {
