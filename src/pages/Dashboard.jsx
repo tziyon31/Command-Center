@@ -32,7 +32,13 @@ import {
   validateVisibleReminders,
 } from '@/lib/reminderEngine';
 import { cn } from '@/lib/utils';
-import { runReminderIntegrationTests } from '@/lib/reminderTestRunner';
+import {
+  cleanupAllReminderTestData,
+  findReminderTestLeftovers,
+  isReminderTestCleanupRequired,
+  reconcileStaleReminderTestRunState,
+  runReminderIntegrationTests,
+} from '@/lib/reminderTestRunner';
 import { toast } from '@/components/ui/use-toast';
 
 const OPEN_PROPOSAL_STATUSES = ['pricing', 'waiting'];
@@ -179,7 +185,9 @@ export default function Dashboard() {
   const [collectionPeriod, setCollectionPeriod] = React.useState('year');
   const [dashboardMode, setDashboardMode] = React.useState('metrics_focus');
   const [reminderTestRunning, setReminderTestRunning] = useState(false);
+  const [reminderCleanupRunning, setReminderCleanupRunning] = useState(false);
   const [reminderTestStatus, setReminderTestStatus] = useState('');
+  const [reminderCleanupPendingMessage, setReminderCleanupPendingMessage] = useState('');
   const navigate = useNavigate();
   const collectionDueNowCardRef = useRef(null);
 
@@ -258,8 +266,70 @@ export default function Dashboard() {
     enabled: canSeeFullDashboard && !!currentUser,
   });
 
+  const handleCleanTestData = async () => {
+    if (reminderCleanupRunning || reminderTestRunning) return;
+
+    setReminderCleanupRunning(true);
+    setReminderTestStatus('Cleaning test data...');
+
+    try {
+      const result = await cleanupAllReminderTestData();
+
+      if (result.rateLimited) {
+        toast({
+          title: 'Rate limit reached. Cleanup is pending. Wait 2 minutes and run cleanup again.',
+          variant: 'destructive',
+        });
+        setReminderCleanupPendingMessage(result.message || 'Cleanup pending due to rate limit');
+        return;
+      }
+
+      const leftovers = result.leftovers || await findReminderTestLeftovers();
+
+      if (result.passed && !isReminderTestCleanupRequired(leftovers)) {
+        toast({ title: 'Test data cleaned' });
+        setReminderCleanupPendingMessage('');
+      } else {
+        toast({
+          title: 'Cleanup incomplete - check console',
+          variant: 'destructive',
+        });
+        setReminderCleanupPendingMessage('נמצא cleanup לא גמור של בדיקות');
+        console.warn('[Dashboard] reminder test cleanup incomplete', { result, leftovers });
+      }
+    } catch (error) {
+      console.error('[Dashboard] reminder test cleanup failed', error);
+      toast({
+        title: 'Cleanup failed - check console',
+        variant: 'destructive',
+      });
+    } finally {
+      setReminderCleanupRunning(false);
+      setReminderTestStatus('');
+      refetchReminders();
+    }
+  };
+
   const handleRunReminderTests = async () => {
-    if (reminderTestRunning) return;
+    if (reminderTestRunning || reminderCleanupRunning) return;
+
+    setReminderTestStatus('Checking leftovers...');
+
+    try {
+      const leftovers = await findReminderTestLeftovers();
+      if (isReminderTestCleanupRequired(leftovers)) {
+        setReminderTestStatus('');
+        toast({
+          title: 'נמצאו נתוני בדיקה ישנים. יש לנקות לפני הרצה חדשה.',
+          variant: 'destructive',
+        });
+        setReminderCleanupPendingMessage('נמצאו נתוני בדיקה ישנים. לחץ Clean Test Data.');
+        console.info('[Dashboard] reminder test blocked by leftovers', leftovers);
+        return;
+      }
+    } catch (error) {
+      console.warn('[Dashboard] failed to scan reminder test leftovers', error);
+    }
 
     setReminderTestRunning(true);
     setReminderTestStatus('Running...');
@@ -310,6 +380,40 @@ export default function Dashboard() {
       refetchReminders();
     }
   };
+
+  useEffect(() => {
+    if (!canRunReminderTests) return;
+
+    const pending = reconcileStaleReminderTestRunState();
+    if (pending?.message) {
+      setReminderCleanupPendingMessage(pending.message);
+    }
+
+    void findReminderTestLeftovers()
+      .then((leftovers) => {
+        if (isReminderTestCleanupRequired(leftovers)) {
+          setReminderCleanupPendingMessage((current) => (
+            current || 'נמצאו נתוני בדיקה ישנים. לחץ Clean Test Data.'
+          ));
+        }
+      })
+      .catch((error) => {
+        console.warn('[Dashboard] failed to scan reminder test leftovers on load', error);
+      });
+  }, [canRunReminderTests]);
+
+  useEffect(() => {
+    if (!reminderTestRunning) return undefined;
+
+    const handleBeforeUnload = (event) => {
+      event.preventDefault();
+      event.returnValue = 'הרצת בדיקות תזכורות עדיין פעילה. יציאה מהעמוד עלולה להשאיר נתוני בדיקה זמניים. להמשיך?';
+      return event.returnValue;
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [reminderTestRunning]);
 
   useEffect(() => {
     if (!canSeeFullDashboard || !currentUser) return;
@@ -804,22 +908,39 @@ export default function Dashboard() {
       </div>
 
       {canRunReminderTests && (
-        <div className="fixed bottom-4 left-4 z-40 flex flex-col items-start gap-1">
+        <div className="fixed bottom-4 left-4 z-40 flex flex-col items-start gap-1 max-w-xs">
+          {reminderCleanupPendingMessage ? (
+            <span className="rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-900 shadow-sm border border-amber-200">
+              {reminderCleanupPendingMessage}
+            </span>
+          ) : null}
           {reminderTestStatus ? (
             <span className="rounded-md bg-background/90 px-2 py-1 text-xs text-muted-foreground shadow-sm border">
               {reminderTestStatus}
             </span>
           ) : null}
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-8 px-3 text-xs opacity-70 hover:opacity-100 shadow-sm"
-            disabled={reminderTestRunning}
-            onClick={() => { void handleRunReminderTests(); }}
-          >
-            Test Reminders
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 px-3 text-xs opacity-70 hover:opacity-100 shadow-sm"
+              disabled={reminderTestRunning || reminderCleanupRunning}
+              onClick={() => { void handleCleanTestData(); }}
+            >
+              Clean Test Data
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 px-3 text-xs opacity-70 hover:opacity-100 shadow-sm"
+              disabled={reminderTestRunning || reminderCleanupRunning}
+              onClick={() => { void handleRunReminderTests(); }}
+            >
+              Test Reminders
+            </Button>
+          </div>
         </div>
       )}
     </div>

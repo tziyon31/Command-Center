@@ -47,11 +47,42 @@ import {
 } from '@/lib/reminderEngine';
 
 export const TEST_REMINDER_FLOW_PREFIX = 'TEST_REMINDER_FLOW';
+export const REMINDER_TEST_RUN_STATE_KEY = 'reminderTestRunState';
+export const REMINDER_TEST_CLEANUP_RATE_LIMIT_KEY = 'reminderTestCleanupRateLimitedAt';
 
 const OPEN_STATUSES = new Set([REMINDER_STATUS.ACTIVE, REMINDER_STATUS.SNOOZED]);
 const MAX_CLEANUP_MUTATIONS_PER_BATCH = 5;
 const CLEANUP_BATCH_DELAY_MS = 400;
 const RATE_LIMIT_RETRY_DELAY_MS = 1500;
+const STALE_TEST_RUN_THRESHOLD_MS = 30 * 1000;
+const CLEANUP_RATE_LIMIT_COOLDOWN_MS = 2 * 60 * 1000;
+
+const TEST_ENTITY_SCAN_FIELDS = {
+  Inquiry: ['client_name', 'notes'],
+  Client: ['name'],
+  Project: ['name'],
+  Proposal: ['client_name', 'project_name', 'document_note', 'notes'],
+  SignedProposal: ['client_name', 'project_name', 'notes'],
+  WorkStage: ['title', 'project_name', 'client_name', 'notes'],
+};
+
+const TEST_ENTITY_BUCKETS = [
+  { bucket: 'inquiries', entityName: 'Inquiry', labelField: 'client_name' },
+  { bucket: 'clients', entityName: 'Client', labelField: 'name' },
+  { bucket: 'projects', entityName: 'Project', labelField: 'name' },
+  { bucket: 'proposals', entityName: 'Proposal', labelField: 'client_name' },
+  { bucket: 'signedProposals', entityName: 'SignedProposal', labelField: 'client_name' },
+  { bucket: 'workStages', entityName: 'WorkStage', labelField: 'title' },
+];
+
+const TEST_ENTITY_DELETE_ORDER = [
+  { bucket: 'workStages', entityName: 'WorkStage', labelField: 'title' },
+  { bucket: 'signedProposals', entityName: 'SignedProposal', labelField: 'client_name' },
+  { bucket: 'proposals', entityName: 'Proposal', labelField: 'client_name' },
+  { bucket: 'projects', entityName: 'Project', labelField: 'name' },
+  { bucket: 'inquiries', entityName: 'Inquiry', labelField: 'client_name' },
+  { bucket: 'clients', entityName: 'Client', labelField: 'name' },
+];
 
 const delay = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
@@ -86,6 +117,215 @@ function releaseReminderIntegrationTestLock() {
   try {
     globalThis.localStorage.removeItem(REMINDER_INTEGRATION_TEST_LOCK_KEY);
   } catch (_error) {}
+}
+
+function isTestLabel(value) {
+  return String(value || '').startsWith(TEST_REMINDER_FLOW_PREFIX);
+}
+
+function entityMatchesTestPrefix(item, fields = []) {
+  return fields.some((field) => isTestLabel(item?.[field]));
+}
+
+function emptyEntityIdRegistry() {
+  return {
+    inquiries: [],
+    clients: [],
+    projects: [],
+    proposals: [],
+    signedProposals: [],
+    workStages: [],
+    reminders: [],
+  };
+}
+
+function createTestRunId() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+  return `test-run-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export function loadReminderTestRunState() {
+  if (!hasBrowserStorage()) return null;
+  try {
+    const raw = globalThis.localStorage.getItem(REMINDER_TEST_RUN_STATE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      runId: parsed.runId || null,
+      startedAt: parsed.startedAt || null,
+      status: parsed.status || 'completed',
+      createdEntities: {
+        ...emptyEntityIdRegistry(),
+        ...(parsed.createdEntities || {}),
+      },
+      trackedConditionKeys: Array.isArray(parsed.trackedConditionKeys)
+        ? parsed.trackedConditionKeys
+        : [],
+    };
+  } catch (_error) {
+    return null;
+  }
+}
+
+function saveReminderTestRunState(state) {
+  if (!hasBrowserStorage() || !state) return;
+  try {
+    globalThis.localStorage.setItem(REMINDER_TEST_RUN_STATE_KEY, JSON.stringify(state));
+  } catch (_error) {}
+}
+
+export function clearReminderTestRunState() {
+  if (!hasBrowserStorage()) return;
+  try {
+    globalThis.localStorage.removeItem(REMINDER_TEST_RUN_STATE_KEY);
+  } catch (_error) {}
+}
+
+function markReminderTestRunStatus(status) {
+  const current = loadReminderTestRunState();
+  if (!current) return;
+  saveReminderTestRunState({ ...current, status });
+}
+
+export function startReminderTestRunRegistry() {
+  const state = {
+    runId: createTestRunId(),
+    startedAt: new Date().toISOString(),
+    status: 'running',
+    createdEntities: emptyEntityIdRegistry(),
+    trackedConditionKeys: [],
+  };
+  saveReminderTestRunState(state);
+  return state;
+}
+
+export function registerTestEntity(type, id) {
+  const normalizedId = String(id || '').trim();
+  if (!normalizedId || !type) return;
+
+  let state = loadReminderTestRunState();
+  if (!state) {
+    state = startReminderTestRunRegistry();
+  }
+
+  const bucket = state.createdEntities[type];
+  if (!Array.isArray(bucket)) return;
+  if (!bucket.includes(normalizedId)) {
+    bucket.push(normalizedId);
+  }
+  saveReminderTestRunState(state);
+}
+
+export function registerTestReminderId(id) {
+  registerTestEntity('reminders', id);
+}
+
+export function registerTestConditionKey(conditionKey) {
+  const normalizedKey = String(conditionKey || '').trim();
+  if (!normalizedKey) return;
+
+  let state = loadReminderTestRunState();
+  if (!state) {
+    state = startReminderTestRunRegistry();
+  }
+
+  if (!state.trackedConditionKeys.includes(normalizedKey)) {
+    state.trackedConditionKeys.push(normalizedKey);
+  }
+  saveReminderTestRunState(state);
+}
+
+function saveCleanupRateLimitTimestamp() {
+  if (!hasBrowserStorage()) return;
+  try {
+    globalThis.localStorage.setItem(
+      REMINDER_TEST_CLEANUP_RATE_LIMIT_KEY,
+      String(Date.now()),
+    );
+  } catch (_error) {}
+}
+
+export function isReminderTestCleanupRateLimitCooldownActive(now = Date.now()) {
+  if (!hasBrowserStorage()) return false;
+  try {
+    const raw = globalThis.localStorage.getItem(REMINDER_TEST_CLEANUP_RATE_LIMIT_KEY);
+    const timestamp = Number(raw);
+    if (!Number.isFinite(timestamp) || timestamp <= 0) return false;
+    return now - timestamp < CLEANUP_RATE_LIMIT_COOLDOWN_MS;
+  } catch (_error) {
+    return false;
+  }
+}
+
+export function reconcileStaleReminderTestRunState(now = Date.now()) {
+  const state = loadReminderTestRunState();
+
+  if (state?.status === 'running' && state.startedAt) {
+    const startedAtMs = Date.parse(state.startedAt);
+    const ageMs = Number.isFinite(startedAtMs) ? now - startedAtMs : 0;
+    if (ageMs >= STALE_TEST_RUN_THRESHOLD_MS) {
+      markReminderTestRunStatus('cleanup_pending');
+    }
+  }
+
+  if (isReminderIntegrationTestLockActive()) {
+    const startedAtMs = state?.startedAt ? Date.parse(state.startedAt) : NaN;
+    const ageMs = Number.isFinite(startedAtMs) ? now - startedAtMs : STALE_TEST_RUN_THRESHOLD_MS;
+    if (ageMs >= STALE_TEST_RUN_THRESHOLD_MS) {
+      releaseReminderIntegrationTestLock();
+    }
+  }
+
+  return getPendingReminderTestCleanupStatus(now);
+}
+
+export function getPendingReminderTestCleanupStatus(now = Date.now()) {
+  const state = loadReminderTestRunState();
+  if (!state?.startedAt) return null;
+
+  const startedAtMs = Date.parse(state.startedAt);
+  const ageMs = Number.isFinite(startedAtMs) ? now - startedAtMs : 0;
+  const isStaleRunning = state.status === 'running' && ageMs >= STALE_TEST_RUN_THRESHOLD_MS;
+  const isCleanupPending = state.status === 'cleanup_pending';
+
+  if (!isStaleRunning && !isCleanupPending) return null;
+
+  return {
+    pending: true,
+    status: state.status,
+    startedAt: state.startedAt,
+    runId: state.runId,
+    ageMs,
+    message: isCleanupPending
+      ? 'נמצא cleanup לא גמור של בדיקות'
+      : 'נמצאה הרצת בדיקות שלא הסתיימה',
+  };
+}
+
+function createCleanupContext() {
+  return { rateLimited: false, errors: [] };
+}
+
+async function cleanupRequest(ctx, label, fn) {
+  if (ctx.rateLimited) {
+    throw new Error(`Cleanup stopped (${label})`);
+  }
+
+  try {
+    return await fn();
+  } catch (error) {
+    if (isRateLimitError(error)) {
+      ctx.rateLimited = true;
+      ctx.errors.push({
+        label,
+        message: 'Rate limit reached. Cleanup is pending. Wait 2 minutes and run cleanup again.',
+      });
+    }
+    throw error;
+  }
 }
 
 function isNotFoundError(error) {
@@ -234,13 +474,29 @@ export async function findReminderTestLeftovers() {
       cancelled: [],
       other: [],
     },
+    entities: {
+      inquiries: 0,
+      clients: 0,
+      projects: 0,
+      proposals: 0,
+      signedProposals: 0,
+      workStages: 0,
+    },
+    remindersSummary: {
+      total: 0,
+      active: 0,
+      snoozed: 0,
+      resolved: 0,
+      cancelled: 0,
+      other: 0,
+    },
+    entityTotal: 0,
     total: 0,
     totalReminderLeftovers: 0,
     openReminderLeftovers: 0,
+    cleanupRequired: false,
     note: '',
   };
-
-  const matchesPrefix = (value) => String(value || '').includes(TEST_REMINDER_FLOW_PREFIX);
 
   const scanEntities = async (entityName, bucket, fields) => {
     const entity = base44.entities[entityName];
@@ -248,30 +504,28 @@ export async function findReminderTestLeftovers() {
 
     const items = await entity.list();
     for (const item of items) {
-      const matched = fields.some((field) => matchesPrefix(item?.[field]));
-      if (matched && item?.id) {
-        report[bucket].push({ id: item.id, label: fields.map((f) => item[f]).filter(Boolean).join(' / ') });
-      }
+      if (!item?.id || !entityMatchesTestPrefix(item, fields)) continue;
+      report[bucket].push({
+        id: item.id,
+        label: fields.map((field) => item[field]).filter(Boolean).join(' / '),
+      });
     }
   };
 
-  await Promise.all([
-    scanEntities('Inquiry', 'inquiries', ['client_name']),
-    scanEntities('Client', 'clients', ['name']),
-    scanEntities('Project', 'projects', ['name']),
-    scanEntities('Proposal', 'proposals', ['client_name']),
-    scanEntities('SignedProposal', 'signedProposals', ['client_name', 'project_name']),
-    scanEntities('WorkStage', 'workStages', ['title', 'project_name', 'client_name']),
-  ]);
+  await Promise.all(
+    TEST_ENTITY_BUCKETS.map(({ entityName, bucket }) => (
+      scanEntities(entityName, bucket, TEST_ENTITY_SCAN_FIELDS[entityName] || [])
+    )),
+  );
 
   const reminders = await base44.entities.Reminder.list();
   for (const reminder of reminders) {
     const matched = (
-      matchesPrefix(reminder?.title)
-      || matchesPrefix(reminder?.description)
-      || matchesPrefix(reminder?.client_name)
-      || matchesPrefix(reminder?.project_name)
-      || matchesPrefix(reminder?.condition_key)
+      isTestLabel(reminder?.title)
+      || isTestLabel(reminder?.description)
+      || isTestLabel(reminder?.client_name)
+      || isTestLabel(reminder?.project_name)
+      || isTestLabel(reminder?.condition_key)
     );
     if (!matched || !reminder?.id) continue;
 
@@ -290,24 +544,441 @@ export async function findReminderTestLeftovers() {
     else report.remindersByStatus.other.push(entry);
   }
 
+  report.entities.inquiries = report.inquiries.length;
+  report.entities.clients = report.clients.length;
+  report.entities.projects = report.projects.length;
+  report.entities.proposals = report.proposals.length;
+  report.entities.signedProposals = report.signedProposals.length;
+  report.entities.workStages = report.workStages.length;
+
+  report.entityTotal = (
+    report.entities.inquiries
+    + report.entities.clients
+    + report.entities.projects
+    + report.entities.proposals
+    + report.entities.signedProposals
+    + report.entities.workStages
+  );
+
+  report.remindersSummary.total = report.reminders.length;
+  report.remindersSummary.active = report.remindersByStatus.active.length;
+  report.remindersSummary.snoozed = report.remindersByStatus.snoozed.length;
+  report.remindersSummary.resolved = report.remindersByStatus.resolved.length;
+  report.remindersSummary.cancelled = report.remindersByStatus.cancelled.length;
+  report.remindersSummary.other = report.remindersByStatus.other.length;
+
   report.totalReminderLeftovers = report.reminders.length;
   report.openReminderLeftovers = (
-    report.remindersByStatus.active.length + report.remindersByStatus.snoozed.length
+    report.remindersSummary.active + report.remindersSummary.snoozed
   );
-  report.total = (
-    report.inquiries.length
-    + report.clients.length
-    + report.projects.length
-    + report.proposals.length
-    + report.signedProposals.length
-    + report.workStages.length
-    + report.reminders.length
-  );
-  report.note = report.openReminderLeftovers === 0
-    ? 'No open test reminder leftovers'
-    : 'Open test reminder leftovers detected';
+  report.total = report.entityTotal + report.totalReminderLeftovers;
+  report.cleanupRequired = report.entityTotal > 0 || report.openReminderLeftovers > 0;
+
+  if (report.entityTotal > 0) {
+    report.note = 'Test entity leftovers detected';
+  } else if (report.openReminderLeftovers > 0) {
+    report.note = 'Open test reminder leftovers detected';
+  } else if (report.totalReminderLeftovers > 0) {
+    report.note = 'No open test reminder leftovers';
+  } else {
+    report.note = 'No test leftovers';
+  }
 
   return report;
+}
+
+export function isReminderTestCleanupRequired(report) {
+  if (!report) return false;
+  return Boolean(report.cleanupRequired);
+}
+
+async function scanTestEntitiesByPrefix(ctx) {
+  const scanned = {
+    inquiries: [],
+    clients: [],
+    projects: [],
+    proposals: [],
+    signedProposals: [],
+    workStages: [],
+  };
+
+  for (const { entityName, bucket } of TEST_ENTITY_BUCKETS) {
+    if (ctx.rateLimited) break;
+
+    const entity = base44.entities[entityName];
+    if (!entity?.list) continue;
+
+    const items = await cleanupRequest(ctx, `scan_${entityName}`, () => entity.list());
+    const fields = TEST_ENTITY_SCAN_FIELDS[entityName] || [];
+
+    for (const item of items || []) {
+      if (!item?.id || !entityMatchesTestPrefix(item, fields)) continue;
+      scanned[bucket].push(item);
+    }
+  }
+
+  return scanned;
+}
+
+function mergeEntityRecordsById(...groups) {
+  const merged = new Map();
+
+  for (const group of groups) {
+    if (!group) continue;
+    for (const item of group) {
+      if (!item?.id) continue;
+      merged.set(item.id, item);
+    }
+  }
+
+  return [...merged.values()];
+}
+
+function registryIdsToEntityRecords(registryIds = [], scannedItems = []) {
+  const scannedById = new Map(scannedItems.map((item) => [item.id, item]));
+  return registryIds
+    .map((id) => scannedById.get(id) || { id })
+    .filter((item) => item?.id);
+}
+
+function buildCleanupEntityPlan({
+  registryState = null,
+  sessionEntities = null,
+  prefixScan = null,
+}) {
+  const registryIds = registryState?.createdEntities || emptyEntityIdRegistry();
+  const sessionLists = sessionEntities || emptyCreatedEntities();
+
+  return {
+    inquiries: mergeEntityRecordsById(
+      registryIdsToEntityRecords(registryIds.inquiries, prefixScan?.inquiries),
+      sessionLists.inquiries,
+      prefixScan?.inquiries,
+    ),
+    clients: mergeEntityRecordsById(
+      registryIdsToEntityRecords(registryIds.clients, prefixScan?.clients),
+      sessionLists.clients,
+      prefixScan?.clients,
+    ),
+    projects: mergeEntityRecordsById(
+      registryIdsToEntityRecords(registryIds.projects, prefixScan?.projects),
+      sessionLists.projects,
+      prefixScan?.projects,
+    ),
+    proposals: mergeEntityRecordsById(
+      registryIdsToEntityRecords(registryIds.proposals, prefixScan?.proposals),
+      sessionLists.proposals,
+      prefixScan?.proposals,
+    ),
+    signedProposals: mergeEntityRecordsById(
+      registryIdsToEntityRecords(registryIds.signedProposals, prefixScan?.signedProposals),
+      sessionLists.signedProposals,
+      prefixScan?.signedProposals,
+    ),
+    workStages: mergeEntityRecordsById(
+      registryIdsToEntityRecords(registryIds.workStages, prefixScan?.workStages),
+      sessionLists.workStages,
+      prefixScan?.workStages,
+    ),
+  };
+}
+
+async function cleanupDeleteEntity(ctx, entityName, item, labelField) {
+  const id = item?.id;
+  if (!id) {
+    return { ok: true, status: 'skipped', id: null, entityName };
+  }
+
+  const label = item[labelField] || item.client_name || item.name || item.title || '';
+  if (label && !isTestLabel(label)) {
+    console.warn('[ReminderTestRunner] refusing to delete non-test entity', entityName, id, label);
+    return { ok: false, status: 'failed', id, entityName };
+  }
+
+  const entity = base44.entities[entityName];
+  if (!entity?.delete) {
+    return { ok: true, status: 'skipped', id, entityName };
+  }
+
+  try {
+    await cleanupRequest(ctx, `delete_${entityName}`, () => entity.delete(id));
+    return { ok: true, status: 'deleted', id, entityName };
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      console.info(`[ReminderTestRunner] ${entityName} ${id} already deleted`);
+      return { ok: true, status: 'already_deleted', id, entityName };
+    }
+    if (isRateLimitError(error)) {
+      return { ok: false, status: 'rate_limited', id, entityName, error };
+    }
+    console.warn(`[ReminderTestRunner] failed to delete ${entityName}`, id, error);
+    return { ok: false, status: 'failed', id, entityName, error };
+  }
+}
+
+async function cancelTestRemindersForCleanup(ctx, {
+  entityPlan,
+  trackedConditionKeys = [],
+  registryReminderIds = [],
+  cache = null,
+}) {
+  const summary = {
+    passed: true,
+    cancelled: 0,
+    alreadyClosed: 0,
+    skipped: 0,
+    failedIds: [],
+    failedConditionKeys: [],
+    pending: [],
+  };
+
+  if (ctx.rateLimited) {
+    summary.passed = false;
+    return summary;
+  }
+
+  const testSourceIds = collectEntityIds(entityPlan);
+  const trackedKeys = new Set(trackedConditionKeys.map((key) => String(key || '').trim()).filter(Boolean));
+  const registryReminderIdSet = new Set(
+    (registryReminderIds || []).map((id) => String(id || '').trim()).filter(Boolean),
+  );
+
+  let reminders = cache?.reminders;
+  if (!reminders) {
+    reminders = await cleanupRequest(ctx, 'list_reminders', () => base44.entities.Reminder.list());
+  }
+
+  const toCancel = (reminders || []).filter((reminder) => {
+    if (!reminder?.id || !OPEN_STATUSES.has(reminder.status)) return false;
+
+    const conditionKey = String(reminder?.condition_key || '').trim();
+    const sourceId = reminder?.source_id;
+    const matched = (
+      registryReminderIdSet.has(String(reminder.id))
+      || (conditionKey && trackedKeys.has(conditionKey))
+      || (sourceId && testSourceIds.has(sourceId))
+      || isTestLabel(reminder?.title)
+      || isTestLabel(reminder?.description)
+      || isTestLabel(reminder?.client_name)
+      || isTestLabel(reminder?.project_name)
+      || isTestLabel(reminder?.condition_key)
+    );
+
+    return matched;
+  });
+
+  const batchSummary = await runBatchedCleanup(ctx, toCancel, async (reminder) => {
+    const conditionKey = String(reminder?.condition_key || '').trim();
+
+    try {
+      const cancelled = await cleanupRequest(
+        ctx,
+        'cancel_test_reminder',
+        () => cancelReminder(reminder.id, 'test_cleanup'),
+      );
+      if (cache) upsertReminderInCache(cache, cancelled);
+      registerTestReminderId(reminder.id);
+      summary.cancelled += 1;
+      return { ok: true, status: 'deleted', id: reminder.id };
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        summary.alreadyClosed += 1;
+        return { ok: true, status: 'already_deleted', id: reminder.id };
+      }
+      if (isRateLimitError(error)) {
+        return { ok: false, status: 'rate_limited', id: reminder.id };
+      }
+      summary.failedIds.push(reminder.id);
+      if (conditionKey) summary.failedConditionKeys.push(conditionKey);
+      return { ok: false, status: 'failed', id: reminder.id, error };
+    }
+  });
+
+  summary.passed = batchSummary.passed && summary.failedIds.length === 0;
+  summary.pending = batchSummary.pending.map((item) => item?.id || item).filter(Boolean);
+  summary.skipped = batchSummary.skipped;
+
+  return summary;
+}
+
+async function deleteTestEntitiesForCleanup(ctx, entityPlan) {
+  const summary = {
+    passed: true,
+    deleted: {
+      workStages: [],
+      signedProposals: [],
+      proposals: [],
+      projects: [],
+      inquiries: [],
+      clients: [],
+    },
+    alreadyDeleted: {
+      workStages: [],
+      signedProposals: [],
+      proposals: [],
+      projects: [],
+      inquiries: [],
+      clients: [],
+    },
+    failed: {
+      workStages: [],
+      signedProposals: [],
+      proposals: [],
+      projects: [],
+      inquiries: [],
+      clients: [],
+    },
+    pending: [],
+  };
+
+  if (ctx.rateLimited) {
+    summary.passed = false;
+    return summary;
+  }
+
+  for (const group of TEST_ENTITY_DELETE_ORDER) {
+    const items = [...(entityPlan[group.bucket] || [])].reverse();
+    const batchSummary = await runBatchedCleanup(ctx, items, async (item) => {
+      const result = await cleanupDeleteEntity(ctx, group.entityName, item, group.labelField);
+      if (result.status === 'deleted') summary.deleted[group.bucket].push(item.id);
+      if (result.status === 'already_deleted') summary.alreadyDeleted[group.bucket].push(item.id);
+      if (result.status === 'failed') summary.failed[group.bucket].push(item.id);
+      return result;
+    });
+
+    summary.passed = summary.passed && batchSummary.passed;
+    summary.pending.push(...batchSummary.pending.map((item) => item?.id || item).filter(Boolean));
+
+    if (ctx.rateLimited) break;
+  }
+
+  return summary;
+}
+
+export async function cleanupAllReminderTestData(options = {}) {
+  const ctx = createCleanupContext();
+
+  if (isReminderTestCleanupRateLimitCooldownActive()) {
+    return {
+      passed: false,
+      rateLimited: true,
+      skippedDueToRateLimit: true,
+      message: 'Rate limit reached. Cleanup is pending. Wait 2 minutes and run cleanup again.',
+      entities: null,
+      reminders: null,
+    };
+  }
+
+  markReminderTestRunStatus('cleanup_pending');
+
+  const registryState = loadReminderTestRunState();
+  let prefixScan = null;
+
+  try {
+    prefixScan = await scanTestEntitiesByPrefix(ctx);
+  } catch (error) {
+    if (isRateLimitError(error)) {
+      saveCleanupRateLimitTimestamp();
+      return {
+        passed: false,
+        rateLimited: true,
+        message: 'Rate limit reached. Cleanup is pending. Wait 2 minutes and run cleanup again.',
+        errors: ctx.errors,
+      };
+    }
+    throw error;
+  }
+
+  const entityPlan = buildCleanupEntityPlan({
+    registryState,
+    sessionEntities: options.sessionEntities || null,
+    prefixScan,
+  });
+
+  const trackedConditionKeys = [
+    ...(registryState?.trackedConditionKeys || []),
+    ...(options.trackedConditionKeys || []),
+  ];
+
+  let reminders = null;
+  try {
+    reminders = await cancelTestRemindersForCleanup(ctx, {
+      entityPlan,
+      trackedConditionKeys,
+      registryReminderIds: registryState?.createdEntities?.reminders || [],
+      cache: options.cache || null,
+    });
+  } catch (error) {
+    if (isRateLimitError(error)) {
+      saveCleanupRateLimitTimestamp();
+      markReminderTestRunStatus('cleanup_pending');
+      return {
+        passed: false,
+        rateLimited: true,
+        message: 'Rate limit reached. Cleanup is pending. Wait 2 minutes and run cleanup again.',
+        reminders: null,
+        entities: null,
+        errors: ctx.errors,
+      };
+    }
+    throw error;
+  }
+
+  let entities = null;
+  try {
+    entities = await deleteTestEntitiesForCleanup(ctx, entityPlan);
+  } catch (error) {
+    if (isRateLimitError(error)) {
+      saveCleanupRateLimitTimestamp();
+      markReminderTestRunStatus('cleanup_pending');
+      return {
+        passed: false,
+        rateLimited: true,
+        message: 'Rate limit reached. Cleanup is pending. Wait 2 minutes and run cleanup again.',
+        reminders,
+        entities: null,
+        errors: ctx.errors,
+      };
+    }
+    throw error;
+  }
+
+  const passed = Boolean(
+    !ctx.rateLimited
+    && (reminders?.passed ?? true)
+    && (entities?.passed ?? true)
+    && !(reminders?.pending?.length)
+    && !(entities?.pending?.length),
+  );
+
+  if (ctx.rateLimited) {
+    saveCleanupRateLimitTimestamp();
+    markReminderTestRunStatus('cleanup_pending');
+  } else if (passed) {
+    markReminderTestRunStatus('completed');
+    clearReminderTestRunState();
+  } else {
+    markReminderTestRunStatus('cleanup_pending');
+  }
+
+  let leftovers = null;
+  try {
+    leftovers = await findReminderTestLeftovers();
+  } catch (leftoverError) {
+    console.warn('[ReminderTestRunner] failed to scan leftovers after cleanup', leftoverError);
+  }
+
+  return {
+    passed,
+    rateLimited: ctx.rateLimited,
+    message: ctx.rateLimited
+      ? 'Rate limit reached. Cleanup is pending. Wait 2 minutes and run cleanup again.'
+      : (passed ? 'Cleanup completed' : 'Cleanup incomplete'),
+    reminders,
+    entities,
+    leftovers,
+    errors: ctx.errors,
+  };
 }
 
 const emptyCreatedEntities = () => ({
@@ -319,8 +990,6 @@ const emptyCreatedEntities = () => ({
   workStages: [],
 });
 
-const isTestLabel = (value) => String(value || '').startsWith(TEST_REMINDER_FLOW_PREFIX);
-
 const collectEntityIds = (createdEntities) => {
   const ids = new Set();
   for (const group of Object.values(createdEntities)) {
@@ -330,8 +999,6 @@ const collectEntityIds = (createdEntities) => {
   }
   return ids;
 };
-
-const isTrackedEntityId = (id, createdEntities) => collectEntityIds(createdEntities).has(id);
 
 function applyTestEntitiesToCache(cache, createdEntities) {
   cache.inquiries = [...createdEntities.inquiries];
@@ -394,7 +1061,10 @@ async function invalidateTestSignedProposal(ctx, signedProposal, proposal) {
 }
 
 function trackConditionKey(ctx, conditionKey) {
-  if (conditionKey) ctx.trackedConditionKeys.add(String(conditionKey).trim());
+  if (!conditionKey) return;
+  const normalizedKey = String(conditionKey).trim();
+  ctx.trackedConditionKeys.add(normalizedKey);
+  registerTestConditionKey(normalizedKey);
 }
 
 function assertReminderExists(ctx, name, conditionKey) {
@@ -485,6 +1155,7 @@ async function createTestInquiry(ctx, createdEntities, overrides = {}) {
     ...overrides,
   }));
   createdEntities.inquiries.push(inquiry);
+  registerTestEntity('inquiries', inquiry.id);
   return inquiry;
 }
 
@@ -504,6 +1175,7 @@ async function createTestClient(ctx, createdEntities, overrides = {}) {
     ...overrides,
   }));
   createdEntities.clients.push(client);
+  registerTestEntity('clients', client.id);
   return client;
 }
 
@@ -519,6 +1191,7 @@ async function createTestProject(ctx, createdEntities, overrides = {}) {
     ...overrides,
   }));
   createdEntities.projects.push(project);
+  registerTestEntity('projects', project.id);
   return project;
 }
 
@@ -539,6 +1212,7 @@ async function createTestProposal(ctx, createdEntities, overrides = {}) {
     ...overrides,
   }));
   createdEntities.proposals.push(proposal);
+  registerTestEntity('proposals', proposal.id);
   return proposal;
 }
 
@@ -559,6 +1233,7 @@ async function createTestSignedProposal(ctx, createdEntities, overrides = {}) {
     ...overrides,
   }));
   createdEntities.signedProposals.push(signedProposal);
+  registerTestEntity('signedProposals', signedProposal.id);
   return signedProposal;
 }
 
@@ -575,6 +1250,7 @@ async function createTestWorkStage(ctx, createdEntities, overrides = {}) {
     ...overrides,
   }));
   createdEntities.workStages.push(stage);
+  registerTestEntity('workStages', stage.id);
   return stage;
 }
 
@@ -678,142 +1354,6 @@ async function createTestProjectWithSignedProposal(ctx, label) {
   });
 
   return { client, project, signedProposal };
-}
-
-async function cleanupTestReminders(ctx, createdEntities, trackedConditionKeys) {
-  const summary = {
-    passed: true,
-    cancelled: 0,
-    skipped: 0,
-    alreadyDeleted: 0,
-    failedIds: [],
-    failedConditionKeys: [],
-    pending: [],
-  };
-
-  if (ctx.rateLimited) {
-    summary.passed = false;
-    summary.skippedDueToRateLimit = true;
-    return summary;
-  }
-
-  const testSourceIds = collectEntityIds(createdEntities);
-  const reminders = (ctx.cache.reminders || []).filter((reminder) => {
-    const conditionKey = String(reminder?.condition_key || '').trim();
-    const sourceId = reminder?.source_id;
-    const isTracked = (
-      (conditionKey && trackedConditionKeys.has(conditionKey))
-      || (sourceId && testSourceIds.has(sourceId))
-    );
-    return isTracked && reminder?.id && OPEN_STATUSES.has(reminder.status);
-  });
-
-  const batchSummary = await runBatchedCleanup(ctx, reminders, async (reminder) => {
-    const conditionKey = String(reminder?.condition_key || '').trim();
-
-    try {
-      const cancelled = await safeRequest(ctx, 'cancel_test_reminder', () => cancelReminder(reminder.id, 'test_cleanup'));
-      upsertReminderInCache(ctx.cache, cancelled);
-      summary.cancelled += 1;
-      return { ok: true, status: 'deleted', id: reminder.id };
-    } catch (error) {
-      if (isNotFoundError(error)) {
-        return { ok: true, status: 'already_deleted', id: reminder.id };
-      }
-      if (isRateLimitError(error)) {
-        markRateLimited(ctx, 'cleanup_reminders');
-        return { ok: false, status: 'rate_limited', id: reminder.id };
-      }
-      summary.failedIds.push(reminder.id);
-      if (conditionKey) summary.failedConditionKeys.push(conditionKey);
-      return { ok: false, status: 'failed', id: reminder.id, error };
-    }
-  });
-
-  summary.passed = batchSummary.passed && summary.failedIds.length === 0;
-  summary.pending = batchSummary.pending.map((item) => item.id);
-  summary.skipped = batchSummary.skipped;
-
-  return summary;
-}
-
-async function cleanupTestEntities(ctx, createdEntities) {
-  const summary = {
-    passed: true,
-    deleted: {
-      workStages: [],
-      signedProposals: [],
-      proposals: [],
-      projects: [],
-      inquiries: [],
-      clients: [],
-    },
-    alreadyDeleted: {
-      workStages: [],
-      signedProposals: [],
-      proposals: [],
-      projects: [],
-      inquiries: [],
-      clients: [],
-    },
-    failed: {
-      workStages: [],
-      signedProposals: [],
-      proposals: [],
-      projects: [],
-      inquiries: [],
-      clients: [],
-    },
-    pending: [],
-  };
-
-  if (ctx.rateLimited) {
-    summary.passed = false;
-    summary.skippedDueToRateLimit = true;
-    return summary;
-  }
-
-  const deleteTrackedEntity = async (bucket, entityName, item, labelField) => {
-    if (!item?.id || !isTrackedEntityId(item.id, createdEntities)) {
-      return { ok: true, status: 'skipped', id: item?.id, entityName };
-    }
-
-    const label = item[labelField] || item.client_name || item.name || '';
-    if (label && !isTestLabel(label)) {
-      console.warn('[ReminderTestRunner] refusing to delete non-test entity', entityName, item.id, label);
-      summary.passed = false;
-      summary.failed[bucket]?.push(item.id);
-      return { ok: false, status: 'failed', id: item.id, entityName };
-    }
-
-    return safeDeleteEntity(ctx, entityName, item.id);
-  };
-
-  const cleanupGroups = [
-    { bucket: 'workStages', entityName: 'WorkStage', items: [...createdEntities.workStages].reverse(), labelField: 'title' },
-    { bucket: 'signedProposals', entityName: 'SignedProposal', items: [...createdEntities.signedProposals].reverse(), labelField: 'client_name' },
-    { bucket: 'proposals', entityName: 'Proposal', items: [...createdEntities.proposals].reverse(), labelField: 'client_name' },
-    { bucket: 'projects', entityName: 'Project', items: [...createdEntities.projects].reverse(), labelField: 'name' },
-    { bucket: 'inquiries', entityName: 'Inquiry', items: [...createdEntities.inquiries].reverse(), labelField: 'client_name' },
-    { bucket: 'clients', entityName: 'Client', items: [...createdEntities.clients].reverse(), labelField: 'name' },
-  ];
-
-  for (const group of cleanupGroups) {
-    const batchSummary = await runBatchedCleanup(ctx, group.items, async (item) => {
-      const result = await deleteTrackedEntity(group.bucket, group.entityName, item, group.labelField);
-      if (result.status === 'deleted') summary.deleted[group.bucket].push(item.id);
-      if (result.status === 'already_deleted') summary.alreadyDeleted[group.bucket].push(item.id);
-      if (result.status === 'failed') summary.failed[group.bucket].push(item.id);
-      return result;
-    });
-
-    summary.passed = summary.passed && batchSummary.passed;
-    summary.pending.push(...batchSummary.pending.map((item) => item?.id || item).filter(Boolean));
-
-    if (ctx.rateLimited) break;
-  }
-
-  return summary;
 }
 
 async function runTest1(ctx) {
@@ -1748,6 +2288,8 @@ export async function runReminderIntegrationTests() {
   const trackedConditionKeys = new Set();
   const cache = createReminderEngineCache();
 
+  startReminderTestRunRegistry();
+
   const ctx = {
     cache,
     createdEntities,
@@ -1816,24 +2358,36 @@ export async function runReminderIntegrationTests() {
     }
   } finally {
     try {
-      if (!ctx.rateLimited) {
-        await refreshReminderSnapshot(ctx, 'pre_cleanup');
-        cleanup.reminders = await cleanupTestReminders(ctx, createdEntities, trackedConditionKeys);
-        cleanup.entities = await cleanupTestEntities(ctx, createdEntities);
-      } else {
+      markReminderTestRunStatus('cleanup_pending');
+
+      if (ctx.rateLimited) {
         cleanup.skippedDueToRateLimit = true;
         cleanup.pendingEntityIds = [...collectEntityIds(createdEntities)];
+      } else {
+        await refreshReminderSnapshot(ctx, 'pre_cleanup');
       }
 
-      cleanup.passed = Boolean(
-        (cleanup.reminders?.passed ?? true)
-        && (cleanup.entities?.passed ?? true)
-        && !(cleanup.reminders?.pending?.length)
-        && !(cleanup.entities?.pending?.length),
-      );
+      const cleanupResult = await cleanupAllReminderTestData({
+        sessionEntities: createdEntities,
+        trackedConditionKeys: [...trackedConditionKeys],
+        cache,
+      });
+
+      cleanup = {
+        passed: cleanupResult.passed,
+        reminders: cleanupResult.reminders,
+        entities: cleanupResult.entities,
+        skippedDueToRateLimit: cleanupResult.rateLimited || cleanup.skippedDueToRateLimit,
+        pendingEntityIds: cleanup.skippedDueToRateLimit
+          ? cleanup.pendingEntityIds
+          : cleanupResult.entities?.pending,
+        message: cleanupResult.message,
+        leftovers: cleanupResult.leftovers,
+      };
 
       if (!cleanup.passed) {
         console.warn('[ReminderTestRunner] cleanup incomplete', {
+          message: cleanupResult.message,
           reminderFailures: cleanup.reminders?.failedIds,
           reminderConditionKeys: cleanup.reminders?.failedConditionKeys,
           entityFailures: cleanup.entities?.failed,
@@ -1843,35 +2397,26 @@ export async function runReminderIntegrationTests() {
             entityIds: cleanup.pendingEntityIds,
           },
         });
+      } else {
+        markReminderTestRunStatus('completed');
       }
 
       try {
-        const leftovers = await findReminderTestLeftovers();
-        if (leftovers.total > 0) {
+        const leftovers = cleanupResult.leftovers || await findReminderTestLeftovers();
+        if (leftovers.total > 0 || leftovers.cleanupRequired) {
           console.info('[ReminderTestRunner] leftover test data report (read-only)', {
             note: leftovers.note,
+            cleanupRequired: leftovers.cleanupRequired,
+            entityTotal: leftovers.entityTotal,
             total: leftovers.total,
             totalReminderLeftovers: leftovers.totalReminderLeftovers,
             openReminderLeftovers: leftovers.openReminderLeftovers,
-            remindersByStatus: {
-              active: leftovers.remindersByStatus.active.length,
-              snoozed: leftovers.remindersByStatus.snoozed.length,
-              resolved: leftovers.remindersByStatus.resolved.length,
-              cancelled: leftovers.remindersByStatus.cancelled.length,
-              other: leftovers.remindersByStatus.other.length,
-            },
+            remindersSummary: leftovers.remindersSummary,
+            entities: leftovers.entities,
             openReminders: [
               ...leftovers.remindersByStatus.active,
               ...leftovers.remindersByStatus.snoozed,
             ],
-            entities: {
-              inquiries: leftovers.inquiries.length,
-              clients: leftovers.clients.length,
-              projects: leftovers.projects.length,
-              proposals: leftovers.proposals.length,
-              signedProposals: leftovers.signedProposals.length,
-              workStages: leftovers.workStages.length,
-            },
           });
         }
       } catch (leftoverError) {
