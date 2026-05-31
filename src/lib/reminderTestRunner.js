@@ -19,6 +19,10 @@ import {
   runSignedProposalNeedReminderRuleForProposal,
 } from '@/lib/proposalReminderRules';
 import {
+  deleteSignedProposalWithLifecycle,
+  linkProjectToValidSignedProposal,
+} from '@/lib/signedProposalLifecycle';
+import {
   cancelReminder,
   cancelRemindersForDeletedSource,
   createReminderEngineCache,
@@ -697,6 +701,83 @@ async function runTest10(ctx) {
   });
 }
 
+async function fetchTestProject(projectId) {
+  const results = await base44.entities.Project.filter({ id: projectId });
+  return results?.[0] || null;
+}
+
+async function runTest11(ctx) {
+  const client = await createTestClient(ctx.createdEntities, {
+    name: `${TEST_REMINDER_FLOW_PREFIX} SP1 reopen client`,
+  });
+  const project = await createTestProject(ctx.createdEntities, {
+    name: `${TEST_REMINDER_FLOW_PREFIX} SP1 reopen project`,
+    client_id: client.id,
+  });
+  const proposal = await createTestProposal(ctx.createdEntities, {
+    client_name: client.name,
+    client_id: client.id,
+    project_id: project.id,
+    project_name: project.name,
+    form_status: 'submitted',
+    proposal_sent_to_client: true,
+    client_saw_proposal: true,
+  });
+
+  await runRulesStep(ctx, async () => {
+    await runSignedProposalNeedReminderRuleForProposal(proposal, ctx.cache);
+  });
+
+  const sp1Key = getProposalNeedsSignedProposalConditionKey(proposal.id);
+  ctx.steps.push(assertReminderExists(ctx, 'Test 11 – SP1 active before signed proposal', sp1Key));
+
+  const signedProposal = await createTestSignedProposal(ctx.createdEntities, {
+    proposal_id: proposal.id,
+    client_id: client.id,
+    project_id: project.id,
+    project_name: project.name,
+    client_name: client.name,
+    has_signed_offer_or_order: true,
+    form_status: 'submitted',
+  });
+
+  await linkProjectToValidSignedProposal(signedProposal);
+
+  await runRulesStep(ctx, async () => {
+    await runSignedProposalNeedReminderRuleForProposal(proposal, ctx.cache);
+  });
+
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 11 – SP1 closed after valid signed proposal', sp1Key));
+
+  let linkedProject = await fetchTestProject(project.id);
+  ctx.steps.push({
+    name: 'Test 11 – project linked to signed proposal',
+    passed: linkedProject?.source_signed_proposal_id === signedProposal.id,
+    expected: signedProposal.id,
+    actual: linkedProject?.source_signed_proposal_id || '(empty)',
+    details: { projectId: project.id },
+  });
+
+  await deleteSignedProposalWithLifecycle(signedProposal.id);
+  ctx.createdEntities.signedProposals = ctx.createdEntities.signedProposals.filter(
+    (item) => item.id !== signedProposal.id,
+  );
+
+  linkedProject = await fetchTestProject(project.id);
+  ctx.steps.push({
+    name: 'Test 11 – project source_signed_proposal_id cleared after delete',
+    passed: !linkedProject?.source_signed_proposal_id,
+    expected: '(empty)',
+    actual: linkedProject?.source_signed_proposal_id || '(empty)',
+    details: { projectId: project.id },
+  });
+
+  applyTestEntitiesToCache(ctx.cache, ctx.createdEntities);
+  await refreshReminderSnapshot(ctx.cache);
+
+  ctx.steps.push(assertReminderExists(ctx, 'Test 11 – SP1 active again after delete', sp1Key));
+}
+
 export async function runReminderIntegrationTests() {
   const startedAtMs = Date.now();
   const startedAt = new Date(startedAtMs).toISOString();
@@ -735,6 +816,7 @@ export async function runReminderIntegrationTests() {
       runTest8,
       runTest9,
       runTest10,
+      runTest11,
     ];
 
     for (const testFn of tests) {

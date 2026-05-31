@@ -11,6 +11,7 @@ import {
   resolveReminder,
 } from '@/lib/reminderEngine';
 import { buildProposalFormPageUrl, buildSignedProposalFormPageUrl } from '@/lib/workflowNavigation';
+import { isValidSignedProposal } from '@/lib/signedProposalValidation';
 
 export const PROPOSAL_INCOMPLETE_CONDITION_PREFIX = 'proposal_incomplete:';
 export const PROPOSAL_NOT_SENT_CONDITION_PREFIX = 'proposal_not_sent:';
@@ -49,11 +50,7 @@ const hasTrimmedClientName = (value) => Boolean(String(value || '').trim());
 const normalize = (value) => String(value || '').trim().toLowerCase();
 
 export function isSignedProposal(signedProposal) {
-  return Boolean(
-    signedProposal
-    && signedProposal.has_signed_offer_or_order === true
-    && signedProposal.signed_at,
-  );
+  return isValidSignedProposal(signedProposal);
 }
 
 export function hasSignedProposalForProject(project, signedProposals = []) {
@@ -905,6 +902,8 @@ export async function syncSignedProposalReminderRules(signedProposal, cache = {}
   const projectId = String(signedProposal?.project_id || '').trim();
   if (!proposalId && !projectId) return { checked: 0 };
 
+  const isValid = isValidSignedProposal(signedProposal);
+
   let proposals = cache.proposals;
   let signedProposals = cache.signedProposals;
   let reminders = cache.reminders;
@@ -931,6 +930,10 @@ export async function syncSignedProposalReminderRules(signedProposal, cache = {}
       proposals,
       signedProposals,
     });
+  }
+
+  if (!isValid) {
+    return { checked: candidates.length };
   }
 
   const proposalIds = new Set(candidates.map((proposal) => proposal.id));

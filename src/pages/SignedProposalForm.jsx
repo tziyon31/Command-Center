@@ -2,8 +2,12 @@ import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
-import { cancelRemindersForDeletedSource } from '@/lib/reminderEngine';
 import { syncSignedProposalReminderRules } from '@/lib/proposalReminderRules';
+import {
+  deleteSignedProposalWithLifecycle,
+  isValidSignedProposal,
+  linkProjectToValidSignedProposal,
+} from '@/lib/signedProposalLifecycle';
 import { createPageUrl } from '@/utils';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -278,10 +282,8 @@ export default function SignedProposalForm() {
 
       try {
         const saved = await persistRecord(buildSubmittedUpdatePayload());
-        if (saved?.id && saved?.project_id) {
-          await base44.entities.Project.update(saved.project_id, {
-            source_signed_proposal_id: saved.id,
-          });
+        if (isValidSignedProposal(saved)) {
+          await linkProjectToValidSignedProposal(saved);
         }
         setFormStatus(saved?.form_status || 'submitted');
         setSubmittedAt(saved?.submitted_at || submittedAt || '');
@@ -338,10 +340,8 @@ export default function SignedProposalForm() {
       };
 
       const saved = await persistRecord(payload);
-      if (saved?.id && saved?.project_id) {
-        await base44.entities.Project.update(saved.project_id, {
-          source_signed_proposal_id: saved.id,
-        });
+      if (isValidSignedProposal(saved)) {
+        await linkProjectToValidSignedProposal(saved);
       }
       setFormStatus(saved?.form_status || 'submitted');
       setSubmittedAt(saved?.submitted_at || payload.submitted_at || '');
@@ -375,9 +375,12 @@ export default function SignedProposalForm() {
     setIsDeleting(true);
 
     try {
-      await base44.entities.SignedProposal.delete(recordId);
-      await cancelRemindersForDeletedSource('signed_proposal', recordId);
+      await deleteSignedProposalWithLifecycle(recordId);
       queryClient.invalidateQueries({ queryKey: ['signed-proposals'] });
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['proposals'] });
+      queryClient.invalidateQueries({ queryKey: ['reminders'] });
+      queryClient.invalidateQueries({ queryKey: ['reminders', 'visible'] });
       navigate(createPageUrl('SignedProposals'));
     } catch (error) {
       console.error('[SignedProposalForm] failed to delete', error);
@@ -610,7 +613,11 @@ export default function SignedProposalForm() {
             ...payload,
             client_name: formData.client_name || '',
           };
-          if (recordId) {
+          if (recordId && isValidSignedProposal({
+            id: recordId,
+            form_status: formStatus,
+            has_signed_offer_or_order: formData.has_signed_offer_or_order,
+          })) {
             projectPayload.source_signed_proposal_id = recordId;
           }
           return base44.entities.Project.create(projectPayload);

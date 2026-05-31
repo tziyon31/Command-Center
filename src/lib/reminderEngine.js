@@ -1,5 +1,6 @@
 import { base44 } from '@/api/base44Client';
 import { evaluateP2ReminderValidity } from '@/lib/reminderEngineP2';
+import { isValidSignedProposal } from '@/lib/signedProposalValidation';
 
 export const REMINDER_STATUS = {
   ACTIVE: 'active',
@@ -1140,11 +1141,7 @@ export async function ensureReminderForCondition(conditionIsTrue, reminderInput,
 const toTrimmedValue = (value) => String(value || '').trim();
 const normalizeReminderValue = (value) => String(value || '').trim().toLowerCase();
 
-const isSignedProposalRecord = (signedProposal) => Boolean(
-  signedProposal
-  && signedProposal.has_signed_offer_or_order === true
-  && signedProposal.signed_at,
-);
+const isSignedProposalRecord = (signedProposal) => isValidSignedProposal(signedProposal);
 
 const hasSignedProposalForProjectRecord = (project, signedProposals = []) => (
   signedProposals.some((signedProposal) => {
@@ -1238,7 +1235,7 @@ const evaluateReminderBusinessValidity = async (reminder, cache) => {
     if (!signedProposalsById) return { valid: true, reason: 'signed_proposal_loader_failed' };
 
     const hasSignedProposal = [...signedProposalsById.values()].some((signedProposal) => {
-      if (signedProposal?.form_status === 'cancelled') return false;
+      if (!isValidSignedProposal(signedProposal)) return false;
       if (toTrimmedValue(signedProposal.proposal_id) === proposal.id) return true;
       return toTrimmedValue(signedProposal.project_id) === toTrimmedValue(proposal.project_id);
     });

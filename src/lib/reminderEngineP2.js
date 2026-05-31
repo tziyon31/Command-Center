@@ -3,6 +3,7 @@
  * Checks: project exists, has no active Proposal, has no active SignedProposal.
  */
 import { base44 } from '@/api/base44Client';
+import { isValidSignedProposal } from '@/lib/signedProposalValidation';
 
 const toTrimmedValue = (value) => String(value || '').trim();
 
@@ -48,7 +49,10 @@ export async function evaluateP2ReminderValidity(sourceId, cache) {
   const signedProposalsById = await ensureEntityMapP2(cache, 'SignedProposal');
   if (!signedProposalsById) return { valid: true, reason: 'signed_proposal_loader_failed' };
   const hasSignedProposal = [...signedProposalsById.values()].some(
-    (sp) => toTrimmedValue(sp.project_id) === project.id && sp.form_status !== 'cancelled',
+    (signedProposal) => (
+      isValidSignedProposal(signedProposal)
+      && toTrimmedValue(signedProposal.project_id) === project.id
+    ),
   );
 
   return { valid: !hasSignedProposal, reason: hasSignedProposal ? 'condition_cleared' : 'valid' };
