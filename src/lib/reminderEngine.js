@@ -243,6 +243,17 @@ const RECONCILIATION_STORAGE_KEYS = {
   HAS_MORE: 'reminderReconciliationHasMore',
 };
 
+export const REMINDER_INTEGRATION_TEST_LOCK_KEY = 'reminderIntegrationTestRunning';
+
+export function isReminderIntegrationTestRunning() {
+  if (typeof globalThis === 'undefined' || !globalThis.localStorage) return false;
+  try {
+    return globalThis.localStorage.getItem(REMINDER_INTEGRATION_TEST_LOCK_KEY) === 'true';
+  } catch (_error) {
+    return false;
+  }
+}
+
 const REMINDER_PREFIXES = {
   R1: 'inquiry_missing_fields:',
   R2: 'inquiry_needs_next_step:',
@@ -1476,6 +1487,10 @@ export async function runReminderReconciliationNow(reason = 'manual') {
 
 export function runReminderReconciliationInBackground(reason = 'dashboard_load') {
   const now = nowMs();
+
+  if (isReminderIntegrationTestRunning()) {
+    return Promise.resolve({ skipped: true, skipReason: 'integration_test_running' });
+  }
 
   if (reminderReconciliationPromise) return reminderReconciliationPromise;
   if (shouldSkipReconciliationByCooldown(now)) return Promise.resolve({ skipped: true, skipReason: 'cooldown' });

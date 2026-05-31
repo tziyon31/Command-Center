@@ -40,12 +40,239 @@ import {
   hasOpenReminderForConditionKey,
   isRateLimitError,
   loadReminderEngineCache,
+  REMINDER_INTEGRATION_TEST_LOCK_KEY,
   REMINDER_STATUS,
 } from '@/lib/reminderEngine';
 
 export const TEST_REMINDER_FLOW_PREFIX = 'TEST_REMINDER_FLOW';
 
 const OPEN_STATUSES = new Set([REMINDER_STATUS.ACTIVE, REMINDER_STATUS.SNOOZED]);
+const MAX_CLEANUP_MUTATIONS_PER_BATCH = 5;
+const CLEANUP_BATCH_DELAY_MS = 400;
+const RATE_LIMIT_RETRY_DELAY_MS = 1500;
+
+const delay = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+function hasBrowserStorage() {
+  return typeof globalThis !== 'undefined'
+    && globalThis.localStorage
+    && typeof globalThis.localStorage.getItem === 'function';
+}
+
+export function isReminderIntegrationTestLockActive() {
+  if (!hasBrowserStorage()) return false;
+  try {
+    return globalThis.localStorage.getItem(REMINDER_INTEGRATION_TEST_LOCK_KEY) === 'true';
+  } catch (_error) {
+    return false;
+  }
+}
+
+function acquireReminderIntegrationTestLock() {
+  if (isReminderIntegrationTestLockActive()) return false;
+  if (!hasBrowserStorage()) return true;
+  try {
+    globalThis.localStorage.setItem(REMINDER_INTEGRATION_TEST_LOCK_KEY, 'true');
+    return true;
+  } catch (_error) {
+    return true;
+  }
+}
+
+function releaseReminderIntegrationTestLock() {
+  if (!hasBrowserStorage()) return;
+  try {
+    globalThis.localStorage.removeItem(REMINDER_INTEGRATION_TEST_LOCK_KEY);
+  } catch (_error) {}
+}
+
+function isNotFoundError(error) {
+  const status = error?.status ?? error?.statusCode ?? error?.response?.status;
+  const message = error instanceof Error ? error.message : String(error || '');
+  return status === 404 || /not found/i.test(message);
+}
+
+function markRateLimited(ctx, stage) {
+  ctx.rateLimited = true;
+  if (!ctx.errors.some((item) => item.message?.includes('Rate limit hit'))) {
+    ctx.errors.push({ stage, message: 'Rate limit hit; wait 2 minutes and rerun' });
+  }
+}
+
+async function safeRequest(ctx, label, fn) {
+  if (ctx.rateLimited) {
+    throw new Error('Rate limit already hit');
+  }
+
+  try {
+    return await fn();
+  } catch (error) {
+    if (!isRateLimitError(error)) throw error;
+
+    await delay(RATE_LIMIT_RETRY_DELAY_MS);
+
+    try {
+      return await fn();
+    } catch (retryError) {
+      if (isRateLimitError(retryError)) {
+        markRateLimited(ctx, label);
+      }
+      throw retryError;
+    }
+  }
+}
+
+async function safeDeleteEntity(ctx, entityName, id) {
+  if (!id) {
+    return { ok: true, status: 'skipped', id: null, entityName };
+  }
+
+  const entity = base44.entities[entityName];
+  if (!entity?.delete) {
+    return { ok: true, status: 'skipped', id, entityName };
+  }
+
+  try {
+    await safeRequest(ctx, `delete_${entityName}`, () => entity.delete(id));
+    return { ok: true, status: 'deleted', id, entityName };
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      console.info(`[ReminderTestRunner] ${entityName} ${id} already deleted`);
+      return { ok: true, status: 'already_deleted', id, entityName };
+    }
+    if (isRateLimitError(error)) {
+      markRateLimited(ctx, `delete_${entityName}`);
+      return { ok: false, status: 'rate_limited', id, entityName, error };
+    }
+    console.warn(`[ReminderTestRunner] failed to delete ${entityName}`, id, error);
+    return { ok: false, status: 'failed', id, entityName, error };
+  }
+}
+
+async function runBatchedCleanup(ctx, items, handler) {
+  const summary = {
+    passed: true,
+    completed: 0,
+    skipped: 0,
+    alreadyDeleted: 0,
+    failed: [],
+    pending: [],
+  };
+
+  for (let index = 0; index < items.length; index += MAX_CLEANUP_MUTATIONS_PER_BATCH) {
+    if (ctx.rateLimited) {
+      summary.passed = false;
+      summary.pending.push(...items.slice(index));
+      break;
+    }
+
+    const batch = items.slice(index, index + MAX_CLEANUP_MUTATIONS_PER_BATCH);
+
+    for (const item of batch) {
+      const result = await handler(item);
+
+      if (result.status === 'skipped') {
+        summary.skipped += 1;
+        continue;
+      }
+
+      if (result.status === 'already_deleted') {
+        summary.alreadyDeleted += 1;
+        summary.completed += 1;
+        continue;
+      }
+
+      if (result.status === 'rate_limited') {
+        summary.passed = false;
+        summary.pending.push(item);
+        break;
+      }
+
+      if (!result.ok) {
+        summary.passed = false;
+        summary.failed.push(result);
+        continue;
+      }
+
+      summary.completed += 1;
+    }
+
+    if (ctx.rateLimited || summary.pending.length > 0) break;
+
+    if (index + MAX_CLEANUP_MUTATIONS_PER_BATCH < items.length) {
+      await delay(CLEANUP_BATCH_DELAY_MS);
+    }
+  }
+
+  return summary;
+}
+
+export async function findReminderTestLeftovers() {
+  const report = {
+    inquiries: [],
+    clients: [],
+    projects: [],
+    proposals: [],
+    signedProposals: [],
+    workStages: [],
+    reminders: [],
+    total: 0,
+  };
+
+  const matchesPrefix = (value) => String(value || '').includes(TEST_REMINDER_FLOW_PREFIX);
+
+  const scanEntities = async (entityName, bucket, fields) => {
+    const entity = base44.entities[entityName];
+    if (!entity?.list) return;
+
+    const items = await entity.list();
+    for (const item of items) {
+      const matched = fields.some((field) => matchesPrefix(item?.[field]));
+      if (matched && item?.id) {
+        report[bucket].push({ id: item.id, label: fields.map((f) => item[f]).filter(Boolean).join(' / ') });
+      }
+    }
+  };
+
+  await Promise.all([
+    scanEntities('Inquiry', 'inquiries', ['client_name']),
+    scanEntities('Client', 'clients', ['name']),
+    scanEntities('Project', 'projects', ['name']),
+    scanEntities('Proposal', 'proposals', ['client_name']),
+    scanEntities('SignedProposal', 'signedProposals', ['client_name', 'project_name']),
+    scanEntities('WorkStage', 'workStages', ['title', 'project_name', 'client_name']),
+  ]);
+
+  const reminders = await base44.entities.Reminder.list();
+  for (const reminder of reminders) {
+    const matched = (
+      matchesPrefix(reminder?.title)
+      || matchesPrefix(reminder?.description)
+      || matchesPrefix(reminder?.client_name)
+      || matchesPrefix(reminder?.project_name)
+      || matchesPrefix(reminder?.condition_key)
+    );
+    if (matched && reminder?.id) {
+      report.reminders.push({
+        id: reminder.id,
+        condition_key: reminder.condition_key,
+        status: reminder.status,
+      });
+    }
+  }
+
+  report.total = (
+    report.inquiries.length
+    + report.clients.length
+    + report.projects.length
+    + report.proposals.length
+    + report.signedProposals.length
+    + report.workStages.length
+    + report.reminders.length
+  );
+
+  return report;
+}
 
 const emptyCreatedEntities = () => ({
   inquiries: [],
@@ -79,11 +306,12 @@ function applyTestEntitiesToCache(cache, createdEntities) {
   cache.workStages = [...createdEntities.workStages];
 }
 
-async function refreshReminderSnapshot(cache) {
-  cache.reminders = null;
-  cache.remindersByConditionKey = null;
-  await loadReminderEngineCache(cache);
-  return cache;
+async function refreshReminderSnapshot(ctx, reason = 'checkpoint') {
+  if (ctx.rateLimited) return ctx.cache;
+  ctx.cache.reminders = null;
+  ctx.cache.remindersByConditionKey = null;
+  await safeRequest(ctx, `refresh_reminders:${reason}`, () => loadReminderEngineCache(ctx.cache));
+  return ctx.cache;
 }
 
 function trackConditionKey(ctx, conditionKey) {
@@ -138,44 +366,43 @@ function assertNoDuplicateOpenReminders(ctx, name) {
 
 async function guardRateLimit(error, ctx) {
   if (!isRateLimitError(error)) throw error;
-  ctx.rateLimited = true;
-  ctx.errors.push({ stage: 'rate_limit', message: 'Rate limit (429) – tests stopped' });
+  markRateLimited(ctx, 'rate_limit');
   throw error;
 }
 
-async function createTestInquiry(createdEntities, overrides = {}) {
-  const inquiry = await base44.entities.Inquiry.create({
+async function createTestInquiry(ctx, createdEntities, overrides = {}) {
+  const inquiry = await safeRequest(ctx, 'create_inquiry', () => base44.entities.Inquiry.create({
     client_name: `${TEST_REMINDER_FLOW_PREFIX} inquiry`,
     building_type: 'office',
     details: '',
     form_status: 'draft',
     ...overrides,
-  });
+  }));
   createdEntities.inquiries.push(inquiry);
   return inquiry;
 }
 
-async function updateTestInquiry(createdEntities, inquiry, patch) {
-  const updated = await base44.entities.Inquiry.update(inquiry.id, patch);
+async function updateTestInquiry(ctx, createdEntities, inquiry, patch) {
+  const updated = await safeRequest(ctx, 'update_inquiry', () => base44.entities.Inquiry.update(inquiry.id, patch));
   const merged = { ...inquiry, ...updated, ...patch };
   const index = createdEntities.inquiries.findIndex((item) => item.id === inquiry.id);
   if (index >= 0) createdEntities.inquiries[index] = merged;
   return merged;
 }
 
-async function createTestClient(createdEntities, overrides = {}) {
-  const client = await base44.entities.Client.create({
+async function createTestClient(ctx, createdEntities, overrides = {}) {
+  const client = await safeRequest(ctx, 'create_client', () => base44.entities.Client.create({
     name: `${TEST_REMINDER_FLOW_PREFIX} client`,
     status: 'draft',
     rating: 'B',
     ...overrides,
-  });
+  }));
   createdEntities.clients.push(client);
   return client;
 }
 
-async function createTestProject(createdEntities, overrides = {}) {
-  const project = await base44.entities.Project.create({
+async function createTestProject(ctx, createdEntities, overrides = {}) {
+  const project = await safeRequest(ctx, 'create_project', () => base44.entities.Project.create({
     name: `${TEST_REMINDER_FLOW_PREFIX} project`,
     client_id: overrides.client_id || '',
     status: 'pricing',
@@ -184,53 +411,53 @@ async function createTestProject(createdEntities, overrides = {}) {
     total_amount: 0,
     collected_amount: 0,
     ...overrides,
-  });
+  }));
   createdEntities.projects.push(project);
   return project;
 }
 
-async function updateTestProject(createdEntities, project, patch) {
-  const updated = await base44.entities.Project.update(project.id, patch);
+async function updateTestProject(ctx, createdEntities, project, patch) {
+  const updated = await safeRequest(ctx, 'update_project', () => base44.entities.Project.update(project.id, patch));
   const merged = { ...project, ...updated, ...patch };
   const index = createdEntities.projects.findIndex((item) => item.id === project.id);
   if (index >= 0) createdEntities.projects[index] = merged;
   return merged;
 }
 
-async function createTestProposal(createdEntities, overrides = {}) {
-  const proposal = await base44.entities.Proposal.create({
+async function createTestProposal(ctx, createdEntities, overrides = {}) {
+  const proposal = await safeRequest(ctx, 'create_proposal', () => base44.entities.Proposal.create({
     client_name: `${TEST_REMINDER_FLOW_PREFIX} proposal`,
     form_status: 'draft',
     proposal_sent_to_client: false,
     client_saw_proposal: false,
     ...overrides,
-  });
+  }));
   createdEntities.proposals.push(proposal);
   return proposal;
 }
 
-async function updateTestProposal(createdEntities, proposal, patch) {
-  const updated = await base44.entities.Proposal.update(proposal.id, patch);
+async function updateTestProposal(ctx, createdEntities, proposal, patch) {
+  const updated = await safeRequest(ctx, 'update_proposal', () => base44.entities.Proposal.update(proposal.id, patch));
   const merged = { ...proposal, ...updated, ...patch };
   const index = createdEntities.proposals.findIndex((item) => item.id === proposal.id);
   if (index >= 0) createdEntities.proposals[index] = merged;
   return merged;
 }
 
-async function createTestSignedProposal(createdEntities, overrides = {}) {
-  const signedProposal = await base44.entities.SignedProposal.create({
+async function createTestSignedProposal(ctx, createdEntities, overrides = {}) {
+  const signedProposal = await safeRequest(ctx, 'create_signed_proposal', () => base44.entities.SignedProposal.create({
     client_name: `${TEST_REMINDER_FLOW_PREFIX} signed`,
     project_name: `${TEST_REMINDER_FLOW_PREFIX} project`,
     has_signed_offer_or_order: false,
     form_status: 'draft',
     ...overrides,
-  });
+  }));
   createdEntities.signedProposals.push(signedProposal);
   return signedProposal;
 }
 
-async function createTestWorkStage(createdEntities, overrides = {}) {
-  const stage = await base44.entities.WorkStage.create({
+async function createTestWorkStage(ctx, createdEntities, overrides = {}) {
+  const stage = await safeRequest(ctx, 'create_work_stage', () => base44.entities.WorkStage.create({
     title: `${TEST_REMINDER_FLOW_PREFIX} stage`,
     order_index: 1,
     status: 'pending',
@@ -240,86 +467,114 @@ async function createTestWorkStage(createdEntities, overrides = {}) {
     invoice_required_on_completion: false,
     notes: '',
     ...overrides,
-  });
+  }));
   createdEntities.workStages.push(stage);
   return stage;
 }
 
-async function updateTestWorkStage(createdEntities, stage, patch) {
-  const updated = await base44.entities.WorkStage.update(stage.id, patch);
+async function updateTestWorkStage(ctx, createdEntities, stage, patch) {
+  const updated = await safeRequest(ctx, 'update_work_stage', () => base44.entities.WorkStage.update(stage.id, patch));
   const merged = { ...stage, ...updated, ...patch };
   const index = createdEntities.workStages.findIndex((item) => item.id === stage.id);
   if (index >= 0) createdEntities.workStages[index] = merged;
   return merged;
 }
 
-async function fetchTestWorkStage(stageId) {
-  const results = await base44.entities.WorkStage.filter({ id: stageId });
+async function fetchTestWorkStage(ctx, stageId) {
+  const results = await safeRequest(ctx, 'fetch_work_stage', () => base44.entities.WorkStage.filter({ id: stageId }));
   return results?.[0] || null;
 }
 
-async function runRulesStep(ctx, fn) {
-  applyTestEntitiesToCache(ctx.cache, ctx.createdEntities);
-  await fn();
-  await refreshReminderSnapshot(ctx.cache);
+async function fetchTestProject(ctx, projectId) {
+  const results = await safeRequest(ctx, 'fetch_project', () => base44.entities.Project.filter({ id: projectId }));
+  return results?.[0] || null;
 }
 
-async function cleanupTestReminders(createdEntities, trackedConditionKeys, cache) {
+async function recalculateTestProjectWorkStages(ctx, projectId) {
+  await safeRequest(ctx, 'recalculate_work_stages', () => recalculateProjectWorkStages(projectId));
+}
+
+async function loadTestWorkStagesForProject(ctx, projectId) {
+  return safeRequest(ctx, 'load_work_stages', () => loadWorkStagesForProject(projectId));
+}
+
+async function runRulesStep(ctx, fn, reason = 'rules') {
+  if (ctx.rateLimited) return;
+  applyTestEntitiesToCache(ctx.cache, ctx.createdEntities);
+  await safeRequest(ctx, reason, fn);
+  await refreshReminderSnapshot(ctx, reason);
+}
+
+async function cleanupTestReminders(ctx, createdEntities, trackedConditionKeys) {
   const summary = {
     passed: true,
     cancelled: 0,
     skipped: 0,
+    alreadyDeleted: 0,
     failedIds: [],
     failedConditionKeys: [],
+    pending: [],
   };
 
-  try {
-    await refreshReminderSnapshot(cache);
-  } catch (error) {
+  if (ctx.rateLimited) {
     summary.passed = false;
-    summary.error = error instanceof Error ? error.message : String(error);
+    summary.skippedDueToRateLimit = true;
     return summary;
   }
 
-  const testSourceIds = collectEntityIds(createdEntities);
-  const reminders = cache.reminders || [];
+  await refreshReminderSnapshot(ctx, 'cleanup_reminders_start');
 
-  for (const reminder of reminders) {
+  const testSourceIds = collectEntityIds(createdEntities);
+  const reminders = (ctx.cache.reminders || []).filter((reminder) => {
     const conditionKey = String(reminder?.condition_key || '').trim();
     const sourceId = reminder?.source_id;
     const isTracked = (
       (conditionKey && trackedConditionKeys.has(conditionKey))
       || (sourceId && testSourceIds.has(sourceId))
     );
+    return isTracked && reminder?.id && OPEN_STATUSES.has(reminder.status);
+  });
 
-    if (!isTracked || !reminder?.id) {
-      summary.skipped += 1;
-      continue;
-    }
-
-    if (!OPEN_STATUSES.has(reminder.status)) {
-      summary.skipped += 1;
-      continue;
-    }
+  const batchSummary = await runBatchedCleanup(ctx, reminders, async (reminder) => {
+    const conditionKey = String(reminder?.condition_key || '').trim();
 
     try {
-      await cancelReminder(reminder.id, 'test_cleanup');
+      await safeRequest(ctx, 'cancel_test_reminder', () => cancelReminder(reminder.id, 'test_cleanup'));
       summary.cancelled += 1;
+      return { ok: true, status: 'deleted', id: reminder.id };
     } catch (error) {
-      summary.passed = false;
+      if (isNotFoundError(error)) {
+        return { ok: true, status: 'already_deleted', id: reminder.id };
+      }
+      if (isRateLimitError(error)) {
+        markRateLimited(ctx, 'cleanup_reminders');
+        return { ok: false, status: 'rate_limited', id: reminder.id };
+      }
       summary.failedIds.push(reminder.id);
       if (conditionKey) summary.failedConditionKeys.push(conditionKey);
-      console.warn('[ReminderTestRunner] failed to cancel test reminder', reminder.id, error);
+      return { ok: false, status: 'failed', id: reminder.id, error };
     }
-  }
+  });
+
+  summary.passed = batchSummary.passed && summary.failedIds.length === 0;
+  summary.pending = batchSummary.pending.map((item) => item.id);
+  summary.skipped = batchSummary.skipped;
 
   return summary;
 }
 
-async function cleanupTestEntities(createdEntities) {
+async function cleanupTestEntities(ctx, createdEntities) {
   const summary = {
     passed: true,
     deleted: {
+      workStages: [],
+      signedProposals: [],
+      proposals: [],
+      projects: [],
+      inquiries: [],
+      clients: [],
+    },
+    alreadyDeleted: {
       workStages: [],
       signedProposals: [],
       proposals: [],
@@ -335,60 +590,60 @@ async function cleanupTestEntities(createdEntities) {
       inquiries: [],
       clients: [],
     },
+    pending: [],
   };
 
-  const deleteEntity = async (bucket, entityName, item, labelField) => {
-    if (!item?.id || !isTrackedEntityId(item.id, createdEntities)) return;
+  if (ctx.rateLimited) {
+    summary.passed = false;
+    summary.skippedDueToRateLimit = true;
+    return summary;
+  }
+
+  const deleteTrackedEntity = async (bucket, entityName, item, labelField) => {
+    if (!item?.id || !isTrackedEntityId(item.id, createdEntities)) {
+      return { ok: true, status: 'skipped', id: item?.id, entityName };
+    }
 
     const label = item[labelField] || item.client_name || item.name || '';
     if (label && !isTestLabel(label)) {
       console.warn('[ReminderTestRunner] refusing to delete non-test entity', entityName, item.id, label);
       summary.passed = false;
       summary.failed[bucket]?.push(item.id);
-      return;
+      return { ok: false, status: 'failed', id: item.id, entityName };
     }
 
-    try {
-      const entity = base44.entities[entityName];
-      if (!entity?.delete) return;
-      await entity.delete(item.id);
-      summary.deleted[bucket]?.push(item.id);
-    } catch (error) {
-      summary.passed = false;
-      summary.failed[bucket]?.push(item.id);
-      console.warn('[ReminderTestRunner] failed to delete test entity', entityName, item.id, error);
-    }
+    return safeDeleteEntity(ctx, entityName, item.id);
   };
 
-  for (const item of [...createdEntities.workStages].reverse()) {
-    await deleteEntity('workStages', 'WorkStage', item, 'title');
-  }
+  const cleanupGroups = [
+    { bucket: 'workStages', entityName: 'WorkStage', items: [...createdEntities.workStages].reverse(), labelField: 'title' },
+    { bucket: 'signedProposals', entityName: 'SignedProposal', items: [...createdEntities.signedProposals].reverse(), labelField: 'client_name' },
+    { bucket: 'proposals', entityName: 'Proposal', items: [...createdEntities.proposals].reverse(), labelField: 'client_name' },
+    { bucket: 'projects', entityName: 'Project', items: [...createdEntities.projects].reverse(), labelField: 'name' },
+    { bucket: 'inquiries', entityName: 'Inquiry', items: [...createdEntities.inquiries].reverse(), labelField: 'client_name' },
+    { bucket: 'clients', entityName: 'Client', items: [...createdEntities.clients].reverse(), labelField: 'name' },
+  ];
 
-  for (const item of [...createdEntities.signedProposals].reverse()) {
-    await deleteEntity('signedProposals', 'SignedProposal', item, 'client_name');
-  }
+  for (const group of cleanupGroups) {
+    const batchSummary = await runBatchedCleanup(ctx, group.items, async (item) => {
+      const result = await deleteTrackedEntity(group.bucket, group.entityName, item, group.labelField);
+      if (result.status === 'deleted') summary.deleted[group.bucket].push(item.id);
+      if (result.status === 'already_deleted') summary.alreadyDeleted[group.bucket].push(item.id);
+      if (result.status === 'failed') summary.failed[group.bucket].push(item.id);
+      return result;
+    });
 
-  for (const item of [...createdEntities.proposals].reverse()) {
-    await deleteEntity('proposals', 'Proposal', item, 'client_name');
-  }
+    summary.passed = summary.passed && batchSummary.passed;
+    summary.pending.push(...batchSummary.pending.map((item) => item?.id || item).filter(Boolean));
 
-  for (const item of [...createdEntities.projects].reverse()) {
-    await deleteEntity('projects', 'Project', item, 'name');
-  }
-
-  for (const item of [...createdEntities.inquiries].reverse()) {
-    await deleteEntity('inquiries', 'Inquiry', item, 'client_name');
-  }
-
-  for (const item of [...createdEntities.clients].reverse()) {
-    await deleteEntity('clients', 'Client', item, 'name');
+    if (ctx.rateLimited) break;
   }
 
   return summary;
 }
 
 async function runTest1(ctx) {
-  const inquiry = await createTestInquiry(ctx.createdEntities, {
+  const inquiry = await createTestInquiry(ctx, ctx.createdEntities, {
     client_name: `${TEST_REMINDER_FLOW_PREFIX} R1`,
     details: '',
     form_status: 'draft',
@@ -404,7 +659,7 @@ async function runTest1(ctx) {
     getInquiryMissingFieldsConditionKey(inquiry.id),
   ));
 
-  const submitted = await updateTestInquiry(ctx.createdEntities, inquiry, {
+  const submitted = await updateTestInquiry(ctx, ctx.createdEntities, inquiry, {
     details: 'Test details for R1',
     form_status: 'submitted',
   });
@@ -421,7 +676,7 @@ async function runTest1(ctx) {
 }
 
 async function runTest2(ctx) {
-  const inquiry = await createTestInquiry(ctx.createdEntities, {
+  const inquiry = await createTestInquiry(ctx, ctx.createdEntities, {
     client_name: `${TEST_REMINDER_FLOW_PREFIX} R2`,
     details: 'Submitted inquiry for R2',
     form_status: 'submitted',
@@ -437,7 +692,7 @@ async function runTest2(ctx) {
     getInquiryNeedsNextStepConditionKey(inquiry.id),
   ));
 
-  const client = await createTestClient(ctx.createdEntities, {
+  const client = await createTestClient(ctx, ctx.createdEntities, {
     name: `${TEST_REMINDER_FLOW_PREFIX} R2 client`,
     source_inquiry_id: inquiry.id,
   });
@@ -452,7 +707,7 @@ async function runTest2(ctx) {
     getInquiryNeedsNextStepConditionKey(inquiry.id),
   ));
 
-  await createTestProject(ctx.createdEntities, {
+  await createTestProject(ctx, ctx.createdEntities, {
     name: `${TEST_REMINDER_FLOW_PREFIX} R2 project`,
     client_id: client.id,
     source_inquiry_id: inquiry.id,
@@ -470,7 +725,7 @@ async function runTest2(ctx) {
 }
 
 async function runTest3(ctx) {
-  const client = await createTestClient(ctx.createdEntities, {
+  const client = await createTestClient(ctx, ctx.createdEntities, {
     name: `${TEST_REMINDER_FLOW_PREFIX} R4`,
   });
 
@@ -484,7 +739,7 @@ async function runTest3(ctx) {
     getClientNeedsProjectConditionKey(client.id),
   ));
 
-  await createTestProject(ctx.createdEntities, {
+  await createTestProject(ctx, ctx.createdEntities, {
     name: `${TEST_REMINDER_FLOW_PREFIX} R4 project`,
     client_id: client.id,
   });
@@ -501,7 +756,7 @@ async function runTest3(ctx) {
 }
 
 async function runTest4(ctx) {
-  const inquiry = await createTestInquiry(ctx.createdEntities, {
+  const inquiry = await createTestInquiry(ctx, ctx.createdEntities, {
     client_name: `${TEST_REMINDER_FLOW_PREFIX} P1`,
     details: 'Submitted for P1',
     form_status: 'submitted',
@@ -518,7 +773,7 @@ async function runTest4(ctx) {
   ctx.steps.push(assertReminderExists(ctx, 'Test 4 – P1 created', p1Key));
   ctx.steps.push(assertReminderExists(ctx, 'Test 4 – R2 still open alongside P1', r2Key));
 
-  await createTestProposal(ctx.createdEntities, {
+  await createTestProposal(ctx, ctx.createdEntities, {
     client_name: inquiry.client_name,
     source_inquiry_id: inquiry.id,
     form_status: 'draft',
@@ -533,7 +788,7 @@ async function runTest4(ctx) {
 }
 
 async function runTest5(ctx) {
-  const r4Client = await createTestClient(ctx.createdEntities, {
+  const r4Client = await createTestClient(ctx, ctx.createdEntities, {
     name: `${TEST_REMINDER_FLOW_PREFIX} P2 R4 guard`,
   });
 
@@ -544,10 +799,10 @@ async function runTest5(ctx) {
   const r4Key = getClientNeedsProjectConditionKey(r4Client.id);
   ctx.steps.push(assertReminderExists(ctx, 'Test 5 – R4 guard client reminder exists', r4Key));
 
-  const client = await createTestClient(ctx.createdEntities, {
+  const client = await createTestClient(ctx, ctx.createdEntities, {
     name: `${TEST_REMINDER_FLOW_PREFIX} P2 client`,
   });
-  const project = await createTestProject(ctx.createdEntities, {
+  const project = await createTestProject(ctx, ctx.createdEntities, {
     name: `${TEST_REMINDER_FLOW_PREFIX} P2 project`,
     client_id: client.id,
   });
@@ -560,7 +815,7 @@ async function runTest5(ctx) {
   ctx.steps.push(assertReminderExists(ctx, 'Test 5 – P2 created for project', p2Key));
   ctx.steps.push(assertReminderExists(ctx, 'Test 5 – R4 guard unchanged after P2 run', r4Key));
 
-  await createTestProposal(ctx.createdEntities, {
+  await createTestProposal(ctx, ctx.createdEntities, {
     client_name: client.name,
     client_id: client.id,
     project_id: project.id,
@@ -577,7 +832,7 @@ async function runTest5(ctx) {
 }
 
 async function runTest6(ctx) {
-  let proposal = await createTestProposal(ctx.createdEntities, {
+  let proposal = await createTestProposal(ctx, ctx.createdEntities, {
     client_name: `${TEST_REMINDER_FLOW_PREFIX} P0/P3/P4`,
     form_status: 'draft',
   });
@@ -589,7 +844,7 @@ async function runTest6(ctx) {
   const p0Key = getProposalIncompleteConditionKey(proposal.id);
   ctx.steps.push(assertReminderExists(ctx, 'Test 6 – P0 created for draft proposal', p0Key));
 
-  proposal = await updateTestProposal(ctx.createdEntities, proposal, {
+  proposal = await updateTestProposal(ctx, ctx.createdEntities, proposal, {
     form_status: 'submitted',
     proposal_sent_to_client: false,
   });
@@ -602,7 +857,7 @@ async function runTest6(ctx) {
   ctx.steps.push(assertReminderClosed(ctx, 'Test 6 – P0 closed after submit', p0Key));
   ctx.steps.push(assertReminderExists(ctx, 'Test 6 – P3 created after submit', p3Key));
 
-  proposal = await updateTestProposal(ctx.createdEntities, proposal, {
+  proposal = await updateTestProposal(ctx, ctx.createdEntities, proposal, {
     proposal_sent_to_client: true,
     client_saw_proposal: false,
   });
@@ -615,7 +870,7 @@ async function runTest6(ctx) {
   ctx.steps.push(assertReminderClosed(ctx, 'Test 6 – P3 closed after sent', p3Key));
   ctx.steps.push(assertReminderExists(ctx, 'Test 6 – P4 created after sent', p4Key));
 
-  proposal = await updateTestProposal(ctx.createdEntities, proposal, {
+  proposal = await updateTestProposal(ctx, ctx.createdEntities, proposal, {
     client_saw_proposal: true,
   });
 
@@ -627,14 +882,14 @@ async function runTest6(ctx) {
 }
 
 async function runTest7(ctx) {
-  const client = await createTestClient(ctx.createdEntities, {
+  const client = await createTestClient(ctx, ctx.createdEntities, {
     name: `${TEST_REMINDER_FLOW_PREFIX} SP1 client`,
   });
-  const project = await createTestProject(ctx.createdEntities, {
+  const project = await createTestProject(ctx, ctx.createdEntities, {
     name: `${TEST_REMINDER_FLOW_PREFIX} SP1 project`,
     client_id: client.id,
   });
-  const proposal = await createTestProposal(ctx.createdEntities, {
+  const proposal = await createTestProposal(ctx, ctx.createdEntities, {
     client_name: client.name,
     client_id: client.id,
     project_id: project.id,
@@ -651,7 +906,7 @@ async function runTest7(ctx) {
   const sp1Key = getProposalNeedsSignedProposalConditionKey(proposal.id);
   ctx.steps.push(assertReminderExists(ctx, 'Test 7 – SP1 created for sent proposal', sp1Key));
 
-  await createTestSignedProposal(ctx.createdEntities, {
+  await createTestSignedProposal(ctx, ctx.createdEntities, {
     proposal_id: proposal.id,
     client_id: client.id,
     project_id: project.id,
@@ -670,14 +925,14 @@ async function runTest7(ctx) {
 }
 
 async function runTest8(ctx) {
-  const client = await createTestClient(ctx.createdEntities, {
+  const client = await createTestClient(ctx, ctx.createdEntities, {
     name: `${TEST_REMINDER_FLOW_PREFIX} SP1 draft client`,
   });
-  const project = await createTestProject(ctx.createdEntities, {
+  const project = await createTestProject(ctx, ctx.createdEntities, {
     name: `${TEST_REMINDER_FLOW_PREFIX} SP1 draft project`,
     client_id: client.id,
   });
-  const proposal = await createTestProposal(ctx.createdEntities, {
+  const proposal = await createTestProposal(ctx, ctx.createdEntities, {
     client_name: client.name,
     client_id: client.id,
     project_id: project.id,
@@ -693,7 +948,7 @@ async function runTest8(ctx) {
   const sp1Key = getProposalNeedsSignedProposalConditionKey(proposal.id);
   ctx.steps.push(assertReminderExists(ctx, 'Test 8 – SP1 open before draft signed proposal', sp1Key));
 
-  await createTestSignedProposal(ctx.createdEntities, {
+  await createTestSignedProposal(ctx, ctx.createdEntities, {
     proposal_id: proposal.id,
     client_id: client.id,
     project_id: project.id,
@@ -716,7 +971,7 @@ async function runTest9(ctx) {
 }
 
 async function runTest10(ctx) {
-  const client = await createTestClient(ctx.createdEntities, {
+  const client = await createTestClient(ctx, ctx.createdEntities, {
     name: `${TEST_REMINDER_FLOW_PREFIX} orphan`,
   });
 
@@ -727,11 +982,11 @@ async function runTest10(ctx) {
   const r4Key = getClientNeedsProjectConditionKey(client.id);
   ctx.steps.push(assertReminderExists(ctx, 'Test 10 – R4 created before client delete', r4Key));
 
-  await base44.entities.Client.delete(client.id);
+  await safeRequest(ctx, 'delete_orphan_client', () => base44.entities.Client.delete(client.id));
   ctx.createdEntities.clients = ctx.createdEntities.clients.filter((item) => item.id !== client.id);
 
-  await cancelRemindersForDeletedSource('client', client.id, { cache: ctx.cache });
-  await refreshReminderSnapshot(ctx.cache);
+  await safeRequest(ctx, 'cancel_orphan_reminders', () => cancelRemindersForDeletedSource('client', client.id, { cache: ctx.cache }));
+  await refreshReminderSnapshot(ctx, 'test10_orphan');
 
   const reminder = findReminderByConditionKeyInCache(ctx.cache, r4Key);
   trackConditionKey(ctx, r4Key);
@@ -748,20 +1003,15 @@ async function runTest10(ctx) {
   });
 }
 
-async function fetchTestProject(projectId) {
-  const results = await base44.entities.Project.filter({ id: projectId });
-  return results?.[0] || null;
-}
-
 async function runTest11(ctx) {
-  const client = await createTestClient(ctx.createdEntities, {
+  const client = await createTestClient(ctx, ctx.createdEntities, {
     name: `${TEST_REMINDER_FLOW_PREFIX} SP1 reopen client`,
   });
-  const project = await createTestProject(ctx.createdEntities, {
+  const project = await createTestProject(ctx, ctx.createdEntities, {
     name: `${TEST_REMINDER_FLOW_PREFIX} SP1 reopen project`,
     client_id: client.id,
   });
-  const proposal = await createTestProposal(ctx.createdEntities, {
+  const proposal = await createTestProposal(ctx, ctx.createdEntities, {
     client_name: client.name,
     client_id: client.id,
     project_id: project.id,
@@ -778,7 +1028,7 @@ async function runTest11(ctx) {
   const sp1Key = getProposalNeedsSignedProposalConditionKey(proposal.id);
   ctx.steps.push(assertReminderExists(ctx, 'Test 11 – SP1 active before signed proposal', sp1Key));
 
-  const signedProposal = await createTestSignedProposal(ctx.createdEntities, {
+  const signedProposal = await createTestSignedProposal(ctx, ctx.createdEntities, {
     proposal_id: proposal.id,
     client_id: client.id,
     project_id: project.id,
@@ -788,7 +1038,7 @@ async function runTest11(ctx) {
     form_status: 'submitted',
   });
 
-  await linkProjectToValidSignedProposal(signedProposal);
+  await safeRequest(ctx, 'link_project_signed_proposal', () => linkProjectToValidSignedProposal(signedProposal));
 
   await runRulesStep(ctx, async () => {
     await runSignedProposalNeedReminderRuleForProposal(proposal, ctx.cache);
@@ -796,7 +1046,7 @@ async function runTest11(ctx) {
 
   ctx.steps.push(assertReminderClosed(ctx, 'Test 11 – SP1 closed after valid signed proposal', sp1Key));
 
-  let linkedProject = await fetchTestProject(project.id);
+  let linkedProject = await fetchTestProject(ctx, project.id);
   ctx.steps.push({
     name: 'Test 11 – project linked to signed proposal',
     passed: linkedProject?.source_signed_proposal_id === signedProposal.id,
@@ -805,12 +1055,12 @@ async function runTest11(ctx) {
     details: { projectId: project.id },
   });
 
-  await deleteSignedProposalWithLifecycle(signedProposal.id);
+  await safeRequest(ctx, 'delete_signed_proposal_lifecycle', () => deleteSignedProposalWithLifecycle(signedProposal.id));
   ctx.createdEntities.signedProposals = ctx.createdEntities.signedProposals.filter(
     (item) => item.id !== signedProposal.id,
   );
 
-  linkedProject = await fetchTestProject(project.id);
+  linkedProject = await fetchTestProject(ctx, project.id);
   ctx.steps.push({
     name: 'Test 11 – project source_signed_proposal_id cleared after delete',
     passed: !linkedProject?.source_signed_proposal_id,
@@ -820,20 +1070,20 @@ async function runTest11(ctx) {
   });
 
   applyTestEntitiesToCache(ctx.cache, ctx.createdEntities);
-  await refreshReminderSnapshot(ctx.cache);
+  await refreshReminderSnapshot(ctx, 'test11_after_delete');
 
   ctx.steps.push(assertReminderExists(ctx, 'Test 11 – SP1 active again after delete', sp1Key));
 }
 
 async function runTest12(ctx) {
-  const client = await createTestClient(ctx.createdEntities, {
+  const client = await createTestClient(ctx, ctx.createdEntities, {
     name: `${TEST_REMINDER_FLOW_PREFIX} R7 client`,
   });
-  const project = await createTestProject(ctx.createdEntities, {
+  const project = await createTestProject(ctx, ctx.createdEntities, {
     name: `${TEST_REMINDER_FLOW_PREFIX} R7 project`,
     client_id: client.id,
   });
-  await createTestProposal(ctx.createdEntities, {
+  await createTestProposal(ctx, ctx.createdEntities, {
     client_name: client.name,
     client_id: client.id,
     project_id: project.id,
@@ -841,7 +1091,7 @@ async function runTest12(ctx) {
     form_status: 'submitted',
     proposal_sent_to_client: true,
   });
-  const signedProposal = await createTestSignedProposal(ctx.createdEntities, {
+  const signedProposal = await createTestSignedProposal(ctx, ctx.createdEntities, {
     client_id: client.id,
     project_id: project.id,
     project_name: project.name,
@@ -857,7 +1107,7 @@ async function runTest12(ctx) {
   const r7Key = getSignedProposalNeedsWorkStagesConditionKey(signedProposal.id);
   ctx.steps.push(assertReminderExists(ctx, 'Test 12 – R7 created without work stages', r7Key));
 
-  await createTestWorkStage(ctx.createdEntities, {
+  await createTestWorkStage(ctx, ctx.createdEntities, {
     title: `${TEST_REMINDER_FLOW_PREFIX} R7 stage`,
     project_id: project.id,
     project_name: project.name,
@@ -875,18 +1125,18 @@ async function runTest12(ctx) {
 }
 
 async function runTest13(ctx) {
-  const project = await createTestProject(ctx.createdEntities, {
+  const project = await createTestProject(ctx, ctx.createdEntities, {
     name: `${TEST_REMINDER_FLOW_PREFIX} completion project`,
   });
-  let stage = await createTestWorkStage(ctx.createdEntities, {
+  let stage = await createTestWorkStage(ctx, ctx.createdEntities, {
     title: `${TEST_REMINDER_FLOW_PREFIX} completion stage`,
     project_id: project.id,
     project_name: project.name,
     order_index: 1,
   });
 
-  await recalculateProjectWorkStages(project.id);
-  let fetched = await fetchTestWorkStage(stage.id);
+  await recalculateTestProjectWorkStages(ctx, project.id);
+  let fetched = await fetchTestWorkStage(ctx, stage.id);
   ctx.steps.push({
     name: 'Test 13 – stage not completed with zero approvals',
     passed: fetched?.status !== 'completed' && !fetched?.completed_at,
@@ -895,13 +1145,13 @@ async function runTest13(ctx) {
     details: { stageId: stage.id },
   });
 
-  stage = await updateTestWorkStage(ctx.createdEntities, stage, {
+  stage = await updateTestWorkStage(ctx, ctx.createdEntities, stage, {
     aaron_approved: true,
     client_approved: true,
     draftsman_approved: false,
   });
-  await recalculateProjectWorkStages(project.id);
-  fetched = await fetchTestWorkStage(stage.id);
+  await recalculateTestProjectWorkStages(ctx, project.id);
+  fetched = await fetchTestWorkStage(ctx, stage.id);
   ctx.steps.push({
     name: 'Test 13 – stage not completed with two approvals',
     passed: fetched?.status !== 'completed',
@@ -910,11 +1160,11 @@ async function runTest13(ctx) {
     details: { stageId: stage.id },
   });
 
-  stage = await updateTestWorkStage(ctx.createdEntities, stage, {
+  stage = await updateTestWorkStage(ctx, ctx.createdEntities, stage, {
     draftsman_approved: true,
   });
-  await recalculateProjectWorkStages(project.id);
-  fetched = await fetchTestWorkStage(stage.id);
+  await recalculateTestProjectWorkStages(ctx, project.id);
+  fetched = await fetchTestWorkStage(ctx, stage.id);
   ctx.steps.push({
     name: 'Test 13 – stage completed with three approvals',
     passed: fetched?.status === 'completed' && Boolean(fetched?.completed_at),
@@ -925,11 +1175,11 @@ async function runTest13(ctx) {
 }
 
 async function runTest14(ctx) {
-  const project = await createTestProject(ctx.createdEntities, {
+  const project = await createTestProject(ctx, ctx.createdEntities, {
     name: `${TEST_REMINDER_FLOW_PREFIX} R7 invalid project`,
   });
 
-  const draftSignedProposal = await createTestSignedProposal(ctx.createdEntities, {
+  const draftSignedProposal = await createTestSignedProposal(ctx, ctx.createdEntities, {
     project_id: project.id,
     project_name: project.name,
     form_status: 'draft',
@@ -946,7 +1196,7 @@ async function runTest14(ctx) {
     getSignedProposalNeedsWorkStagesConditionKey(draftSignedProposal.id),
   ));
 
-  const cancelledSignedProposal = await createTestSignedProposal(ctx.createdEntities, {
+  const cancelledSignedProposal = await createTestSignedProposal(ctx, ctx.createdEntities, {
     project_id: project.id,
     project_name: project.name,
     form_status: 'cancelled',
@@ -965,28 +1215,28 @@ async function runTest14(ctx) {
 }
 
 async function runTest15(ctx) {
-  const project = await createTestProject(ctx.createdEntities, {
+  const project = await createTestProject(ctx, ctx.createdEntities, {
     name: `${TEST_REMINDER_FLOW_PREFIX} active project`,
   });
 
-  const stage1 = await createTestWorkStage(ctx.createdEntities, {
+  const stage1 = await createTestWorkStage(ctx, ctx.createdEntities, {
     title: `${TEST_REMINDER_FLOW_PREFIX} active 1`,
     project_id: project.id,
     order_index: 1,
   });
-  const stage2 = await createTestWorkStage(ctx.createdEntities, {
+  const stage2 = await createTestWorkStage(ctx, ctx.createdEntities, {
     title: `${TEST_REMINDER_FLOW_PREFIX} active 2`,
     project_id: project.id,
     order_index: 2,
   });
-  const stage3 = await createTestWorkStage(ctx.createdEntities, {
+  const stage3 = await createTestWorkStage(ctx, ctx.createdEntities, {
     title: `${TEST_REMINDER_FLOW_PREFIX} active 3`,
     project_id: project.id,
     order_index: 3,
   });
 
-  await recalculateProjectWorkStages(project.id);
-  let stages = await loadWorkStagesForProject(project.id);
+  await recalculateTestProjectWorkStages(ctx, project.id);
+  let stages = await loadTestWorkStagesForProject(ctx, project.id);
   let active = getActiveWorkStage(stages);
   ctx.steps.push({
     name: 'Test 15 – first incomplete stage is active',
@@ -996,13 +1246,13 @@ async function runTest15(ctx) {
     details: { activeCount: countActiveWorkStages(stages) },
   });
 
-  await updateTestWorkStage(ctx.createdEntities, stage1, {
+  await updateTestWorkStage(ctx, ctx.createdEntities, stage1, {
     aaron_approved: true,
     client_approved: true,
     draftsman_approved: true,
   });
-  await recalculateProjectWorkStages(project.id);
-  stages = await loadWorkStagesForProject(project.id);
+  await recalculateTestProjectWorkStages(ctx, project.id);
+  stages = await loadTestWorkStagesForProject(ctx, project.id);
   active = getActiveWorkStage(stages);
   const stage3Status = normalizeWorkStageStatuses(stages).find((item) => item.id === stage3.id)?.status;
 
@@ -1024,33 +1274,33 @@ async function runTest15(ctx) {
 }
 
 async function runTest16(ctx) {
-  const project = await createTestProject(ctx.createdEntities, {
+  const project = await createTestProject(ctx, ctx.createdEntities, {
     name: `${TEST_REMINDER_FLOW_PREFIX} reorder project`,
   });
 
-  const stage1 = await createTestWorkStage(ctx.createdEntities, {
+  const stage1 = await createTestWorkStage(ctx, ctx.createdEntities, {
     title: `${TEST_REMINDER_FLOW_PREFIX} reorder A`,
     project_id: project.id,
     order_index: 1,
   });
-  const stage2 = await createTestWorkStage(ctx.createdEntities, {
+  const stage2 = await createTestWorkStage(ctx, ctx.createdEntities, {
     title: `${TEST_REMINDER_FLOW_PREFIX} reorder B`,
     project_id: project.id,
     order_index: 2,
   });
-  const stage3 = await createTestWorkStage(ctx.createdEntities, {
+  const stage3 = await createTestWorkStage(ctx, ctx.createdEntities, {
     title: `${TEST_REMINDER_FLOW_PREFIX} reorder C`,
     project_id: project.id,
     order_index: 3,
   });
 
-  await recalculateProjectWorkStages(project.id);
-  await updateTestWorkStage(ctx.createdEntities, stage3, { order_index: 1 });
-  await updateTestWorkStage(ctx.createdEntities, stage1, { order_index: 2 });
-  await updateTestWorkStage(ctx.createdEntities, stage2, { order_index: 3 });
-  await recalculateProjectWorkStages(project.id);
+  await recalculateTestProjectWorkStages(ctx, project.id);
+  await updateTestWorkStage(ctx, ctx.createdEntities, stage3, { order_index: 1 });
+  await updateTestWorkStage(ctx, ctx.createdEntities, stage1, { order_index: 2 });
+  await updateTestWorkStage(ctx, ctx.createdEntities, stage2, { order_index: 3 });
+  await recalculateTestProjectWorkStages(ctx, project.id);
 
-  const stages = await loadWorkStagesForProject(project.id);
+  const stages = await loadTestWorkStagesForProject(ctx, project.id);
   const active = getActiveWorkStage(stages);
 
   ctx.steps.push({
@@ -1071,6 +1321,21 @@ async function runTest16(ctx) {
 }
 
 export async function runReminderIntegrationTests() {
+  if (!acquireReminderIntegrationTestLock()) {
+    return {
+      passed: false,
+      skipped: true,
+      message: 'Reminder tests already running',
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+      durationMs: 0,
+      steps: [],
+      createdEntities: emptyCreatedEntities(),
+      cleanup: { passed: true, skipped: true },
+      errors: [{ stage: 'lock', message: 'Reminder tests already running' }],
+    };
+  }
+
   const startedAtMs = Date.now();
   const startedAt = new Date(startedAtMs).toISOString();
   const steps = [];
@@ -1095,7 +1360,7 @@ export async function runReminderIntegrationTests() {
   };
 
   try {
-    await loadReminderEngineCache(cache);
+    await safeRequest(ctx, 'initial_cache_load', () => loadReminderEngineCache(cache));
 
     const tests = [
       runTest1,
@@ -1132,8 +1397,7 @@ export async function runReminderIntegrationTests() {
     }
   } catch (error) {
     if (isRateLimitError(error)) {
-      ctx.rateLimited = true;
-      errors.push({ stage: 'setup', message: 'Rate limit (429)' });
+      markRateLimited(ctx, 'setup');
     } else {
       errors.push({
         stage: 'runner',
@@ -1142,25 +1406,48 @@ export async function runReminderIntegrationTests() {
     }
   } finally {
     try {
-      cleanup.reminders = await cleanupTestReminders(
-        createdEntities,
-        trackedConditionKeys,
-        cache,
+      if (!ctx.rateLimited) {
+        cleanup.reminders = await cleanupTestReminders(ctx, createdEntities, trackedConditionKeys);
+        cleanup.entities = await cleanupTestEntities(ctx, createdEntities);
+      } else {
+        cleanup.skippedDueToRateLimit = true;
+        cleanup.pendingEntityIds = [...collectEntityIds(createdEntities)];
+      }
+
+      cleanup.passed = Boolean(
+        (cleanup.reminders?.passed ?? true)
+        && (cleanup.entities?.passed ?? true)
+        && !(cleanup.reminders?.pending?.length)
+        && !(cleanup.entities?.pending?.length),
       );
-      cleanup.entities = await cleanupTestEntities(createdEntities);
-      cleanup.passed = Boolean(cleanup.reminders?.passed && cleanup.entities?.passed);
 
       if (!cleanup.passed) {
         console.warn('[ReminderTestRunner] cleanup incomplete', {
           reminderFailures: cleanup.reminders?.failedIds,
           reminderConditionKeys: cleanup.reminders?.failedConditionKeys,
           entityFailures: cleanup.entities?.failed,
+          pending: {
+            reminders: cleanup.reminders?.pending,
+            entities: cleanup.entities?.pending,
+            entityIds: cleanup.pendingEntityIds,
+          },
         });
+      }
+
+      try {
+        const leftovers = await findReminderTestLeftovers();
+        if (leftovers.total > 0) {
+          console.info('[ReminderTestRunner] leftover test data report (read-only)', leftovers);
+        }
+      } catch (leftoverError) {
+        console.warn('[ReminderTestRunner] failed to scan leftovers', leftoverError);
       }
     } catch (error) {
       cleanup.passed = false;
       cleanup.error = error instanceof Error ? error.message : String(error);
       console.warn('[ReminderTestRunner] cleanup threw', error);
+    } finally {
+      releaseReminderIntegrationTestLock();
     }
   }
 
@@ -1168,10 +1455,12 @@ export async function runReminderIntegrationTests() {
   const passed = steps.length > 0
     && steps.every((step) => step.passed)
     && !ctx.rateLimited
-    && errors.length === 0;
+    && errors.length === 0
+    && (cleanup.passed ?? true);
 
   return {
     passed,
+    skipped: false,
     startedAt,
     finishedAt: new Date(finishedAtMs).toISOString(),
     durationMs: finishedAtMs - startedAtMs,
@@ -1179,5 +1468,6 @@ export async function runReminderIntegrationTests() {
     createdEntities,
     cleanup,
     errors,
+    rateLimited: ctx.rateLimited,
   };
 }

@@ -261,13 +261,24 @@ export default function Dashboard() {
     if (reminderTestRunning) return;
 
     setReminderTestRunning(true);
-    setReminderTestStatus('Running reminder tests...');
+    setReminderTestStatus('Running...');
 
     try {
       const result = await runReminderIntegrationTests();
+
+      if (result.skipped) {
+        toast({ title: 'Reminder tests already running', variant: 'destructive' });
+        return;
+      }
+
       console.table(result.steps);
 
-      if (result.passed) {
+      if (result.rateLimited || result.errors.some((item) => String(item.message || '').includes('Rate limit'))) {
+        toast({
+          title: 'Rate limit reached. Wait 2 minutes and rerun.',
+          variant: 'destructive',
+        });
+      } else if (result.passed) {
         toast({ title: 'Reminder tests passed' });
       } else {
         toast({
@@ -277,6 +288,10 @@ export default function Dashboard() {
       }
 
       if (!result.cleanup?.passed) {
+        toast({
+          title: 'Tests finished but cleanup incomplete. Check console for pending test ids.',
+          variant: 'destructive',
+        });
         console.warn('[Dashboard] reminder test cleanup incomplete', result.cleanup);
       }
     } catch (error) {
