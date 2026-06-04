@@ -7,7 +7,7 @@ import { buildInvoiceProcessFormPageUrl } from '@/lib/workflowNavigation';
 import {
   FORM_STATUS_LABELS,
   INVOICE_SCOPE_LABELS,
-  parseWorkStageIds,
+  formatInvoiceRelatedStagesDisplay,
 } from '@/lib/invoiceProcessUtils';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -139,11 +139,7 @@ export default function Invoices() {
                   <TableBody>
                     {rows.map((row) => {
                       const scopeLabel = INVOICE_SCOPE_LABELS[row.invoice_scope] || row.invoice_scope || '-';
-                      const stageTitles = row.work_stage_titles || (
-                        parseWorkStageIds(row.work_stage_ids).length
-                          ? `${parseWorkStageIds(row.work_stage_ids).length} שלבים`
-                          : '-'
-                      );
+                      const stageTitles = formatInvoiceRelatedStagesDisplay(row);
                       const statusLabel = FORM_STATUS_LABELS[row.form_status] || row.form_status || '-';
 
                       return (

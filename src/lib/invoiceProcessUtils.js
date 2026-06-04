@@ -1,10 +1,13 @@
 import { isWorkStageCompleted } from '@/lib/workStageLogic';
 
 export const INVOICE_SCOPE_LABELS = {
+  general: 'כללי',
   stage: 'שלב בודד',
   multiple_stages: 'כמה שלבים',
   final_project: 'חשבונית סופית לפרויקט',
 };
+
+export const PROJECT_FEE_FIELD = 'total_amount';
 
 export const FORM_STATUS_LABELS = {
   draft: 'טיוטה',
@@ -48,6 +51,56 @@ export function serializeWorkStageTitles(stages = []) {
     .join(' · ');
 }
 
+export function getProjectFeeAmount(project) {
+  const amount = Number(project?.[PROJECT_FEE_FIELD]);
+  return Number.isFinite(amount) && amount > 0 ? amount : 0;
+}
+
+export function calculateAmountFromProjectPercent(project, percentValue) {
+  const percent = Number(percentValue);
+  if (!Number.isFinite(percent) || percent <= 0) return null;
+
+  const projectAmount = getProjectFeeAmount(project);
+  if (projectAmount <= 0) return null;
+
+  const calculated = (projectAmount * percent) / 100;
+  return Math.round(calculated * 100) / 100;
+}
+
+export function buildWorkStagePersistenceFields(invoiceScope, selectedStageIds = [], eligibleStages = []) {
+  const selectedStages = eligibleStages.filter((stage) => selectedStageIds.includes(stage.id));
+
+  if (selectedStageIds.length > 0) {
+    return {
+      work_stage_ids: serializeWorkStageIds(selectedStageIds),
+      work_stage_titles: serializeWorkStageTitles(selectedStages),
+    };
+  }
+
+  if (invoiceScope === 'general') {
+    return {
+      work_stage_ids: '',
+      work_stage_titles: 'כללי',
+    };
+  }
+
+  return {
+    work_stage_ids: '',
+    work_stage_titles: '',
+  };
+}
+
+export function formatInvoiceRelatedStagesDisplay(row) {
+  const scope = row?.invoice_scope || '';
+  const titles = String(row?.work_stage_titles || '').trim();
+  const stageIds = parseWorkStageIds(row?.work_stage_ids);
+
+  if (titles) return titles;
+  if (stageIds.length > 0) return `${stageIds.length} שלבים`;
+  if (scope === 'general') return 'כללי';
+  return '-';
+}
+
 export function parseWorkStageIdsFromQueryParam(value) {
   const raw = String(value || '').trim();
   if (!raw) return [];
@@ -60,10 +113,14 @@ export function formatWorkStageIdsForQuery(ids = []) {
 
 export function resolveInvoiceScopeFromSelection(selectedIds = [], explicitScope = '') {
   const scope = String(explicitScope || '').trim();
-  if (scope === 'final_project') return 'final_project';
+  if (scope === 'final_project' || scope === 'general') return scope;
   if (selectedIds.length > 1) return 'multiple_stages';
   if (selectedIds.length === 1) return 'stage';
-  return scope || 'stage';
+  return scope || 'general';
+}
+
+export function showsWorkStageSelection(invoiceScope) {
+  return invoiceScope === 'stage' || invoiceScope === 'multiple_stages';
 }
 
 const nowIso = () => new Date().toISOString();
@@ -103,12 +160,6 @@ export function validateInvoiceProcessSubmit({ projectId, clientId, clientName, 
 
   if (!invoiceScope) {
     return 'יש לבחור סוג חשבונית';
-  }
-
-  if (invoiceScope === 'stage' || invoiceScope === 'multiple_stages') {
-    if (!selectedStageIds.length) {
-      return 'יש לבחור לפחות שלב עבודה שהושלם';
-    }
   }
 
   return null;

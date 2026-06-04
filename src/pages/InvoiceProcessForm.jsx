@@ -4,16 +4,23 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
 import { createPageUrl } from '@/utils';
 import { buildInvoiceProcessFormPageUrl } from '@/lib/workflowNavigation';
+import { getGmailUrl, getPaperlessUrl } from '@/lib/invoiceExternalLinks';
+import {
+  buildInvoiceCollectionNote,
+  openProjectCollectionDue,
+} from '@/lib/projectCollectionDue';
 import {
   FORM_STATUS_LABELS,
   INVOICE_SCOPE_LABELS,
   applyInvoiceProcessTimestampFields,
+  buildWorkStagePersistenceFields,
+  calculateAmountFromProjectPercent,
+  getProjectFeeAmount,
   isWorkStageEligibleForInvoice,
   parseWorkStageIds,
   parseWorkStageIdsFromQueryParam,
   resolveInvoiceScopeFromSelection,
-  serializeWorkStageIds,
-  serializeWorkStageTitles,
+  showsWorkStageSelection,
   validateInvoiceProcessSubmit,
 } from '@/lib/invoiceProcessUtils';
 import { formatProjectSelectLabel } from '@/lib/projectSelectLabel';
@@ -32,14 +39,21 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { ArrowRight } from 'lucide-react';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import { ArrowRight, ExternalLink } from 'lucide-react';
 
 const EMPTY_FORM = {
   project_id: '',
   project_name: '',
   client_id: '',
   client_name: '',
-  invoice_scope: 'stage',
+  invoice_scope: 'general',
+  project_percent: '',
   invoice_reference: '',
   amount: '',
   invoice_created_in_paperless: false,
@@ -49,6 +63,8 @@ const EMPTY_FORM = {
 };
 
 const DELETE_CONFIRM_MESSAGE = 'למחוק את תהליך החשבונית? פעולה זו לא ניתנת לביטול.';
+
+const COLLECTION_DISABLED_HINT = 'יש לסמן שהחשבונית נשלחה ללקוח לפני פתיחת גבייה.';
 
 const readSearchParams = () => {
   const params = new URLSearchParams(window.location.search);
@@ -71,7 +87,10 @@ const invoiceProcessToForm = (record) => ({
   project_name: record?.project_name || '',
   client_id: record?.client_id || '',
   client_name: record?.client_name || '',
-  invoice_scope: record?.invoice_scope || 'stage',
+  invoice_scope: record?.invoice_scope || 'general',
+  project_percent: record?.project_percent != null && record.project_percent !== ''
+    ? String(record.project_percent)
+    : '',
   invoice_reference: record?.invoice_reference || '',
   amount: record?.amount != null && record.amount !== '' ? String(record.amount) : '',
   invoice_created_in_paperless: Boolean(record?.invoice_created_in_paperless),
@@ -87,9 +106,15 @@ const buildPayload = ({
   formStatus,
   submittedAt,
 }) => {
-  const selectedStages = eligibleStages.filter((stage) => selectedStageIds.includes(stage.id));
   const amountValue = String(formData.amount || '').trim();
   const parsedAmount = amountValue === '' ? 0 : Number(amountValue);
+  const percentValue = String(formData.project_percent || '').trim();
+  const parsedPercent = percentValue === '' ? null : Number(percentValue);
+  const stageFields = buildWorkStagePersistenceFields(
+    formData.invoice_scope,
+    selectedStageIds,
+    eligibleStages,
+  );
 
   return {
     project_id: formData.project_id.trim(),
@@ -97,8 +122,8 @@ const buildPayload = ({
     client_id: formData.client_id.trim(),
     client_name: formData.client_name.trim(),
     invoice_scope: formData.invoice_scope,
-    work_stage_ids: serializeWorkStageIds(selectedStageIds),
-    work_stage_titles: serializeWorkStageTitles(selectedStages),
+    project_percent: Number.isFinite(parsedPercent) ? parsedPercent : null,
+    ...stageFields,
     invoice_reference: formData.invoice_reference.trim(),
     amount: Number.isFinite(parsedAmount) ? parsedAmount : 0,
     invoice_created_in_paperless: Boolean(formData.invoice_created_in_paperless),
@@ -114,6 +139,7 @@ export default function InvoiceProcessForm() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [{ id: initialId, prefill }] = useState(readSearchParams);
+  const paperlessUrl = getPaperlessUrl();
 
   const [recordId, setRecordId] = useState(initialId);
   const [formData, setFormData] = useState(() => ({
@@ -129,12 +155,14 @@ export default function InvoiceProcessForm() {
   const [submittedAt, setSubmittedAt] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSubmittingCollection, setIsSubmittingCollection] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [prefillApplied, setPrefillApplied] = useState(false);
 
   const isEditMode = Boolean(recordId);
   const isSubmitted = formStatus === 'submitted';
-  const isBusy = isSaving || isSubmitting || isDeleting;
+  const isBusy = isSaving || isSubmitting || isSubmittingCollection || isDeleting;
+  const canOpenCollection = formData.invoice_sent_to_client === true;
 
   const { data: record, isLoading: isLoadingRecord } = useQuery({
     queryKey: ['invoice-process', recordId],
@@ -163,10 +191,10 @@ export default function InvoiceProcessForm() {
       const items = await base44.entities.WorkStage.filter({ project_id: projectIdForStages });
       return items || [];
     },
-    enabled: Boolean(projectIdForStages),
+    enabled: Boolean(projectIdForStages) && showsWorkStageSelection(formData.invoice_scope),
   });
 
-  const { data: prefillProject, isLoading: isLoadingPrefillProject } = useQuery({
+  const { data: prefillProject } = useQuery({
     queryKey: ['project', prefill.project_id],
     queryFn: async () => {
       const results = await base44.entities.Project.filter({ id: prefill.project_id });
@@ -175,6 +203,11 @@ export default function InvoiceProcessForm() {
     enabled: !isEditMode && Boolean(prefill.project_id) && !prefillApplied,
   });
 
+  const selectedProject = useMemo(
+    () => projects.find((item) => item.id === formData.project_id) || null,
+    [projects, formData.project_id],
+  );
+
   const eligibleStages = useMemo(
     () => workStages.filter((stage) => isWorkStageEligibleForInvoice(stage)),
     [workStages],
@@ -182,14 +215,32 @@ export default function InvoiceProcessForm() {
 
   const selectedProjectLabel = useMemo(() => {
     if (!formData.project_id) return null;
-    const project = projects.find((item) => item.id === formData.project_id);
-    return project ? formatProjectSelectLabel(project) : (formData.project_name || null);
-  }, [projects, formData.project_id, formData.project_name]);
+    return selectedProject
+      ? formatProjectSelectLabel(selectedProject)
+      : (formData.project_name || null);
+  }, [selectedProject, formData.project_id, formData.project_name]);
 
   const filteredProjects = useMemo(() => {
     if (!formData.client_id) return projects;
     return projects.filter((project) => project.client_id === formData.client_id);
   }, [projects, formData.client_id]);
+
+  const projectFeeAmount = getProjectFeeAmount(selectedProject);
+  const showMissingProjectFeeWarning = (
+    Boolean(String(formData.project_percent || '').trim())
+    && Boolean(formData.project_id)
+    && projectFeeAmount <= 0
+  );
+
+  const applyCalculatedAmount = (project, percentValue) => {
+    const calculated = calculateAmountFromProjectPercent(project, percentValue);
+    if (calculated == null) return;
+
+    setFormData((prev) => ({
+      ...prev,
+      amount: String(calculated),
+    }));
+  };
 
   useEffect(() => {
     if (!record) return;
@@ -226,6 +277,7 @@ export default function InvoiceProcessForm() {
     if (!project) return;
 
     const linkedClient = clients.find((client) => client.id === project.client_id);
+    const percentValue = String(formData.project_percent || '').trim();
 
     setFormData((prev) => ({
       ...prev,
@@ -235,6 +287,10 @@ export default function InvoiceProcessForm() {
       client_name: linkedClient?.name || prev.client_name,
     }));
     setSelectedStageIds([]);
+
+    if (percentValue) {
+      applyCalculatedAmount(project, percentValue);
+    }
   };
 
   const handleClientSelect = (selectedClientId) => {
@@ -249,6 +305,29 @@ export default function InvoiceProcessForm() {
       project_name: '',
     }));
     setSelectedStageIds([]);
+  };
+
+  const handleScopeChange = (scope) => {
+    setFormData((prev) => ({ ...prev, invoice_scope: scope }));
+
+    if (scope === 'stage' && selectedStageIds.length > 1) {
+      setSelectedStageIds(selectedStageIds.slice(0, 1));
+    }
+
+    if (!showsWorkStageSelection(scope)) {
+      setSelectedStageIds([]);
+    }
+  };
+
+  const handlePercentChange = (value) => {
+    setFormData((prev) => ({ ...prev, project_percent: value }));
+
+    if (!String(value || '').trim()) return;
+    applyCalculatedAmount(selectedProject, value);
+  };
+
+  const handleAmountChange = (value) => {
+    setFormData((prev) => ({ ...prev, amount: value }));
   };
 
   const toggleStageSelection = (stageId, checked) => {
@@ -267,16 +346,6 @@ export default function InvoiceProcessForm() {
     });
   };
 
-  const handleScopeChange = (scope) => {
-    setFormData((prev) => ({ ...prev, invoice_scope: scope }));
-    if (scope === 'stage' && selectedStageIds.length > 1) {
-      setSelectedStageIds(selectedStageIds.slice(0, 1));
-    }
-    if (scope === 'final_project') {
-      setSelectedStageIds([]);
-    }
-  };
-
   const persistRecord = async ({ asSubmit }) => {
     const validationError = asSubmit
       ? validateInvoiceProcessSubmit({
@@ -290,7 +359,7 @@ export default function InvoiceProcessForm() {
 
     if (validationError) {
       alert(validationError);
-      return;
+      return false;
     }
 
     const nextStatus = asSubmit ? 'submitted' : (formStatus === 'submitted' ? 'submitted' : 'draft');
@@ -332,6 +401,8 @@ export default function InvoiceProcessForm() {
     if (savedId) {
       await queryClient.invalidateQueries({ queryKey: ['invoice-process', savedId] });
     }
+
+    return true;
   };
 
   const handleSaveDraft = async () => {
@@ -342,8 +413,8 @@ export default function InvoiceProcessForm() {
 
     setIsSaving(true);
     try {
-      await persistRecord({ asSubmit: false });
-      alert('הטיוטה נשמרה');
+      const saved = await persistRecord({ asSubmit: false });
+      if (saved) alert('הטיוטה נשמרה');
     } catch (error) {
       console.error('[InvoiceProcessForm] save draft failed', error);
       alert('לא הצלחנו לשמור את הטיוטה');
@@ -355,8 +426,8 @@ export default function InvoiceProcessForm() {
   const handleSaveChanges = async () => {
     setIsSaving(true);
     try {
-      await persistRecord({ asSubmit: false });
-      alert('השינויים נשמרו');
+      const saved = await persistRecord({ asSubmit: false });
+      if (saved) alert('השינויים נשמרו');
     } catch (error) {
       console.error('[InvoiceProcessForm] save changes failed', error);
       alert('לא הצלחנו לשמור את השינויים');
@@ -370,13 +441,84 @@ export default function InvoiceProcessForm() {
 
     setIsSubmitting(true);
     try {
-      await persistRecord({ asSubmit: true });
-      alert('הטופס הוגש');
+      const saved = await persistRecord({ asSubmit: true });
+      if (saved) alert('הטופס הוגש');
     } catch (error) {
       console.error('[InvoiceProcessForm] submit failed', error);
       alert('לא הצלחנו להגיש את הטופס');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleSubmitAndOpenCollection = async () => {
+    if (!canOpenCollection) return;
+
+    const amount = Number(String(formData.amount || '').trim());
+    if (!Number.isFinite(amount) || amount <= 0) {
+      alert('יש למלא סכום לפני פתיחת גבייה.');
+      return;
+    }
+
+    if (!formData.project_id) {
+      alert('יש לבחור פרויקט לפני פתיחת גבייה.');
+      return;
+    }
+
+    setIsSubmittingCollection(true);
+
+    try {
+      const saved = await persistRecord({ asSubmit: true });
+      if (!saved) return;
+
+      const projectResults = await base44.entities.Project.filter({ id: formData.project_id });
+      const project = projectResults?.[0];
+
+      if (!project) {
+        alert('לא נמצאה זרימת גבייה קיימת לפתיחה אוטומטית.');
+        return;
+      }
+
+      const stageFields = buildWorkStagePersistenceFields(
+        formData.invoice_scope,
+        selectedStageIds,
+        eligibleStages,
+      );
+
+      const collectionNote = buildInvoiceCollectionNote({
+        invoiceReference: formData.invoice_reference,
+        workStageTitles: stageFields.work_stage_titles,
+        invoiceScope: formData.invoice_scope,
+      });
+
+      try {
+        await openProjectCollectionDue({
+          project,
+          amount,
+          note: collectionNote,
+          updateProject: (id, payload) => base44.entities.Project.update(id, payload),
+        });
+      } catch (error) {
+        if (error?.message === 'AMOUNT_EXCEEDS_OUTSTANDING') {
+          alert('הסכום לגבייה לא יכול להיות גדול מיתרת הגבייה הכוללת של הפרויקט');
+          return;
+        }
+
+        console.error('[InvoiceProcessForm] open collection failed', error);
+        alert('לא נמצאה זרימת גבייה קיימת לפתיחה אוטומטית.');
+        return;
+      }
+
+      await queryClient.invalidateQueries({ queryKey: ['project', formData.project_id] });
+      await queryClient.invalidateQueries({ queryKey: ['projects'] });
+
+      alert('הטופס הוגש ונפתחה גבייה.');
+      navigate(createPageUrl(`ProjectDetails?id=${formData.project_id}`));
+    } catch (error) {
+      console.error('[InvoiceProcessForm] submit and open collection failed', error);
+      alert('לא הצלחנו להגיש את הטופס ולפתוח גבייה');
+    } finally {
+      setIsSubmittingCollection(false);
     }
   };
 
@@ -399,8 +541,6 @@ export default function InvoiceProcessForm() {
     }
   };
 
-  const showStageSelection = formData.invoice_scope !== 'final_project';
-
   if (isEditMode && isLoadingRecord && !record) {
     return (
       <div className="min-h-screen bg-background p-6" dir="rtl">
@@ -410,253 +550,335 @@ export default function InvoiceProcessForm() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50" dir="rtl">
-      <div className="max-w-[900px] mx-auto px-8 py-10 space-y-6">
-        <div className="flex items-center gap-2 flex-wrap">
-          <Button asChild variant="ghost" size="sm" className="gap-1">
-            <Link to={createPageUrl('Invoices')}>
-              <ArrowRight className="w-4 h-4" />
-              חזרה לרשימת חשבוניות
-            </Link>
-          </Button>
-        </div>
+    <TooltipProvider>
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50" dir="rtl">
+        <div className="max-w-[900px] mx-auto px-8 py-10 space-y-6">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button asChild variant="ghost" size="sm" className="gap-1">
+              <Link to={createPageUrl('Invoices')}>
+                <ArrowRight className="w-4 h-4" />
+                חזרה לרשימת חשבוניות
+              </Link>
+            </Button>
+          </div>
 
-        <Card className="border-0 shadow-sm">
-          <CardHeader>
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <CardTitle>{isEditMode ? 'עריכת תהליך חשבונית' : 'תהליך חשבונית חדש'}</CardTitle>
-                <p className="text-sm text-muted-foreground mt-1">
-                  מעקב ידני אחרי יצירה ב-Paperless, שליחה ללקוח ואישור קבלה
-                </p>
-              </div>
-              {formStatus ? (
-                <Badge variant="secondary">{FORM_STATUS_LABELS[formStatus] || formStatus}</Badge>
-              ) : null}
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label>לקוח</Label>
-                <Select
-                  value={formData.client_id || undefined}
-                  onValueChange={handleClientSelect}
-                  disabled={isBusy || isSubmitted}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="בחר לקוח" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {clients.map((client) => (
-                      <SelectItem key={client.id} value={client.id}>
-                        {client.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Input
-                  value={formData.client_name}
-                  onChange={(event) => setFormData((prev) => ({ ...prev, client_name: event.target.value }))}
-                  placeholder="או שם לקוח ידני"
-                  disabled={isBusy}
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label>פרויקט</Label>
-                <Select
-                  value={formData.project_id || undefined}
-                  onValueChange={applyProjectSelection}
-                  disabled={isBusy || isSubmitted}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="בחר פרויקט" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {filteredProjects.map((project) => (
-                      <SelectItem key={project.id} value={project.id}>
-                        {formatProjectSelectLabel(project)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {selectedProjectLabel ? (
-                  <p className="text-xs text-muted-foreground">{selectedProjectLabel}</p>
-                ) : null}
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <Label>סוג חשבונית</Label>
-              <RadioGroup
-                value={formData.invoice_scope}
-                onValueChange={handleScopeChange}
-                className="flex flex-col gap-2"
-                disabled={isBusy}
-              >
-                {Object.entries(INVOICE_SCOPE_LABELS).map(([value, label]) => (
-                  <div key={value} className="flex items-center gap-2">
-                    <RadioGroupItem value={value} id={`invoice-scope-${value}`} />
-                    <Label htmlFor={`invoice-scope-${value}`} className="font-normal cursor-pointer">
-                      {label}
-                    </Label>
-                  </div>
-                ))}
-              </RadioGroup>
-            </div>
-
-            {formData.project_id ? (
-              <div className="space-y-3 rounded-lg border p-4">
-                <Label>שלבי עבודה שהושלמו</Label>
-                {formData.invoice_scope === 'final_project' ? (
-                  <p className="text-xs text-muted-foreground">
-                    לחשבונית סופית אין חובה לבחור שלבים. אפשר לסמן שלבים להקשר בלבד.
+          <Card className="border-0 shadow-sm">
+            <CardHeader>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <CardTitle>{isEditMode ? 'עריכת תהליך חשבונית' : 'תהליך חשבונית חדש'}</CardTitle>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    מעקב ידני אחרי יצירה ב-Paperless, שליחה ללקוח ואישור קבלה
                   </p>
-                ) : null}
-
-                {isLoadingStages ? (
-                  <p className="text-sm text-muted-foreground">טוען שלבי עבודה...</p>
-                ) : eligibleStages.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">אין שלבים שהושלמו לפרויקט זה.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {eligibleStages.map((stage) => {
-                      const isChecked = selectedStageIds.includes(stage.id);
-                      const checkboxDisabled = isBusy
-                        || (formData.invoice_scope === 'final_project' && false);
-
-                      return (
-                        <label
-                          key={stage.id}
-                          className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm cursor-pointer"
-                        >
-                          <Checkbox
-                            checked={isChecked}
-                            disabled={checkboxDisabled}
-                            onCheckedChange={(checked) => toggleStageSelection(stage.id, checked === true)}
-                          />
-                          <span className="font-medium">{stage.title || 'שלב ללא שם'}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {showStageSelection && formData.invoice_scope === 'stage' ? (
-                  <p className="text-xs text-muted-foreground">ניתן לבחור שלב אחד בלבד.</p>
-                ) : null}
-                {showStageSelection && formData.invoice_scope === 'multiple_stages' ? (
-                  <p className="text-xs text-muted-foreground">ניתן לבחור כמה שלבים.</p>
+                </div>
+                {formStatus ? (
+                  <Badge variant="secondary">{FORM_STATUS_LABELS[formStatus] || formStatus}</Badge>
                 ) : null}
               </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">בחר פרויקט כדי לטעון שלבי עבודה.</p>
-            )}
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>לקוח</Label>
+                  <Select
+                    value={formData.client_id || undefined}
+                    onValueChange={handleClientSelect}
+                    disabled={isBusy || isSubmitted}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="בחר לקוח" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {clients.map((client) => (
+                        <SelectItem key={client.id} value={client.id}>
+                          {client.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Input
+                    value={formData.client_name}
+                    onChange={(event) => setFormData((prev) => ({ ...prev, client_name: event.target.value }))}
+                    placeholder="או שם לקוח ידני"
+                    disabled={isBusy}
+                  />
+                </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="invoice_reference">אסמכתא / מספר חשבונית</Label>
-                <Input
-                  id="invoice_reference"
-                  value={formData.invoice_reference}
-                  onChange={(event) => setFormData((prev) => ({ ...prev, invoice_reference: event.target.value }))}
-                  disabled={isBusy}
-                />
+                <div className="space-y-2">
+                  <Label>פרויקט</Label>
+                  <Select
+                    value={formData.project_id || undefined}
+                    onValueChange={applyProjectSelection}
+                    disabled={isBusy || isSubmitted}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="בחר פרויקט" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {filteredProjects.map((project) => (
+                        <SelectItem key={project.id} value={project.id}>
+                          {formatProjectSelectLabel(project)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {selectedProjectLabel ? (
+                    <p className="text-xs text-muted-foreground">{selectedProjectLabel}</p>
+                  ) : null}
+                </div>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="amount">סכום</Label>
-                <Input
-                  id="amount"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={formData.amount}
-                  onChange={(event) => setFormData((prev) => ({ ...prev, amount: event.target.value }))}
-                  disabled={isBusy}
-                />
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-3">
+                  <Label>סוג חשבונית</Label>
+                  <RadioGroup
+                    value={formData.invoice_scope}
+                    onValueChange={handleScopeChange}
+                    className="flex flex-col gap-2"
+                    disabled={isBusy}
+                  >
+                    {Object.entries(INVOICE_SCOPE_LABELS).map(([value, label]) => (
+                      <div key={value} className="flex items-center gap-2">
+                        <RadioGroupItem value={value} id={`invoice-scope-${value}`} />
+                        <Label htmlFor={`invoice-scope-${value}`} className="font-normal cursor-pointer">
+                          {label}
+                        </Label>
+                      </div>
+                    ))}
+                  </RadioGroup>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="project_percent">אחוז מהפרויקט</Label>
+                  <Input
+                    id="project_percent"
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    value={formData.project_percent}
+                    onChange={(event) => handlePercentChange(event.target.value)}
+                    disabled={isBusy || !formData.project_id}
+                    placeholder="לדוגמה: 70"
+                  />
+                  <p className="text-xs text-muted-foreground">מחושב לפי שכ״ט הפרויקט</p>
+                  {showMissingProjectFeeWarning ? (
+                    <p className="text-xs text-amber-700">לא נמצא סכום פרויקט לחישוב אוטומטי.</p>
+                  ) : null}
+                  {projectFeeAmount > 0 ? (
+                    <p className="text-xs text-muted-foreground">
+                      שכ״ט פרויקט:
+                      {' '}
+                      {new Intl.NumberFormat('he-IL').format(projectFeeAmount)}
+                      {' '}
+                      ₪
+                    </p>
+                  ) : null}
+                </div>
               </div>
-            </div>
 
-            <div className="space-y-3 rounded-lg border p-4">
-              <p className="text-sm font-medium">מעקב ידני</p>
-              <label className="flex items-center gap-2 text-sm">
-                <Checkbox
-                  checked={formData.invoice_created_in_paperless}
-                  disabled={isBusy}
-                  onCheckedChange={(checked) => setFormData((prev) => ({
-                    ...prev,
-                    invoice_created_in_paperless: checked === true,
-                  }))}
-                />
-                <span>חשבונית נוצרה ב-Paperless</span>
-                {record?.invoice_created_at ? (
-                  <span className="text-xs text-muted-foreground">
-                    (
-                    {new Intl.DateTimeFormat('he-IL').format(new Date(record.invoice_created_at))}
-                    )
-                  </span>
-                ) : null}
-              </label>
-              <label className="flex items-center gap-2 text-sm">
-                <Checkbox
-                  checked={formData.invoice_sent_to_client}
-                  disabled={isBusy}
-                  onCheckedChange={(checked) => setFormData((prev) => ({
-                    ...prev,
-                    invoice_sent_to_client: checked === true,
-                  }))}
-                />
-                <span>חשבונית נשלחה ללקוח</span>
-              </label>
-              <label className="flex items-center gap-2 text-sm">
-                <Checkbox
-                  checked={formData.client_confirmed_received}
-                  disabled={isBusy}
-                  onCheckedChange={(checked) => setFormData((prev) => ({
-                    ...prev,
-                    client_confirmed_received: checked === true,
-                  }))}
-                />
-                <span>הלקוח אישר קבלה</span>
-              </label>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="notes">הערות</Label>
-              <Textarea
-                id="notes"
-                value={formData.notes}
-                onChange={(event) => setFormData((prev) => ({ ...prev, notes: event.target.value }))}
-                disabled={isBusy}
-                rows={4}
-              />
-            </div>
-
-            <div className="flex flex-wrap gap-2 pt-2">
-              {isSubmitted ? (
-                <Button type="button" onClick={handleSaveChanges} disabled={isBusy}>
-                  שמור שינויים
-                </Button>
-              ) : (
-                <>
-                  <Button type="button" variant="outline" onClick={handleSaveDraft} disabled={isBusy}>
-                    שמור טיוטה
-                  </Button>
-                  <Button type="button" onClick={handleSubmit} disabled={isBusy}>
-                    הגש טופס
-                  </Button>
-                </>
-              )}
-              {isEditMode ? (
-                <Button type="button" variant="destructive" onClick={handleDelete} disabled={isBusy}>
-                  מחק
-                </Button>
+              {formData.invoice_scope === 'general' ? (
+                <p className="text-sm text-muted-foreground rounded-lg border border-dashed p-3">
+                  חשבונית כללית - לא משויכת לשלבי עבודה מסוימים.
+                </p>
               ) : null}
-            </div>
-          </CardContent>
-        </Card>
+
+              {showsWorkStageSelection(formData.invoice_scope) ? (
+                <div className="space-y-3 rounded-lg border p-4">
+                  <Label>שלבי עבודה שהושלמו (אופציונלי)</Label>
+                  <p className="text-xs text-muted-foreground">
+                    ניתן לציין על אילו שלבים הופקה החשבונית. אין חובה לבחור שלבים.
+                  </p>
+
+                  {!formData.project_id ? (
+                    <p className="text-sm text-muted-foreground">בחר פרויקט כדי לטעון שלבי עבודה.</p>
+                  ) : isLoadingStages ? (
+                    <p className="text-sm text-muted-foreground">טוען שלבי עבודה...</p>
+                  ) : eligibleStages.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">אין שלבים שהושלמו לפרויקט זה.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {eligibleStages.map((stage) => {
+                        const isChecked = selectedStageIds.includes(stage.id);
+
+                        return (
+                          <label
+                            key={stage.id}
+                            className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm cursor-pointer"
+                          >
+                            <Checkbox
+                              checked={isChecked}
+                              disabled={isBusy}
+                              onCheckedChange={(checked) => toggleStageSelection(stage.id, checked === true)}
+                            />
+                            <span className="font-medium">{stage.title || 'שלב ללא שם'}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {formData.invoice_scope === 'stage' ? (
+                    <p className="text-xs text-muted-foreground">ניתן לבחור שלב אחד בלבד.</p>
+                  ) : null}
+                  {formData.invoice_scope === 'multiple_stages' ? (
+                    <p className="text-xs text-muted-foreground">ניתן לבחור כמה שלבים.</p>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {formData.invoice_scope === 'final_project' ? (
+                <p className="text-xs text-muted-foreground rounded-lg border p-3">
+                  לחשבונית סופית אין חובה לבחור שלבים.
+                </p>
+              ) : null}
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="invoice_reference">אסמכתא / מספר חשבונית</Label>
+                  <Input
+                    id="invoice_reference"
+                    value={formData.invoice_reference}
+                    onChange={(event) => setFormData((prev) => ({ ...prev, invoice_reference: event.target.value }))}
+                    disabled={isBusy}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="amount">סכום</Label>
+                  <Input
+                    id="amount"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={formData.amount}
+                    onChange={(event) => handleAmountChange(event.target.value)}
+                    disabled={isBusy}
+                  />
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    {paperlessUrl ? (
+                      <Button asChild type="button" variant="outline" size="sm" className="h-7 text-xs gap-1">
+                        <a href={paperlessUrl} target="_blank" rel="noopener noreferrer">
+                          <ExternalLink className="h-3 w-3" />
+                          פתח Paperless
+                        </a>
+                      </Button>
+                    ) : (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span>
+                            <Button type="button" variant="outline" size="sm" className="h-7 text-xs" disabled>
+                              פתח Paperless
+                            </Button>
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent>יש להגדיר קישור ל-Paperless</TooltipContent>
+                      </Tooltip>
+                    )}
+                    <Button asChild type="button" variant="outline" size="sm" className="h-7 text-xs gap-1">
+                      <a href={getGmailUrl()} target="_blank" rel="noopener noreferrer">
+                        <ExternalLink className="h-3 w-3" />
+                        פתח Gmail
+                      </a>
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3 rounded-lg border p-4">
+                <p className="text-sm font-medium">מעקב ידני</p>
+                <label className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={formData.invoice_created_in_paperless}
+                    disabled={isBusy}
+                    onCheckedChange={(checked) => setFormData((prev) => ({
+                      ...prev,
+                      invoice_created_in_paperless: checked === true,
+                    }))}
+                  />
+                  <span>חשבונית נוצרה ב-Paperless</span>
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={formData.invoice_sent_to_client}
+                    disabled={isBusy}
+                    onCheckedChange={(checked) => setFormData((prev) => ({
+                      ...prev,
+                      invoice_sent_to_client: checked === true,
+                    }))}
+                  />
+                  <span>חשבונית נשלחה ללקוח</span>
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={formData.client_confirmed_received}
+                    disabled={isBusy}
+                    onCheckedChange={(checked) => setFormData((prev) => ({
+                      ...prev,
+                      client_confirmed_received: checked === true,
+                    }))}
+                  />
+                  <span>הלקוח אישר קבלה</span>
+                </label>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="notes">הערות</Label>
+                <Textarea
+                  id="notes"
+                  value={formData.notes}
+                  onChange={(event) => setFormData((prev) => ({ ...prev, notes: event.target.value }))}
+                  disabled={isBusy}
+                  rows={4}
+                />
+              </div>
+
+              <div className="flex flex-wrap gap-2 pt-2">
+                {isSubmitted ? (
+                  <Button type="button" onClick={handleSaveChanges} disabled={isBusy}>
+                    שמור שינויים
+                  </Button>
+                ) : (
+                  <>
+                    <Button type="button" variant="outline" onClick={handleSaveDraft} disabled={isBusy}>
+                      שמור טיוטה
+                    </Button>
+                    <Button type="button" onClick={handleSubmit} disabled={isBusy}>
+                      הגש טופס
+                    </Button>
+                  </>
+                )}
+                {isEditMode ? (
+                  <Button type="button" variant="destructive" onClick={handleDelete} disabled={isBusy}>
+                    מחק
+                  </Button>
+                ) : null}
+              </div>
+
+              <div className="rounded-lg border border-dashed bg-muted/20 p-4 space-y-3">
+                <div>
+                  <p className="text-sm font-semibold">המשך טיפול</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    לאחר סימון שהחשבונית נשלחה ללקוח, ניתן להגיש ולפתוח גבייה על הפרויקט.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={isBusy || !canOpenCollection}
+                    onClick={handleSubmitAndOpenCollection}
+                  >
+                    הגש טופס ופתח גבייה
+                  </Button>
+                  {!canOpenCollection ? (
+                    <p className="text-xs text-muted-foreground">{COLLECTION_DISABLED_HINT}</p>
+                  ) : null}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       </div>
-    </div>
+    </TooltipProvider>
   );
 }
