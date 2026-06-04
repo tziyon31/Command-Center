@@ -219,7 +219,7 @@ export default function WorkStages() {
   if (!resolvedProjectId) {
     return (
       <div className="min-h-screen bg-background p-6" dir="rtl">
-        <p className="text-sm text-muted-foreground">חסר project_id בכתובת.</p>
+        <p className="text-sm text-muted-foreground">יש לבחור פרויקט כדי לנהל שלבי עבודה.</p>
       </div>
     );
   }

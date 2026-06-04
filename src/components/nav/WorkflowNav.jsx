@@ -12,6 +12,7 @@ const REGISTERED_PAGE_NAMES = new Set([
   'Projects',
   'Proposals',
   'SignedProposals',
+  'WorkStages',
 ]);
 
 const WORKFLOW_ITEMS = [
@@ -35,6 +36,7 @@ const WORKFLOW_ACTIVE_PAGES = new Set([
   'InvoiceUpload',
   'SignedProposals',
   'SignedProposalForm',
+  'WorkStages',
 ]);
 
 export function getWorkflowItemsForRole(role) {
