@@ -16,6 +16,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import WorkStageDialog from '@/components/workflow/WorkStageDialog';
+import WorkStagesProjectPicker from '@/components/workflow/WorkStagesProjectPicker';
 import {
   getActiveWorkStage,
   normalizeWorkStageStatuses,
@@ -26,6 +27,7 @@ import {
   loadWorkStagesForProject,
   recalculateProjectWorkStages,
 } from '@/lib/workStageSync';
+import { isValidSignedProposalForWorkStages } from '@/lib/signedProposalValidation';
 import { cn } from '@/lib/utils';
 
 const STATUS_LABELS = {
@@ -33,6 +35,20 @@ const STATUS_LABELS = {
   active: 'פעיל',
   completed: 'הושלם',
   cancelled: 'בוטל',
+};
+
+const PROJECT_STATUS_LABELS = {
+  lead: 'ליד',
+  pricing: 'תמחור',
+  signed: 'חתום',
+  planning: 'תכנון',
+  submission: 'הגשה',
+  execution: 'ביצוע',
+  completed: 'הושלם',
+  collection_completed: 'גבייה הושלמה',
+  cancelled: 'בוטל',
+  waiting: 'ממתין',
+  rejected: 'נדחה',
 };
 
 const formatBoolean = (value) => (value ? 'כן' : 'לא');
@@ -44,38 +60,64 @@ const formatDate = (value) => {
   return new Intl.DateTimeFormat('he-IL').format(date);
 };
 
-const readSearchParams = () => {
-  const params = new URLSearchParams(globalThis.location?.search || '');
-  return {
-    projectId: params.get('project_id') || '',
-    signedProposalId: params.get('signed_proposal_id') || '',
-    stageId: params.get('stage_id') || '',
-  };
-};
+const formatProjectStatus = (status) => (
+  PROJECT_STATUS_LABELS[status] || status || '-'
+);
 
 export default function WorkStages() {
   const location = useLocation();
   const queryClient = useQueryClient();
-  const [{ projectId, signedProposalId, stageId }] = useState(() => readSearchParams());
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingStage, setEditingStage] = useState(null);
   const [busyStageId, setBusyStageId] = useState(null);
 
   const resolvedProjectId = useMemo(() => {
     const params = new URLSearchParams(location.search);
-    return params.get('project_id') || projectId;
-  }, [location.search, projectId]);
+    return params.get('project_id') || '';
+  }, [location.search]);
 
   const resolvedSignedProposalId = useMemo(() => {
     const params = new URLSearchParams(location.search);
-    return params.get('signed_proposal_id') || signedProposalId;
-  }, [location.search, signedProposalId]);
+    return params.get('signed_proposal_id') || '';
+  }, [location.search]);
 
   const resolvedStageId = useMemo(() => {
     const params = new URLSearchParams(location.search);
-    return params.get('stage_id') || stageId;
-  }, [location.search, stageId]);
+    return params.get('stage_id') || '';
+  }, [location.search]);
 
+  if (!resolvedProjectId) {
+    return <WorkStagesProjectPicker />;
+  }
+
+  return (
+    <WorkStagesProjectView
+      resolvedProjectId={resolvedProjectId}
+      resolvedSignedProposalId={resolvedSignedProposalId}
+      resolvedStageId={resolvedStageId}
+      dialogOpen={dialogOpen}
+      setDialogOpen={setDialogOpen}
+      editingStage={editingStage}
+      setEditingStage={setEditingStage}
+      busyStageId={busyStageId}
+      setBusyStageId={setBusyStageId}
+      queryClient={queryClient}
+    />
+  );
+}
+
+function WorkStagesProjectView({
+  resolvedProjectId,
+  resolvedSignedProposalId,
+  resolvedStageId,
+  dialogOpen,
+  setDialogOpen,
+  editingStage,
+  setEditingStage,
+  busyStageId,
+  setBusyStageId,
+  queryClient,
+}) {
   const { data: project, isLoading: isLoadingProject } = useQuery({
     queryKey: ['project', resolvedProjectId],
     queryFn: async () => {
@@ -84,6 +126,31 @@ export default function WorkStages() {
     },
     enabled: Boolean(resolvedProjectId),
   });
+
+  const { data: linkedClient } = useQuery({
+    queryKey: ['client', project?.client_id],
+    queryFn: async () => {
+      const results = await base44.entities.Client.filter({ id: project.client_id });
+      return results?.[0] || null;
+    },
+    enabled: Boolean(project?.client_id),
+  });
+
+  const { data: signedProposals = [] } = useQuery({
+    queryKey: ['signed-proposals-for-work-stages', resolvedProjectId],
+    queryFn: () => base44.entities.SignedProposal.list(),
+    enabled: Boolean(resolvedProjectId),
+  });
+
+  const validSignedProposal = useMemo(() => {
+    const fromUrl = signedProposals.find((item) => item.id === resolvedSignedProposalId);
+    if (fromUrl && isValidSignedProposalForWorkStages(fromUrl)) return fromUrl;
+
+    return signedProposals.find(
+      (item) => String(item.project_id || '') === resolvedProjectId
+        && isValidSignedProposalForWorkStages(item),
+    ) || null;
+  }, [signedProposals, resolvedProjectId, resolvedSignedProposalId]);
 
   const {
     data: workStages = [],
@@ -109,6 +176,8 @@ export default function WorkStages() {
     () => getActiveWorkStage(workStages),
     [workStages],
   );
+
+  const clientName = linkedClient?.name || project?.client_name || '';
 
   useEffect(() => {
     if (!resolvedStageId || isLoadingStages) return;
@@ -216,14 +285,6 @@ export default function WorkStages() {
     await applyReorder(withOrder);
   };
 
-  if (!resolvedProjectId) {
-    return (
-      <div className="min-h-screen bg-background p-6" dir="rtl">
-        <p className="text-sm text-muted-foreground">יש לבחור פרויקט כדי לנהל שלבי עבודה.</p>
-      </div>
-    );
-  }
-
   if (isLoadingProject || isLoadingStages) {
     return (
       <div className="min-h-screen bg-background p-6" dir="rtl">
@@ -241,6 +302,7 @@ export default function WorkStages() {
   }
 
   const projectDetailsUrl = createPageUrl(`ProjectDetails?id=${project.id}`);
+  const effectiveSignedProposalId = validSignedProposal?.id || resolvedSignedProposalId || '';
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50" dir="rtl">
@@ -256,19 +318,39 @@ export default function WorkStages() {
 
         <Card className="border-0 shadow-sm">
           <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
+            <div className="space-y-2">
               <CardTitle>שלבי עבודה</CardTitle>
-              <p className="text-sm text-muted-foreground mt-1">
-                {project.name || 'פרויקט'}
-                {project.client_name ? ` · ${project.client_name}` : ''}
-              </p>
-              {activeStage ? (
-                <p className="text-xs text-muted-foreground mt-1">
-                  שלב פעיל: {activeStage.title}
+              <div className="text-sm text-muted-foreground space-y-1">
+                <p>
+                  <span className="font-medium text-foreground">{project.name || 'פרויקט'}</span>
+                  {clientName ? ` · ${clientName}` : ''}
                 </p>
-              ) : (
-                <p className="text-xs text-muted-foreground mt-1">אין שלב פעיל כרגע</p>
-              )}
+                <p className="text-xs">
+                  {project.bid_number ? `BID ${project.bid_number}` : null}
+                  {project.bid_number && project.work_number ? ' · ' : null}
+                  {project.work_number ? `עבודה ${project.work_number}` : null}
+                  {(project.bid_number || project.work_number) && project.status ? ' · ' : null}
+                  {project.status ? `סטטוס: ${formatProjectStatus(project.status)}` : null}
+                </p>
+                <p className="text-xs">
+                  {validSignedProposal ? (
+                    <Badge variant="secondary" className="font-normal">
+                      יש הצעה/הזמנה חתומה תקפה
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="font-normal">
+                      אין הצעה/הזמנה חתומה תקפה
+                    </Badge>
+                  )}
+                </p>
+                {activeStage ? (
+                  <p className="text-xs">
+                    שלב פעיל: {activeStage.title}
+                  </p>
+                ) : (
+                  <p className="text-xs">אין שלב פעיל כרגע</p>
+                )}
+              </div>
             </div>
             <Button onClick={openCreateDialog}>הוסף שלב עבודה</Button>
           </CardHeader>
@@ -379,7 +461,7 @@ export default function WorkStages() {
         onOpenChange={setDialogOpen}
         stage={editingStage}
         project={project}
-        signedProposalId={resolvedSignedProposalId}
+        signedProposalId={effectiveSignedProposalId}
         existingStages={workStages}
         onSaved={handleAfterMutation}
       />
