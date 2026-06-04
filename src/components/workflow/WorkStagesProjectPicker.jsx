@@ -232,6 +232,11 @@ export default function WorkStagesProjectPicker() {
     return map;
   }, [projects]);
 
+  const validSignedProposalByProjectId = useMemo(
+    () => buildValidSignedProposalByProjectId(signedProposals),
+    [signedProposals],
+  );
+
   const listRows = useMemo(() => {
     const groups = groupWorkStagesByProjectId(workStages);
     const rows = [];
@@ -263,7 +268,13 @@ export default function WorkStagesProjectPicker() {
 
   const isLoading = isLoadingStages || isLoadingProjects || isLoadingClients;
 
-  const openProjectUrl = (projectId) => buildWorkStagesPageUrl({ projectId });
+  const buildManageStagesUrl = (projectId) => {
+    const signedProposal = validSignedProposalByProjectId.get(projectId);
+    return buildWorkStagesPageUrl({
+      projectId,
+      signedProposalId: signedProposal?.id || '',
+    });
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50" dir="rtl">
@@ -316,13 +327,13 @@ export default function WorkStagesProjectPicker() {
                     <TableHead>שלב פעיל</TableHead>
                     <TableHead>סטטוס</TableHead>
                     <TableHead>יעד קרוב</TableHead>
-                    <TableHead>פעולות</TableHead>
+                    <TableHead>פעולה</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {listRows.map((row) => {
                     const targetLabel = formatDate(row.upcomingTargetDate);
-                    const manageUrl = openProjectUrl(row.projectId);
+                    const manageUrl = buildManageStagesUrl(row.projectId);
 
                     return (
                       <TableRow key={row.projectId}>
@@ -353,14 +364,9 @@ export default function WorkStagesProjectPicker() {
                         </TableCell>
                         <TableCell>{targetLabel || '—'}</TableCell>
                         <TableCell>
-                          <div className="flex flex-wrap gap-1">
-                            <Button type="button" size="sm" variant="outline" asChild>
-                              <Link to={manageUrl}>פתח</Link>
-                            </Button>
-                            <Button type="button" size="sm" asChild>
-                              <Link to={manageUrl}>נהל שלבים</Link>
-                            </Button>
-                          </div>
+                          <Button type="button" size="sm" asChild>
+                            <Link to={manageUrl}>נהל שלבים</Link>
+                          </Button>
                         </TableCell>
                       </TableRow>
                     );
