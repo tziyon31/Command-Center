@@ -1,0 +1,101 @@
+{
+  "name": "InvoiceProcess",
+  "type": "object",
+  "properties": {
+    "project_id": {
+      "type": "string",
+      "description": "\u05de\u05d6\u05d4\u05d4 \u05e4\u05e8\u05d5\u05d9\u05e7\u05d8"
+    },
+    "project_name": {
+      "type": "string",
+      "description": "\u05e9\u05dd \u05d4\u05e4\u05e8\u05d5\u05d9\u05e7\u05d8"
+    },
+    "client_id": {
+      "type": "string",
+      "description": "\u05de\u05d6\u05d4\u05d4 \u05dc\u05e7\u05d5\u05d7"
+    },
+    "client_name": {
+      "type": "string",
+      "description": "\u05e9\u05dd \u05d4\u05dc\u05e7\u05d5\u05d7"
+    },
+    "work_stage_ids": {
+      "type": "string",
+      "description": "JSON string or comma-separated ids for one or more WorkStages included in this invoice process"
+    },
+    "work_stage_titles": {
+      "type": "string",
+      "description": "readable titles of the included work stages"
+    },
+    "invoice_scope": {
+      "type": "string",
+      "enum": [
+        "stage",
+        "multiple_stages",
+        "final_project"
+      ],
+      "default": "stage",
+      "description": "\u05d4\u05d9\u05e7\u05e3 \u05d4\u05d7\u05e9\u05d1\u05d5\u05e0\u05d9\u05ea: \u05e9\u05dc\u05d1 \u05d0\u05d7\u05d3, \u05db\u05de\u05d4 \u05e9\u05dc\u05d1\u05d9\u05dd, \u05d0\u05d5 \u05d7\u05e9\u05d1\u05d5\u05e0\u05d9\u05ea \u05e1\u05d5\u05e4\u05d9\u05ea"
+    },
+    "invoice_created_in_paperless": {
+      "type": "boolean",
+      "default": false,
+      "description": "\u05d4\u05d0\u05dd \u05d4\u05d7\u05e9\u05d1\u05d5\u05e0\u05d9\u05ea \u05e0\u05d5\u05e6\u05e8\u05d4 \u05d1-Paperless"
+    },
+    "invoice_created_at": {
+      "type": "string",
+      "description": "\u05de\u05ea\u05d9 \u05e0\u05d5\u05e6\u05e8\u05d4 \u05d4\u05d7\u05e9\u05d1\u05d5\u05e0\u05d9\u05ea (ISO datetime string)"
+    },
+    "invoice_sent_to_client": {
+      "type": "boolean",
+      "default": false,
+      "description": "\u05d4\u05d0\u05dd \u05d4\u05d7\u05e9\u05d1\u05d5\u05e0\u05d9\u05ea \u05e0\u05e9\u05dc\u05d7\u05d4 \u05dc\u05dc\u05e7\u05d5\u05d7"
+    },
+    "invoice_sent_at": {
+      "type": "string",
+      "description": "\u05de\u05ea\u05d9 \u05e0\u05e9\u05dc\u05d7\u05d4 \u05d4\u05d7\u05e9\u05d1\u05d5\u05e0\u05d9\u05ea \u05dc\u05dc\u05e7\u05d5\u05d7 (ISO datetime string)"
+    },
+    "client_confirmed_received": {
+      "type": "boolean",
+      "default": false,
+      "description": "\u05d4\u05d0\u05dd \u05d4\u05dc\u05e7\u05d5\u05d7 \u05d0\u05d9\u05e9\u05e8 \u05e7\u05d1\u05dc\u05ea \u05d4\u05d7\u05e9\u05d1\u05d5\u05e0\u05d9\u05ea"
+    },
+    "client_confirmed_at": {
+      "type": "string",
+      "description": "\u05de\u05ea\u05d9 \u05d4\u05dc\u05e7\u05d5\u05d7 \u05d0\u05d9\u05e9\u05e8 \u05e7\u05d1\u05dc\u05d4 (ISO datetime string)"
+    },
+    "invoice_reference": {
+      "type": "string",
+      "description": "\u05de\u05e1\u05e4\u05e8 \u05d7\u05e9\u05d1\u05d5\u05e0\u05d9\u05ea / \u05d0\u05e1\u05de\u05db\u05ea\u05d0 \u05de-Paperless"
+    },
+    "amount": {
+      "type": "number",
+      "default": 0,
+      "description": "\u05e1\u05db\u05d5\u05dd \u05d4\u05d7\u05e9\u05d1\u05d5\u05e0\u05d9\u05ea"
+    },
+    "notes": {
+      "type": "string",
+      "description": "\u05d4\u05e2\u05e8\u05d5\u05ea"
+    },
+    "collection_due_id": {
+      "type": "string",
+      "description": "future link to CollectionDue, not required in this stage"
+    },
+    "form_status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "submitted",
+        "cancelled"
+      ],
+      "default": "draft",
+      "description": "\u05de\u05e6\u05d1 \u05de\u05d9\u05dc\u05d5\u05d9 \u05d8\u05d5\u05e4\u05e1"
+    },
+    "submitted_at": {
+      "type": "string",
+      "description": "\u05de\u05ea\u05d9 \u05d4\u05d5\u05d2\u05e9 (ISO datetime string)"
+    }
+  },
+  "required": [
+    "project_id"
+  ]
+}
