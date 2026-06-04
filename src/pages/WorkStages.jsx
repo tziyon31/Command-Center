@@ -1,24 +1,19 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowRight, ArrowDown, ArrowUp } from 'lucide-react';
+import { ArrowRight, Plus } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import { createPageUrl } from '@/utils';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
 import WorkStageDialog from '@/components/workflow/WorkStageDialog';
+import WorkStageSortableList from '@/components/workflow/WorkStageSortableList';
 import WorkStagesProjectPicker from '@/components/workflow/WorkStagesProjectPicker';
 import {
+  buildWorkStagePayloadWithStatus,
   getActiveWorkStage,
+  isWorkStageCompleted,
   normalizeWorkStageStatuses,
   sortWorkStages,
 } from '@/lib/workStageLogic';
@@ -28,7 +23,6 @@ import {
   recalculateProjectWorkStages,
 } from '@/lib/workStageSync';
 import { isValidSignedProposalForWorkStages } from '@/lib/signedProposalValidation';
-import { cn } from '@/lib/utils';
 
 const STATUS_LABELS = {
   pending: 'ממתין',
@@ -49,15 +43,6 @@ const PROJECT_STATUS_LABELS = {
   cancelled: 'בוטל',
   waiting: 'ממתין',
   rejected: 'נדחה',
-};
-
-const formatBoolean = (value) => (value ? 'כן' : 'לא');
-
-const formatDate = (value) => {
-  if (!value) return '-';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '-';
-  return new Intl.DateTimeFormat('he-IL').format(date);
 };
 
 const formatProjectStatus = (status) => (
@@ -172,6 +157,14 @@ function WorkStagesProjectView({
     [workStages],
   );
 
+  const statusByStageId = useMemo(() => {
+    const map = {};
+    for (const stage of normalizedStages) {
+      if (stage?.id) map[stage.id] = stage.status;
+    }
+    return map;
+  }, [normalizedStages]);
+
   const activeStage = useMemo(
     () => getActiveWorkStage(workStages),
     [workStages],
@@ -242,6 +235,37 @@ function WorkStagesProjectView({
     return getActiveWorkStage(normalized);
   };
 
+  const handleApprovalToggle = async (stage, field, checked) => {
+    const wasCompleted = isWorkStageCompleted(stage);
+    const nextStage = { ...stage, [field]: checked };
+    const willBeCompleted = isWorkStageCompleted(nextStage);
+
+    if (wasCompleted && !willBeCompleted) {
+      const confirmed = window.confirm(
+        'ביטול האישור יחזיר את השלב למצב פתוח. אם זה השלב הראשון בסדר שלא הושלם, התזכורות יחזרו אליו. האם להמשיך?',
+      );
+      if (!confirmed) return;
+    }
+
+    setBusyStageId(stage.id);
+    try {
+      const merged = buildWorkStagePayloadWithStatus(nextStage, workStages);
+      await base44.entities.WorkStage.update(stage.id, {
+        aaron_approved: nextStage.aaron_approved === true,
+        client_approved: nextStage.client_approved === true,
+        draftsman_approved: nextStage.draftsman_approved === true,
+        status: merged.status,
+        completed_at: merged.completed_at || '',
+      });
+      await handleAfterMutation();
+    } catch (error) {
+      console.error('[WorkStages] failed to update approval', error);
+      alert('עדכון האישור נכשל');
+    } finally {
+      setBusyStageId(null);
+    }
+  };
+
   const applyReorder = async (nextStages) => {
     const nextActive = previewActiveStageAfterReorder(nextStages);
     const activeName = nextActive?.title || '(אין שלב פעיל)';
@@ -267,23 +291,20 @@ function WorkStagesProjectView({
     }
   };
 
-  const moveStage = async (stageId, direction) => {
-    const index = sortedStages.findIndex((stage) => stage.id === stageId);
-    if (index < 0) return;
-
-    const targetIndex = direction === 'up' ? index - 1 : index + 1;
-    if (targetIndex < 0 || targetIndex >= sortedStages.length) return;
+  const handleDragEnd = (result) => {
+    if (!result.destination) return;
+    if (result.source.index === result.destination.index) return;
 
     const reordered = [...sortedStages];
-    const [moved] = reordered.splice(index, 1);
-    reordered.splice(targetIndex, 0, moved);
+    const [moved] = reordered.splice(result.source.index, 1);
+    reordered.splice(result.destination.index, 0, moved);
 
     const withOrder = reordered.map((stage, orderIndex) => ({
       ...stage,
       order_index: orderIndex + 1,
     }));
 
-    await applyReorder(withOrder);
+    void applyReorder(withOrder);
   };
 
   if (isLoadingProject || isLoadingStages) {
@@ -325,7 +346,7 @@ function WorkStagesProjectView({
         </div>
 
         <Card className="border-0 shadow-sm">
-          <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <CardHeader>
             <div className="space-y-2">
               <CardTitle>שלבי עבודה</CardTitle>
               <div className="text-sm text-muted-foreground space-y-1">
@@ -360,106 +381,35 @@ function WorkStagesProjectView({
                 )}
               </div>
             </div>
-            <Button onClick={openCreateDialog}>הוסף שלב עבודה</Button>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-4">
             {sortedStages.length === 0 ? (
               <p className="text-sm text-muted-foreground">עדיין לא הוגדרו שלבי עבודה לפרויקט.</p>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>סדר</TableHead>
-                    <TableHead>שם</TableHead>
-                    <TableHead>סטטוס</TableHead>
-                    <TableHead>אהרון</TableHead>
-                    <TableHead>לקוח</TableHead>
-                    <TableHead>שרטט</TableHead>
-                    <TableHead>תאריך יעד</TableHead>
-                    <TableHead>חשבונית</TableHead>
-                    <TableHead>הערות</TableHead>
-                    <TableHead>פעולות</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {sortedStages.map((stage, index) => {
-                    const normalized = normalizedStages.find((item) => item.id === stage.id) || stage;
-                    return (
-                      <TableRow
-                        key={stage.id}
-                        id={`work-stage-row-${stage.id}`}
-                        className={cn(
-                          resolvedStageId === stage.id && 'bg-primary/5 ring-1 ring-primary/30',
-                        )}
-                      >
-                        <TableCell>{stage.order_index ?? index + 1}</TableCell>
-                        <TableCell>{stage.title}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline">
-                            {STATUS_LABELS[normalized.status] || normalized.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>{formatBoolean(stage.aaron_approved)}</TableCell>
-                        <TableCell>{formatBoolean(stage.client_approved)}</TableCell>
-                        <TableCell>{formatBoolean(stage.draftsman_approved)}</TableCell>
-                        <TableCell>{formatDate(stage.target_date)}</TableCell>
-                        <TableCell>{formatBoolean(stage.invoice_required_on_completion)}</TableCell>
-                        <TableCell className="max-w-[180px] truncate">{stage.notes || '-'}</TableCell>
-                        <TableCell>
-                          <div className="flex flex-wrap gap-1">
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              disabled={busyStageId === stage.id || index === 0}
-                              onClick={() => { void moveStage(stage.id, 'up'); }}
-                            >
-                              <ArrowUp className="w-3 h-3" />
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              disabled={busyStageId === stage.id || index === sortedStages.length - 1}
-                              onClick={() => { void moveStage(stage.id, 'down'); }}
-                            >
-                              <ArrowDown className="w-3 h-3" />
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              disabled={Boolean(busyStageId)}
-                              onClick={() => openEditDialog(stage)}
-                            >
-                              ערוך
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              disabled={busyStageId === stage.id}
-                              onClick={() => { void handleCancelStage(stage); }}
-                            >
-                              בטל
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="destructive"
-                              disabled={busyStageId === stage.id}
-                              onClick={() => { void handleDeleteStage(stage); }}
-                            >
-                              מחק
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
+              <WorkStageSortableList
+                stages={sortedStages}
+                statusByStageId={statusByStageId}
+                statusLabels={STATUS_LABELS}
+                highlightedStageId={resolvedStageId}
+                busyStageId={busyStageId}
+                onDragEnd={handleDragEnd}
+                onEdit={openEditDialog}
+                onDelete={handleDeleteStage}
+                onCancel={handleCancelStage}
+                onApprovalToggle={handleApprovalToggle}
+              />
             )}
+
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full h-11 border-dashed gap-2"
+              disabled={Boolean(busyStageId)}
+              onClick={openCreateDialog}
+            >
+              <Plus className="h-4 w-4" />
+              הוסף שלב עבודה
+            </Button>
           </CardContent>
         </Card>
       </div>
