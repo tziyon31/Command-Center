@@ -5,6 +5,7 @@ import {
   Droppable,
 } from '@hello-pangea/dnd';
 import WorkStageCard from '@/components/workflow/WorkStageCard';
+import { isWorkStageEligibleForInvoice } from '@/lib/invoiceProcessUtils';
 
 export default function WorkStageSortableList({
   stages = [],
@@ -17,6 +18,8 @@ export default function WorkStageSortableList({
   onDelete,
   onCancel,
   onApprovalToggle,
+  selectedInvoiceStageIds = [],
+  onInvoiceIncludeToggle,
 }) {
   return (
     <DragDropContext onDragEnd={onDragEnd}>
@@ -52,6 +55,9 @@ export default function WorkStageSortableList({
                         onDelete={onDelete}
                         onCancel={onCancel}
                         onApprovalToggle={onApprovalToggle}
+                        showInvoiceInclude={isWorkStageEligibleForInvoice(stage)}
+                        includeInInvoice={selectedInvoiceStageIds.includes(stage.id)}
+                        onIncludeInInvoiceToggle={onInvoiceIncludeToggle}
                       />
                     </div>
                   )}

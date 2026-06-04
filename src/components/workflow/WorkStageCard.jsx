@@ -30,6 +30,9 @@ export default function WorkStageCard({
   onDelete,
   onCancel,
   onApprovalToggle,
+  showInvoiceInclude = false,
+  includeInInvoice = false,
+  onIncludeInInvoiceToggle,
 }) {
   const targetLabel = formatDate(stage.target_date);
   const notesPreview = String(stage.notes || '').trim();
@@ -137,6 +140,19 @@ export default function WorkStageCard({
               {' '}
               {notesPreview}
             </p>
+          ) : null}
+
+          {showInvoiceInclude ? (
+            <label className="inline-flex items-center gap-2 text-xs cursor-pointer pt-1 border-t border-dashed w-full">
+              <Checkbox
+                checked={includeInInvoice}
+                disabled={isBusy}
+                onCheckedChange={(checked) => {
+                  onIncludeInInvoiceToggle?.(stage, checked === true);
+                }}
+              />
+              <span>כלול בתהליך חשבונית</span>
+            </label>
           ) : null}
         </div>
       </div>

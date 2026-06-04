@@ -89,6 +89,33 @@ export const buildClientFormPageUrl = ({ name, sourceInquiryId }) => {
   return createPageUrl(queryString ? `ClientForm?${queryString}` : 'ClientForm');
 };
 
+export const buildInvoiceProcessFormPageUrl = ({
+  invoiceProcessId,
+  projectId,
+  workStageIds = [],
+  invoiceScope,
+  clientId,
+  clientName,
+}) => {
+  const query = new URLSearchParams();
+
+  if (invoiceProcessId) {
+    query.set('id', invoiceProcessId);
+  } else {
+    if (projectId) query.set('project_id', projectId);
+    if (clientId) query.set('client_id', clientId);
+    if (clientName) query.set('client_name', clientName);
+    if (invoiceScope) query.set('invoice_scope', invoiceScope);
+    if (workStageIds?.length) {
+      const ids = [...new Set(workStageIds.map((id) => String(id).trim()).filter(Boolean))];
+      if (ids.length) query.set('work_stage_ids', ids.join(','));
+    }
+  }
+
+  const queryString = query.toString();
+  return createPageUrl(queryString ? `InvoiceProcessForm?${queryString}` : 'InvoiceProcessForm');
+};
+
 export const buildWorkStagesPageUrl = ({ projectId, signedProposalId, stageId }) => {
   const query = new URLSearchParams();
   if (projectId) query.set('project_id', projectId);

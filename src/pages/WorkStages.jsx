@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowRight, Plus } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
@@ -23,6 +23,11 @@ import {
   recalculateProjectWorkStages,
 } from '@/lib/workStageSync';
 import { isValidSignedProposalForWorkStages } from '@/lib/signedProposalValidation';
+import { buildInvoiceProcessFormPageUrl } from '@/lib/workflowNavigation';
+import {
+  isWorkStageEligibleForInvoice,
+  resolveInvoiceScopeFromSelection,
+} from '@/lib/invoiceProcessUtils';
 
 const STATUS_LABELS = {
   pending: 'ממתין',
@@ -103,6 +108,9 @@ function WorkStagesProjectView({
   setBusyStageId,
   queryClient,
 }) {
+  const navigate = useNavigate();
+  const [selectedInvoiceStageIds, setSelectedInvoiceStageIds] = useState([]);
+
   const { data: project, isLoading: isLoadingProject } = useQuery({
     queryKey: ['project', resolvedProjectId],
     queryFn: async () => {
@@ -327,6 +335,40 @@ function WorkStagesProjectView({
   const workStagesListUrl = createPageUrl('WorkStages');
   const effectiveSignedProposalId = validSignedProposal?.id || resolvedSignedProposalId || '';
 
+  const completedStagesForInvoice = useMemo(
+    () => sortedStages.filter((stage) => isWorkStageEligibleForInvoice(stage)),
+    [sortedStages],
+  );
+
+  const handleInvoiceIncludeToggle = (stage, included) => {
+    setSelectedInvoiceStageIds((prev) => {
+      if (included) {
+        return [...new Set([...prev, stage.id])];
+      }
+      return prev.filter((id) => id !== stage.id);
+    });
+  };
+
+  const openInvoiceProcessForSelection = () => {
+    if (!project?.id) return;
+
+    const ids = selectedInvoiceStageIds.filter((id) => (
+      completedStagesForInvoice.some((stage) => stage.id === id)
+    ));
+
+    if (!ids.length) {
+      alert('בחר לפחות שלב אחד שהושלם לתהליך חשבונית');
+      return;
+    }
+
+    const scope = resolveInvoiceScopeFromSelection(ids);
+    navigate(buildInvoiceProcessFormPageUrl({
+      projectId: project.id,
+      workStageIds: ids,
+      invoiceScope: scope,
+    }));
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50" dir="rtl">
       <div className="max-w-[1200px] mx-auto px-8 py-10 space-y-6">
@@ -383,6 +425,22 @@ function WorkStagesProjectView({
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
+            {completedStagesForInvoice.length > 0 ? (
+              <div className="rounded-lg border border-dashed bg-muted/30 p-4 space-y-3">
+                <p className="text-sm text-muted-foreground">
+                  סמן שלבים שהושלמו ולחץ לפתיחת תהליך חשבונית (ניתן לאחד כמה שלבים לחשבונית אחת).
+                </p>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={selectedInvoiceStageIds.length === 0 || Boolean(busyStageId)}
+                  onClick={openInvoiceProcessForSelection}
+                >
+                  פתח תהליך חשבונית לשלבים שנבחרו
+                </Button>
+              </div>
+            ) : null}
+
             {sortedStages.length === 0 ? (
               <p className="text-sm text-muted-foreground">עדיין לא הוגדרו שלבי עבודה לפרויקט.</p>
             ) : (
@@ -397,6 +455,8 @@ function WorkStagesProjectView({
                 onDelete={handleDeleteStage}
                 onCancel={handleCancelStage}
                 onApprovalToggle={handleApprovalToggle}
+                selectedInvoiceStageIds={selectedInvoiceStageIds}
+                onInvoiceIncludeToggle={handleInvoiceIncludeToggle}
               />
             )}
 
