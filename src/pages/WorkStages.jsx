@@ -178,6 +178,11 @@ function WorkStagesProjectView({
     [workStages],
   );
 
+  const completedStagesForInvoice = useMemo(
+    () => sortedStages.filter((stage) => isWorkStageEligibleForInvoice(stage)),
+    [sortedStages],
+  );
+
   const clientName = linkedClient?.name || project?.client_name || '';
 
   useEffect(() => {
@@ -334,11 +339,6 @@ function WorkStagesProjectView({
   const projectDetailsUrl = createPageUrl(`ProjectDetails?id=${project.id}`);
   const workStagesListUrl = createPageUrl('WorkStages');
   const effectiveSignedProposalId = validSignedProposal?.id || resolvedSignedProposalId || '';
-
-  const completedStagesForInvoice = useMemo(
-    () => sortedStages.filter((stage) => isWorkStageEligibleForInvoice(stage)),
-    [sortedStages],
-  );
 
   const handleInvoiceIncludeToggle = (stage, included) => {
     setSelectedInvoiceStageIds((prev) => {
