@@ -192,6 +192,7 @@ function WorkStagesProjectView({
     await recalculateProjectWorkStages(resolvedProjectId);
     await refetchWorkStages();
     await invalidateWorkStageQueries(queryClient, resolvedProjectId);
+    await queryClient.invalidateQueries({ queryKey: ['work-stages-all'] });
   };
 
   const openCreateDialog = () => {
@@ -302,12 +303,19 @@ function WorkStagesProjectView({
   }
 
   const projectDetailsUrl = createPageUrl(`ProjectDetails?id=${project.id}`);
+  const workStagesListUrl = createPageUrl('WorkStages');
   const effectiveSignedProposalId = validSignedProposal?.id || resolvedSignedProposalId || '';
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50" dir="rtl">
       <div className="max-w-[1200px] mx-auto px-8 py-10 space-y-6">
         <div className="flex items-center gap-2 flex-wrap">
+          <Button asChild variant="ghost" size="sm" className="gap-1">
+            <Link to={workStagesListUrl}>
+              <ArrowRight className="w-4 h-4" />
+              חזרה לרשימת שלבי עבודה
+            </Link>
+          </Button>
           <Button asChild variant="ghost" size="sm" className="gap-1">
             <Link to={projectDetailsUrl}>
               <ArrowRight className="w-4 h-4" />
