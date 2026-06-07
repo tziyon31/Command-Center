@@ -14,6 +14,7 @@ const REGISTERED_PAGE_NAMES = new Set([
   'SignedProposals',
   'WorkStages',
   'Invoices',
+  'Collections',
 ]);
 
 const WORKFLOW_ITEMS = [
@@ -24,7 +25,7 @@ const WORKFLOW_ITEMS = [
   { pageName: 'SignedProposals', label: 'הצעות חתומות', roles: ['admin', 'office_manager'] },
   { pageName: 'WorkStages', label: 'שלבי עבודה', roles: ['admin', 'office_manager'] },
   { pageName: 'Invoices', label: 'חשבוניות', roles: ['admin', 'office_manager'] },
-  { pageName: 'Collections', label: 'הכנסות', roles: ['admin', 'office_manager'] },
+  { pageName: 'Collections', label: 'גבייה', roles: ['admin', 'office_manager'] },
 ];
 
 const WORKFLOW_ACTIVE_PAGES = new Set([
@@ -40,6 +41,8 @@ const WORKFLOW_ACTIVE_PAGES = new Set([
   'WorkStages',
   'Invoices',
   'InvoiceProcessForm',
+  'Collections',
+  'CollectionDueForm',
 ]);
 
 export function getWorkflowItemsForRole(role) {
@@ -83,6 +86,10 @@ const isWorkflowItemActive = (pageName, currentPageName) => {
 
   if (pageName === 'Invoices') {
     return currentPageName === 'Invoices' || currentPageName === 'InvoiceProcessForm';
+  }
+
+  if (pageName === 'Collections') {
+    return currentPageName === 'Collections' || currentPageName === 'CollectionDueForm';
   }
 
   return currentPageName === pageName;

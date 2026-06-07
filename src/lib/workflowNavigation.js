@@ -135,6 +135,22 @@ export const buildInvoiceProcessFormPageUrl = ({
   return createPageUrl(queryString ? `InvoiceProcessForm?${queryString}` : 'InvoiceProcessForm');
 };
 
+export const buildCollectionDueFormPageUrl = ({
+  collectionDueId,
+  invoiceProcessId,
+} = {}) => {
+  const query = new URLSearchParams();
+
+  if (collectionDueId) {
+    query.set('id', collectionDueId);
+  } else if (invoiceProcessId) {
+    query.set('invoice_process_id', invoiceProcessId);
+  }
+
+  const queryString = query.toString();
+  return createPageUrl(queryString ? `CollectionDueForm?${queryString}` : 'CollectionDueForm');
+};
+
 export const buildWorkStagesPageUrl = ({ projectId, signedProposalId, stageId }) => {
   const query = new URLSearchParams();
   if (projectId) query.set('project_id', projectId);

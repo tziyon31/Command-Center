@@ -41,9 +41,17 @@ import {
   reconcileStaleReminderTestRunState,
   runReminderIntegrationTestGroup,
   runReminderIntegrationTestsSlowly,
-  TEST_GROUP,
+  REMINDER_TEST_GROUP_DEFINITIONS,
+  REMINDER_TEST_RUN_GROUPS,
+  TEST_GROUP_LABELS,
 } from '@/lib/reminderTestRunner';
 import { toast } from '@/components/ui/use-toast';
+
+const getActiveReminderTestRunningLabel = (groupKey) => {
+  if (groupKey === 'all_slow') return 'Running All Slowly...';
+  const label = TEST_GROUP_LABELS[groupKey];
+  return label ? `Running ${label}...` : 'Running...';
+};
 
 const OPEN_PROPOSAL_STATUSES = ['pricing', 'waiting'];
 const WON_PROPOSAL_STATUSES = ['signed'];
@@ -979,36 +987,26 @@ export default function Dashboard() {
           >
             {reminderTestDropupOpen ? (
               <div className="absolute bottom-full left-0 mb-1 flex min-w-[220px] flex-col gap-1 rounded-md border bg-background p-1 shadow-lg">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 justify-start px-2 text-xs"
-                  disabled={reminderTestsBlocked}
-                  onClick={() => { void handleRunReminderTestGroup(TEST_GROUP.CORE, 'Core Tests'); }}
-                >
-                  Run Core Tests
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 justify-start px-2 text-xs"
-                  disabled={reminderTestsBlocked}
-                  onClick={() => { void handleRunReminderTestGroup(TEST_GROUP.WORKSTAGES, 'WorkStage Tests'); }}
-                >
-                  Run WorkStage Tests
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 justify-start px-2 text-xs"
-                  disabled={reminderTestsBlocked}
-                  onClick={() => { void handleRunReminderTestGroup(TEST_GROUP.INVOICE, 'Invoice Tests'); }}
-                >
-                  Run Invoice Tests
-                </Button>
+                {REMINDER_TEST_RUN_GROUPS.map((groupKey) => {
+                  const groupDefinition = REMINDER_TEST_GROUP_DEFINITIONS[groupKey];
+                  if (!groupDefinition) return null;
+
+                  return (
+                    <Button
+                      key={groupKey}
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 justify-start px-2 text-xs"
+                      disabled={reminderTestsBlocked}
+                      onClick={() => {
+                        void handleRunReminderTestGroup(groupKey, groupDefinition.label);
+                      }}
+                    >
+                      {`Run ${groupDefinition.label}`}
+                    </Button>
+                  );
+                })}
                 <Button
                   type="button"
                   variant="ghost"
@@ -1049,15 +1047,7 @@ export default function Dashboard() {
               disabled={reminderCleanupRunning}
             >
               {reminderTestRunning
-                ? (activeReminderTestGroup === 'all_slow'
-                  ? 'Running All Slowly...'
-                  : activeReminderTestGroup === TEST_GROUP.CORE
-                    ? 'Running Core Tests...'
-                    : activeReminderTestGroup === TEST_GROUP.WORKSTAGES
-                      ? 'Running WorkStage Tests...'
-                      : activeReminderTestGroup === TEST_GROUP.INVOICE
-                        ? 'Running Invoice Tests...'
-                        : 'Running...')
+                ? getActiveReminderTestRunningLabel(activeReminderTestGroup)
                 : 'Test Reminders'}
             </Button>
           </div>

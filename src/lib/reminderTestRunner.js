@@ -42,6 +42,10 @@ import {
   openProjectCollectionDue,
   sumExistingProjectInvoiceAmounts,
 } from '@/lib/projectCollectionDue';
+import {
+  markCollectionDuePaid,
+  openCollectionDueFromInvoice,
+} from '@/lib/collectionDueUtils';
 import { serializeWorkStageIds } from '@/lib/invoiceProcessUtils';
 import {
   countActiveWorkStages,
@@ -74,12 +78,14 @@ export const TEST_GROUP = {
   CORE: 'core',
   WORKSTAGES: 'workstages',
   INVOICE: 'invoice',
+  COLLECTION: 'collection',
 };
 
 export const TEST_GROUP_LABELS = {
   [TEST_GROUP.CORE]: 'Core Tests',
   [TEST_GROUP.WORKSTAGES]: 'WorkStage Tests',
   [TEST_GROUP.INVOICE]: 'Invoice Tests',
+  [TEST_GROUP.COLLECTION]: 'Collection Tests',
 };
 
 const OPEN_STATUSES = new Set([REMINDER_STATUS.ACTIVE, REMINDER_STATUS.SNOOZED]);
@@ -99,6 +105,7 @@ const TEST_ENTITY_SCAN_FIELDS = {
   SignedProposal: ['client_name', 'project_name', 'notes'],
   WorkStage: ['title', 'project_name', 'client_name', 'notes'],
   InvoiceProcess: ['project_name', 'client_name', 'notes', 'invoice_reference'],
+  CollectionDue: ['project_name', 'client_name', 'notes', 'invoice_reference'],
 };
 
 const TEST_ENTITY_BUCKETS = [
@@ -109,9 +116,11 @@ const TEST_ENTITY_BUCKETS = [
   { bucket: 'signedProposals', entityName: 'SignedProposal', labelField: 'client_name' },
   { bucket: 'workStages', entityName: 'WorkStage', labelField: 'title' },
   { bucket: 'invoiceProcesses', entityName: 'InvoiceProcess', labelField: 'project_name' },
+  { bucket: 'collectionDues', entityName: 'CollectionDue', labelField: 'project_name' },
 ];
 
 const TEST_ENTITY_DELETE_ORDER = [
+  { bucket: 'collectionDues', entityName: 'CollectionDue', labelField: 'project_name' },
   { bucket: 'invoiceProcesses', entityName: 'InvoiceProcess', labelField: 'project_name' },
   { bucket: 'workStages', entityName: 'WorkStage', labelField: 'title' },
   { bucket: 'signedProposals', entityName: 'SignedProposal', labelField: 'client_name' },
@@ -200,6 +209,7 @@ function emptyEntityIdRegistry() {
     signedProposals: [],
     workStages: [],
     invoiceProcesses: [],
+    collectionDues: [],
     reminders: [],
   };
 }
@@ -673,6 +683,7 @@ async function scanTestEntitiesByPrefix(ctx) {
     signedProposals: [],
     workStages: [],
     invoiceProcesses: [],
+    collectionDues: [],
   };
 
   for (const { entityName, bucket } of TEST_ENTITY_BUCKETS) {
@@ -757,6 +768,11 @@ function buildCleanupEntityPlan({
       registryIdsToEntityRecords(registryIds.invoiceProcesses, prefixScan?.invoiceProcesses),
       sessionLists.invoiceProcesses,
       prefixScan?.invoiceProcesses,
+    ),
+    collectionDues: mergeEntityRecordsById(
+      registryIdsToEntityRecords(registryIds.collectionDues, prefixScan?.collectionDues),
+      sessionLists.collectionDues,
+      prefixScan?.collectionDues,
     ),
   };
 }
@@ -881,6 +897,7 @@ async function cancelTestRemindersForCleanup(ctx, {
 
 async function deleteTestEntitiesForCleanup(ctx, entityPlan) {
   const emptyBucketSummary = () => ({
+    collectionDues: [],
     workStages: [],
     signedProposals: [],
     proposals: [],
@@ -1104,6 +1121,7 @@ const emptyCreatedEntities = () => ({
   signedProposals: [],
   workStages: [],
   invoiceProcesses: [],
+  collectionDues: [],
 });
 
 const collectEntityIds = (createdEntities) => {
@@ -2853,6 +2871,230 @@ async function runTest34(ctx) {
   });
 }
 
+function trackTestCollectionDue(ctx, collectionDue) {
+  if (!collectionDue?.id) return;
+  ctx.createdEntities.collectionDues.push(collectionDue);
+  registerTestEntity('collectionDues', collectionDue.id);
+}
+
+async function runTest35(ctx) {
+  const { client, project } = await getInvoiceLifecycleProject(ctx);
+  const invoice = await createTestInvoiceProcess(ctx, ctx.createdEntities, {
+    project_id: project.id,
+    project_name: project.name,
+    client_id: client.id,
+    client_name: client.name,
+    form_status: 'submitted',
+    submitted_at: new Date().toISOString(),
+    invoice_created_in_paperless: true,
+    invoice_sent_to_client: true,
+    amount: 1000,
+    invoice_reference: `${TEST_REMINDER_FLOW_PREFIX}-D1`,
+  });
+
+  const result = await safeRequest(ctx, 'open_collection_d35', () => openCollectionDueFromInvoice({ invoice }));
+  const collectionDue = result?.collectionDue;
+  trackTestCollectionDue(ctx, collectionDue);
+
+  const refreshed = await safeRequest(
+    ctx,
+    'fetch_invoice_d35',
+    () => base44.entities.InvoiceProcess.filter({ id: invoice.id }),
+  );
+  const updatedInvoice = refreshed?.[0];
+
+  ctx.steps.push({
+    name: 'Test 35 – Collection D1: open from invoice creates CollectionDue',
+    passed: Boolean(collectionDue?.id) && collectionDue.status === 'open',
+    expected: 'CollectionDue with status open',
+    actual: JSON.stringify({ id: collectionDue?.id, status: collectionDue?.status }),
+  });
+  ctx.steps.push({
+    name: 'Test 35 – Collection D1: invoice.collection_due_id populated',
+    passed: String(updatedInvoice?.collection_due_id || '') === String(collectionDue?.id || ''),
+    expected: collectionDue?.id || '',
+    actual: updatedInvoice?.collection_due_id || '',
+  });
+  ctx.steps.push({
+    name: 'Test 35 – Collection D1: amount_due and remaining_amount',
+    passed: Number(collectionDue?.amount_due) === 1000 && Number(collectionDue?.remaining_amount) === 1000,
+    expected: 'amount_due=1000, remaining_amount=1000',
+    actual: JSON.stringify({
+      amount_due: collectionDue?.amount_due,
+      remaining_amount: collectionDue?.remaining_amount,
+    }),
+  });
+}
+
+async function runTest36(ctx) {
+  const { client, project } = await getInvoiceLifecycleProject(ctx);
+  let invoice = await createTestInvoiceProcess(ctx, ctx.createdEntities, {
+    project_id: project.id,
+    project_name: project.name,
+    client_id: client.id,
+    client_name: client.name,
+    form_status: 'submitted',
+    submitted_at: new Date().toISOString(),
+    invoice_created_in_paperless: true,
+    invoice_sent_to_client: true,
+    amount: 2500,
+    invoice_reference: `${TEST_REMINDER_FLOW_PREFIX}-D2`,
+  });
+
+  const inv4Key = getInvoiceNeedsCollectionConditionKey(invoice.id);
+  await runInvoiceRulesForRecord(ctx, invoice, 'test36_before_collection');
+  ctx.steps.push(assertReminderExists(ctx, 'Test 36 – Collection D2: INV4 active before collection', inv4Key));
+
+  const { collectionDue } = await safeRequest(
+    ctx,
+    'open_collection_d36',
+    () => openCollectionDueFromInvoice({ invoice }),
+  );
+  trackTestCollectionDue(ctx, collectionDue);
+
+  invoice = await updateTestInvoiceProcess(ctx, ctx.createdEntities, invoice, {
+    collection_due_id: collectionDue.id,
+  });
+
+  await runInvoiceRulesForRecord(ctx, invoice, 'test36_after_collection');
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 36 – Collection D2: INV4 closed after CollectionDue', inv4Key));
+}
+
+async function runTest37(ctx) {
+  const { client, project } = await getInvoiceLifecycleProject(ctx);
+  const invoice = await createTestInvoiceProcess(ctx, ctx.createdEntities, {
+    project_id: project.id,
+    project_name: project.name,
+    client_id: client.id,
+    client_name: client.name,
+    form_status: 'submitted',
+    submitted_at: new Date().toISOString(),
+    invoice_created_in_paperless: true,
+    invoice_sent_to_client: true,
+    amount: 1500,
+    invoice_reference: `${TEST_REMINDER_FLOW_PREFIX}-D3`,
+  });
+
+  const first = await safeRequest(ctx, 'open_collection_d37_first', () => openCollectionDueFromInvoice({ invoice }));
+  trackTestCollectionDue(ctx, first?.collectionDue);
+
+  const second = await safeRequest(ctx, 'open_collection_d37_second', () => openCollectionDueFromInvoice({ invoice }));
+
+  const allCollections = await safeRequest(
+    ctx,
+    'list_collections_d37',
+    () => base44.entities.CollectionDue.filter({ invoice_process_id: invoice.id }),
+  );
+  const nonCancelled = (allCollections || []).filter((item) => item.status !== 'cancelled');
+
+  ctx.steps.push({
+    name: 'Test 37 – Collection D3: no duplicate CollectionDue for invoice',
+    passed: nonCancelled.length === 1 && second?.collectionDue?.id === first?.collectionDue?.id,
+    expected: 'single non-cancelled CollectionDue reused',
+    actual: JSON.stringify({
+      count: nonCancelled.length,
+      firstId: first?.collectionDue?.id,
+      secondId: second?.collectionDue?.id,
+    }),
+  });
+}
+
+async function runTest38(ctx) {
+  const { client, project } = await getInvoiceLifecycleProject(ctx);
+  const invoice = await createTestInvoiceProcess(ctx, ctx.createdEntities, {
+    project_id: project.id,
+    project_name: project.name,
+    client_id: client.id,
+    client_name: client.name,
+    form_status: 'submitted',
+    submitted_at: new Date().toISOString(),
+    invoice_created_in_paperless: true,
+    invoice_sent_to_client: true,
+    amount: 1000,
+    invoice_reference: `${TEST_REMINDER_FLOW_PREFIX}-D4`,
+  });
+
+  const { collectionDue } = await safeRequest(
+    ctx,
+    'open_collection_d38',
+    () => openCollectionDueFromInvoice({ invoice }),
+  );
+  trackTestCollectionDue(ctx, collectionDue);
+
+  const paid = await safeRequest(ctx, 'mark_collection_paid_d38', () => markCollectionDuePaid(collectionDue));
+
+  ctx.steps.push({
+    name: 'Test 38 – Collection D4: mark collection paid',
+    passed: paid?.status === 'paid'
+      && Number(paid?.amount_paid) === 1000
+      && Number(paid?.remaining_amount) === 0
+      && Boolean(paid?.paid_at),
+    expected: 'status=paid, amount_paid=1000, remaining_amount=0, paid_at set',
+    actual: JSON.stringify({
+      status: paid?.status,
+      amount_paid: paid?.amount_paid,
+      remaining_amount: paid?.remaining_amount,
+      paid_at: paid?.paid_at,
+    }),
+  });
+}
+
+async function runTest39(ctx) {
+  const { client, project } = await getInvoiceLifecycleProject(ctx);
+  const invoice = await createTestInvoiceProcess(ctx, ctx.createdEntities, {
+    project_id: project.id,
+    project_name: project.name,
+    client_id: client.id,
+    client_name: client.name,
+    form_status: 'submitted',
+    submitted_at: new Date().toISOString(),
+    invoice_created_in_paperless: true,
+    invoice_sent_to_client: true,
+    amount: 1200,
+    invoice_reference: `${TEST_REMINDER_FLOW_PREFIX}-D5`,
+  });
+
+  await safeRequest(ctx, 'open_collection_d39', () => openCollectionDueFromInvoice({ invoice }));
+
+  let linkedProject = await fetchTestProject(ctx, project.id);
+  ctx.steps.push({
+    name: 'Test 39 – Collection D5: project.collection_due_now true after open',
+    passed: linkedProject?.collection_due_now === true,
+    expected: 'collection_due_now=true',
+    actual: String(linkedProject?.collection_due_now),
+  });
+
+  const collectionsAfterOpen = await safeRequest(
+    ctx,
+    'list_open_collections_d39',
+    () => base44.entities.CollectionDue.filter({ project_id: project.id }),
+  );
+  const openCollection = (collectionsAfterOpen || []).find(
+    (item) => item.status === 'open' || item.status === 'partially_paid',
+  );
+  if (openCollection) {
+    trackTestCollectionDue(ctx, openCollection);
+    await safeRequest(ctx, 'mark_collection_paid_d39', () => markCollectionDuePaid(openCollection));
+  }
+
+  linkedProject = await fetchTestProject(ctx, project.id);
+  const collectionsAfterPaid = await safeRequest(
+    ctx,
+    'list_collections_after_paid_d39',
+    () => base44.entities.CollectionDue.filter({ project_id: project.id }),
+  );
+  const remainingOpen = (collectionsAfterPaid || []).filter(
+    (item) => item.status === 'open' || item.status === 'partially_paid',
+  );
+
+  ctx.steps.push({
+    name: 'Test 39 – Collection D5: project.collection_due_now false when no open collections',
+    passed: remainingOpen.length === 0 ? linkedProject?.collection_due_now === false : true,
+    expected: remainingOpen.length === 0 ? 'collection_due_now=false' : 'skipped due to other open collections',
+    actual: String(linkedProject?.collection_due_now),
+  });
+}
+
 const REMINDER_INTEGRATION_TEST_DEFINITIONS = [
   { name: 'Test 1', fn: runTest1 },
   { name: 'Test 2', fn: runTest2 },
@@ -2888,6 +3130,11 @@ const REMINDER_INTEGRATION_TEST_DEFINITIONS = [
   { name: 'Test 32', fn: runTest32 },
   { name: 'Test 33', fn: runTest33 },
   { name: 'Test 34', fn: runTest34 },
+  { name: 'Test 35', fn: runTest35 },
+  { name: 'Test 36', fn: runTest36 },
+  { name: 'Test 37', fn: runTest37 },
+  { name: 'Test 38', fn: runTest38 },
+  { name: 'Test 39', fn: runTest39 },
 ];
 
 export const REMINDER_TEST_GROUP_DEFINITIONS = {
@@ -2904,9 +3151,22 @@ export const REMINDER_TEST_GROUP_DEFINITIONS = {
   [TEST_GROUP.INVOICE]: {
     key: TEST_GROUP.INVOICE,
     label: TEST_GROUP_LABELS[TEST_GROUP.INVOICE],
-    tests: REMINDER_INTEGRATION_TEST_DEFINITIONS.slice(22),
+    tests: REMINDER_INTEGRATION_TEST_DEFINITIONS.slice(22, 34),
+  },
+  [TEST_GROUP.COLLECTION]: {
+    key: TEST_GROUP.COLLECTION,
+    label: TEST_GROUP_LABELS[TEST_GROUP.COLLECTION],
+    tests: REMINDER_INTEGRATION_TEST_DEFINITIONS.slice(34),
   },
 };
+
+/** Ordered groups shown in Dashboard test dropup and Run All Slowly. */
+export const REMINDER_TEST_RUN_GROUPS = [
+  TEST_GROUP.CORE,
+  TEST_GROUP.WORKSTAGES,
+  TEST_GROUP.INVOICE,
+  TEST_GROUP.COLLECTION,
+];
 
 function buildTestRunSummary(steps, testDefinitions, ctx = {}) {
   const testRunLog = ctx.testRunLog || [];
@@ -3047,7 +3307,7 @@ async function executeReminderTestGroup(group, options = {}) {
     await safeRequest(ctx, 'initial_cache_load', () => loadReminderEngineCache(cache));
     initializeTestRunnerCache(cache);
 
-    if (group === TEST_GROUP.INVOICE) {
+    if (group === TEST_GROUP.INVOICE || group === TEST_GROUP.COLLECTION) {
       await prepareInvoiceGroupFixture(ctx);
     }
 
@@ -3167,6 +3427,10 @@ export async function runReminderIntegrationTestGroup(group, options = {}) {
   return executeReminderTestGroup(group, options);
 }
 
+export async function runCollectionReminderIntegrationTests(options = {}) {
+  return runReminderIntegrationTestGroup(TEST_GROUP.COLLECTION, options);
+}
+
 export async function runReminderIntegrationTestsSlowly() {
   if (!acquireReminderIntegrationTestLock()) {
     return buildTestRunResult({
@@ -3187,7 +3451,7 @@ export async function runReminderIntegrationTestsSlowly() {
   const combinedSteps = [];
   const combinedErrors = [];
   const groupResults = [];
-  const groupOrder = [TEST_GROUP.CORE, TEST_GROUP.WORKSTAGES, TEST_GROUP.INVOICE];
+  const groupOrder = [...REMINDER_TEST_RUN_GROUPS];
 
   try {
     for (let index = 0; index < groupOrder.length; index += 1) {

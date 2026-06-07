@@ -61,6 +61,8 @@ import SignedProposalForm from './pages/SignedProposalForm';
 import WorkStages from './pages/WorkStages';
 import Invoices from './pages/Invoices';
 import InvoiceProcessForm from './pages/InvoiceProcessForm';
+import Collections from './pages/Collections';
+import CollectionDueForm from './pages/CollectionDueForm';
 import Users from './pages/Users';
 import __Layout from './Layout.jsx';
 
@@ -80,6 +82,8 @@ export const PAGES = {
     "WorkStages": WorkStages,
     "Invoices": Invoices,
     "InvoiceProcessForm": InvoiceProcessForm,
+    "Collections": Collections,
+    "CollectionDueForm": CollectionDueForm,
     "Users": Users,
 }
 

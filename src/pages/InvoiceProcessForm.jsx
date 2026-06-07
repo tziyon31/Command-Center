@@ -3,13 +3,12 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
 import { createPageUrl } from '@/utils';
-import { buildInvoiceProcessFormPageUrl, buildProjectFeeEditPageUrl } from '@/lib/workflowNavigation';
+import { buildInvoiceProcessFormPageUrl, buildCollectionDueFormPageUrl, buildProjectFeeEditPageUrl } from '@/lib/workflowNavigation';
 import { getGmailUrl, getPaperlessUrl } from '@/lib/invoiceExternalLinks';
 import {
-  buildInvoiceCollectionNote,
   getInvoiceProcessAmountValidation,
-  openProjectCollectionDue,
 } from '@/lib/projectCollectionDue';
+import { openCollectionDueFromInvoice } from '@/lib/collectionDueUtils';
 import {
   FORM_STATUS_LABELS,
   INVOICE_SCOPE_LABELS,
@@ -576,51 +575,33 @@ export default function InvoiceProcessForm() {
 
     try {
       const saved = await persistRecord({ asSubmit: true });
-      if (!saved.success) return;
+      if (!saved.success || !saved.savedId) return;
 
-      const projectResults = await base44.entities.Project.filter({ id: formData.project_id });
-      const project = projectResults?.[0] || selectedProject;
-
-      if (!project) {
-        console.error('[InvoiceProcessForm] project not found for collection');
+      const invoiceResults = await base44.entities.InvoiceProcess.filter({ id: saved.savedId });
+      const invoice = invoiceResults?.[0];
+      if (!invoice) {
+        console.error('[InvoiceProcessForm] invoice not found after save');
         return;
       }
 
-      const amount = parsedInvoiceAmount;
-
-      const stageFields = buildWorkStagePersistenceFields(
-        formData.invoice_scope,
-        selectedStageIds,
-        eligibleStages,
-      );
-
-      const collectionNote = buildInvoiceCollectionNote({
-        invoiceReference: formData.invoice_reference,
-        workStageTitles: stageFields.work_stage_titles,
-        invoiceScope: formData.invoice_scope,
-      });
-
+      let collectionDue;
       try {
-        await openProjectCollectionDue({
-          project,
-          amount,
-          note: collectionNote,
-          updateProject: (id, payload) => base44.entities.Project.update(id, payload),
-        });
+        const result = await openCollectionDueFromInvoice({ invoice });
+        collectionDue = result.collectionDue;
       } catch (error) {
         console.error('[InvoiceProcessForm] open collection failed', error);
+        alert('לא הצלחנו לפתוח גבייה');
         return;
       }
 
       await queryClient.invalidateQueries({ queryKey: ['project', formData.project_id] });
       await queryClient.invalidateQueries({ queryKey: ['projects'] });
+      await queryClient.invalidateQueries({ queryKey: ['collection-dues'] });
 
-      if (saved.savedId) {
-        await runInvoiceReminderRulesAfterSave(saved.savedId, formData.project_id);
-      }
+      await runInvoiceReminderRulesAfterSave(saved.savedId, formData.project_id);
 
       alert('הטופס הוגש ונפתחה גבייה.');
-      navigate(createPageUrl(`ProjectDetails?id=${formData.project_id}`));
+      navigate(buildCollectionDueFormPageUrl({ collectionDueId: collectionDue.id }));
     } catch (error) {
       console.error('[InvoiceProcessForm] submit and open collection failed', error);
       alert('לא הצלחנו להגיש את הטופס ולפתוח גבייה');
