@@ -33,9 +33,9 @@ import {
 } from "@/components/ui/select";
 import {
   PROJECT_DELETE_BUTTON_CLASS,
-  PROJECT_DELETE_CONFIRM_MESSAGE,
-  deleteProject,
 } from '@/lib/projectDelete';
+import DeleteProjectDialog from '@/components/deletion/DeleteProjectDialog';
+import { invalidateQueriesAfterProjectDeletion } from '@/lib/projectDeletionUtils';
 import ProjectClientSection from '@/components/workflow/ProjectClientSection';
 import ProjectCreateFormFields from '@/components/workflow/ProjectCreateFormFields';
 import { assertProjectHasClientId } from '@/lib/projectValidation';
@@ -203,7 +203,8 @@ export default function ProjectDetails() {
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [editFormData, setEditFormData] = useState(null);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteProjectDialogOpen, setDeleteProjectDialogOpen] = useState(false);
+  const [isDeletingProject, setIsDeletingProject] = useState(false);
   const [isCollectionDialogOpen, setIsCollectionDialogOpen] = useState(false);
   const [collectionAmount, setCollectionAmount] = useState('');
   const [collectionNote, setCollectionNote] = useState('');
@@ -443,24 +444,16 @@ export default function ProjectDetails() {
     }
   };
 
-  const handleDeleteProject = async () => {
+  const handleProjectDeleted = async () => {
     if (!project?.id) return;
 
-    const confirmed = window.confirm(PROJECT_DELETE_CONFIRM_MESSAGE);
-    if (!confirmed) return;
-
-    setIsDeleting(true);
-
+    setIsDeletingProject(true);
     try {
-      await deleteProject(project.id);
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      await invalidateQueriesAfterProjectDeletion(queryClient);
       queryClient.removeQueries({ queryKey: ['project', project.id] });
       navigate(createPageUrl('Projects'));
-    } catch (error) {
-      console.error('[Project] failed to delete project', error);
-      alert('לא הצלחתי למחוק את הפרויקט');
     } finally {
-      setIsDeleting(false);
+      setIsDeletingProject(false);
     }
   };
 
@@ -822,7 +815,7 @@ export default function ProjectDetails() {
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={isDeleting || isSavingEdit}
+                  disabled={isDeletingProject || isSavingEdit}
                   onClick={() => setIsEditDialogOpen(true)}
                 >
                   עריכה
@@ -832,10 +825,10 @@ export default function ProjectDetails() {
                   variant="outline"
                   size="sm"
                   className={`h-6 px-1.5 text-[10px] leading-none ${PROJECT_DELETE_BUTTON_CLASS}`}
-                  disabled={isDeleting || isSavingEdit}
-                  onClick={handleDeleteProject}
+                  disabled={isDeletingProject || isSavingEdit}
+                  onClick={() => setDeleteProjectDialogOpen(true)}
                 >
-                  {isDeleting ? 'מוחק...' : 'מחק'}
+                  {isDeletingProject ? 'מוחק...' : 'מחק'}
                 </Button>
               </div>
             </div>
@@ -1209,6 +1202,13 @@ export default function ProjectDetails() {
             )}
           </DialogContent>
         </Dialog>
+
+        <DeleteProjectDialog
+          projectId={project?.id || ''}
+          open={deleteProjectDialogOpen}
+          onOpenChange={setDeleteProjectDialogOpen}
+          onDeleted={handleProjectDeleted}
+        />
       </div>
     </div>
   );

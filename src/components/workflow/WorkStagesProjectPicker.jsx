@@ -1,12 +1,15 @@
 import React, { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
+import DeleteWorkProcessDialog, {
+  DeleteWorkProcessTriggerButton,
+} from '@/components/deletion/DeleteWorkProcessDialog';
 import {
   Select,
   SelectContent,
@@ -194,7 +197,11 @@ function WorkStagesStartFlowPanel({
 }
 
 export default function WorkStagesProjectPicker() {
+  const queryClient = useQueryClient();
   const [showStartFlow, setShowStartFlow] = useState(false);
+  const [deleteProjectId, setDeleteProjectId] = useState('');
+  const [deleteProjectName, setDeleteProjectName] = useState('');
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
   const { data: workStages = [], isLoading: isLoadingStages } = useQuery({
     queryKey: ['work-stages-all'],
@@ -274,6 +281,21 @@ export default function WorkStagesProjectPicker() {
       projectId,
       signedProposalId: signedProposal?.id || '',
     });
+  };
+
+  const openDeleteDialog = (row) => {
+    setDeleteProjectId(row.projectId);
+    setDeleteProjectName(row.projectName);
+    setDeleteDialogOpen(true);
+  };
+
+  const handleWorkProcessDeleted = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['work-stages-all'] }),
+      queryClient.invalidateQueries({ queryKey: ['work-stages'] }),
+      queryClient.invalidateQueries({ queryKey: ['reminders'] }),
+      queryClient.invalidateQueries({ queryKey: ['reminders', 'visible'] }),
+    ]);
   };
 
   return (
@@ -364,9 +386,14 @@ export default function WorkStagesProjectPicker() {
                         </TableCell>
                         <TableCell>{targetLabel || '—'}</TableCell>
                         <TableCell>
-                          <Button type="button" size="sm" asChild>
-                            <Link to={manageUrl}>נהל שלבים</Link>
-                          </Button>
+                          <div className="flex flex-wrap gap-2">
+                            <Button type="button" size="sm" asChild>
+                              <Link to={manageUrl}>נהל שלבים</Link>
+                            </Button>
+                            <DeleteWorkProcessTriggerButton
+                              onClick={() => openDeleteDialog(row)}
+                            />
+                          </div>
                         </TableCell>
                       </TableRow>
                     );
@@ -376,6 +403,14 @@ export default function WorkStagesProjectPicker() {
             )}
           </CardContent>
         </Card>
+
+        <DeleteWorkProcessDialog
+          projectId={deleteProjectId}
+          projectName={deleteProjectName}
+          open={deleteDialogOpen}
+          onOpenChange={setDeleteDialogOpen}
+          onDeleted={handleWorkProcessDeleted}
+        />
       </div>
     </div>
   );

@@ -46,6 +46,15 @@ import {
   markCollectionDuePaid,
   openCollectionDueFromInvoice,
 } from '@/lib/collectionDueUtils';
+import {
+  buildProjectDeletionImpact,
+  deleteProjectCascade,
+} from '@/lib/projectDeletionUtils';
+import {
+  buildWorkProcessDeletionImpact,
+  deleteWorkProcessForProject,
+} from '@/lib/workProcessDeletionUtils';
+import { matchesExactProjectId } from '@/lib/deletionUtils';
 import { serializeWorkStageIds } from '@/lib/invoiceProcessUtils';
 import {
   countActiveWorkStages,
@@ -57,6 +66,7 @@ import {
   cancelReminder,
   cancelRemindersForDeletedSource,
   createReminderEngineCache,
+  findReminderByConditionKey,
   findReminderByConditionKeyInCache,
   hasOpenReminderForConditionKey,
   isRateLimitError,
@@ -79,6 +89,7 @@ export const TEST_GROUP = {
   WORKSTAGES: 'workstages',
   INVOICE: 'invoice',
   COLLECTION: 'collection',
+  DELETION: 'deletion',
 };
 
 export const TEST_GROUP_LABELS = {
@@ -86,6 +97,7 @@ export const TEST_GROUP_LABELS = {
   [TEST_GROUP.WORKSTAGES]: 'WorkStage Tests',
   [TEST_GROUP.INVOICE]: 'Invoice Tests',
   [TEST_GROUP.COLLECTION]: 'Collection Tests',
+  [TEST_GROUP.DELETION]: 'Deletion Tests',
 };
 
 const OPEN_STATUSES = new Set([REMINDER_STATUS.ACTIVE, REMINDER_STATUS.SNOOZED]);
@@ -3095,6 +3107,225 @@ async function runTest39(ctx) {
   });
 }
 
+async function listTestWorkStagesForProject(projectId) {
+  const items = await base44.entities.WorkStage.list();
+  return (items || []).filter((item) => matchesExactProjectId(item, projectId));
+}
+
+async function createDeletionRichProject(ctx, label) {
+  const { client, project, signedProposal } = await createTestProjectWithSignedProposal(ctx, label);
+  const proposal = await createTestProposal(ctx, ctx.createdEntities, {
+    project_id: project.id,
+    project_name: project.name,
+    client_id: client.id,
+    client_name: client.name,
+    form_status: 'submitted',
+  });
+  const stage = await createTestWorkStageForProject(ctx, project, client, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} ${label} stage`,
+  });
+  const invoice = await createTestInvoiceProcess(ctx, ctx.createdEntities, {
+    project_id: project.id,
+    project_name: project.name,
+    client_id: client.id,
+    client_name: client.name,
+    form_status: 'submitted',
+    submitted_at: new Date().toISOString(),
+    amount: 500,
+  });
+
+  const collectionResult = await safeRequest(
+    ctx,
+    `open_collection_${label}`,
+    () => openCollectionDueFromInvoice({ invoice }),
+  );
+  if (collectionResult?.collectionDue?.id) {
+    ctx.createdEntities.collectionDues.push(collectionResult.collectionDue);
+    registerTestEntity('collectionDues', collectionResult.collectionDue.id);
+  }
+
+  return {
+    client,
+    project,
+    proposal,
+    signedProposal,
+    stage,
+    invoice,
+    collectionDue: collectionResult?.collectionDue || null,
+  };
+}
+
+async function runTest40(ctx) {
+  const { client, project: projectA } = await createTestProjectWithClient(ctx, 'deletion-e1-a');
+  const { project: projectB } = await createTestProjectWithClient(ctx, 'deletion-e1-b', {
+    client_id: client.id,
+    client_name: client.name,
+  });
+
+  await createTestWorkStageForProject(ctx, projectA, client, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} E1-A`,
+  });
+  await createTestWorkStageForProject(ctx, projectB, client, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} E1-B`,
+  });
+
+  await safeRequest(ctx, 'delete_work_process_e1', () => deleteWorkProcessForProject(projectA.id));
+
+  const projectAStages = await listTestWorkStagesForProject(projectA.id);
+  const projectBStages = await listTestWorkStagesForProject(projectB.id);
+  const projectAAfter = await fetchTestProject(ctx, projectA.id);
+
+  ctx.steps.push({
+    name: 'Test 40 – Deletion E1: Project A work stages removed',
+    passed: projectAStages.length === 0,
+    expected: '0 work stages for project A',
+    actual: String(projectAStages.length),
+  });
+  ctx.steps.push({
+    name: 'Test 40 – Deletion E1: Project B work stages remain',
+    passed: projectBStages.length >= 1,
+    expected: 'at least 1 work stage for project B',
+    actual: String(projectBStages.length),
+  });
+  ctx.steps.push({
+    name: 'Test 40 – Deletion E1: Project A still exists',
+    passed: Boolean(projectAAfter?.id),
+    expected: projectA.id,
+    actual: projectAAfter?.id || '',
+  });
+}
+
+async function runTest41(ctx) {
+  const fixture = await createDeletionRichProject(ctx, 'deletion-e2');
+  const impact = await buildProjectDeletionImpact(fixture.project.id);
+
+  ctx.steps.push({
+    name: 'Test 41 – Deletion E2: impact proposal count',
+    passed: impact.counts.proposals >= 1,
+    expected: '>=1',
+    actual: String(impact.counts.proposals),
+  });
+  ctx.steps.push({
+    name: 'Test 41 – Deletion E2: impact signed proposal count',
+    passed: impact.counts.signedProposals >= 1,
+    expected: '>=1',
+    actual: String(impact.counts.signedProposals),
+  });
+  ctx.steps.push({
+    name: 'Test 41 – Deletion E2: impact work stage count',
+    passed: impact.counts.workStages >= 1,
+    expected: '>=1',
+    actual: String(impact.counts.workStages),
+  });
+  ctx.steps.push({
+    name: 'Test 41 – Deletion E2: impact invoice count',
+    passed: impact.counts.invoiceProcesses >= 1,
+    expected: '>=1',
+    actual: String(impact.counts.invoiceProcesses),
+  });
+  ctx.steps.push({
+    name: 'Test 41 – Deletion E2: impact collection due count',
+    passed: impact.counts.collectionDues >= 1,
+    expected: '>=1',
+    actual: String(impact.counts.collectionDues),
+  });
+}
+
+async function runTest42(ctx) {
+  const fixtureA = await createDeletionRichProject(ctx, 'deletion-e3-a');
+  const fixtureB = await createDeletionRichProject(ctx, 'deletion-e3-b');
+
+  await safeRequest(ctx, 'cascade_delete_e3', () => deleteProjectCascade(fixtureA.project.id));
+
+  const projectAAfter = await fetchTestProject(ctx, fixtureA.project.id);
+  const projectBAfter = await fetchTestProject(ctx, fixtureB.project.id);
+  const proposalsA = (await base44.entities.Proposal.list()).filter((item) => matchesExactProjectId(item, fixtureA.project.id));
+  const proposalsB = (await base44.entities.Proposal.list()).filter((item) => matchesExactProjectId(item, fixtureB.project.id));
+  const stagesA = await listTestWorkStagesForProject(fixtureA.project.id);
+  const stagesB = await listTestWorkStagesForProject(fixtureB.project.id);
+
+  ctx.steps.push({
+    name: 'Test 42 – Deletion E3: Project A deleted',
+    passed: !projectAAfter?.id,
+    expected: 'project A missing',
+    actual: projectAAfter?.id || 'missing',
+  });
+  ctx.steps.push({
+    name: 'Test 42 – Deletion E3: Project A linked entities removed',
+    passed: proposalsA.length === 0 && stagesA.length === 0,
+    expected: 'no proposals/work stages for project A',
+    actual: JSON.stringify({ proposals: proposalsA.length, stages: stagesA.length }),
+  });
+  ctx.steps.push({
+    name: 'Test 42 – Deletion E3: Project B remains with linked entities',
+    passed: Boolean(projectBAfter?.id) && proposalsB.length >= 1 && stagesB.length >= 1,
+    expected: 'project B and linked entities remain',
+    actual: JSON.stringify({
+      projectId: projectBAfter?.id || '',
+      proposals: proposalsB.length,
+      stages: stagesB.length,
+    }),
+  });
+}
+
+async function runTest43(ctx) {
+  const { client, project } = await createTestProjectWithClient(ctx, 'deletion-e4');
+  const stage = await createTestWorkStageForProject(ctx, project, client, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} E4 stage`,
+    status: 'active',
+  });
+
+  const ws1Key = getWorkStageNeedsCheckConditionKey(stage.id);
+  await runWorkStageProjectRules(ctx, project.id, 'test43_before_delete');
+  ctx.steps.push(assertReminderExists(ctx, 'Test 43 – Deletion E4: WS1 active before cascade', ws1Key));
+
+  await safeRequest(ctx, 'cascade_delete_e4', () => deleteProjectCascade(project.id));
+
+  const reminder = await safeRequest(ctx, 'fetch_ws1_e4', () => findReminderByConditionKey(ws1Key));
+  const closed = reminder?.status === REMINDER_STATUS.RESOLVED || reminder?.status === REMINDER_STATUS.CANCELLED;
+
+  ctx.steps.push({
+    name: 'Test 43 – Deletion E4: related reminder closed after cascade',
+    passed: closed,
+    expected: 'resolved or cancelled',
+    actual: reminder?.status || 'missing',
+  });
+}
+
+async function runTest44(ctx) {
+  const inquiry = await createTestInquiry(ctx, ctx.createdEntities, {
+    client_name: `${TEST_REMINDER_FLOW_PREFIX} E5 inquiry`,
+    form_status: 'submitted',
+  });
+  const client = await createTestClient(ctx, ctx.createdEntities, {
+    name: `${TEST_REMINDER_FLOW_PREFIX} E5 client`,
+    source_inquiry_id: inquiry.id,
+  });
+  const project = await createTestProject(ctx, ctx.createdEntities, {
+    name: `${TEST_REMINDER_FLOW_PREFIX} E5 project`,
+    client_id: client.id,
+    client_name: client.name,
+  });
+
+  await safeRequest(ctx, 'cascade_delete_e5', () => deleteProjectCascade(project.id));
+
+  const clientsAfter = await safeRequest(ctx, 'fetch_client_e5', () => base44.entities.Client.filter({ id: client.id }));
+  const inquiriesAfter = await safeRequest(ctx, 'fetch_inquiry_e5', () => base44.entities.Inquiry.filter({ id: inquiry.id }));
+
+  ctx.steps.push({
+    name: 'Test 44 – Deletion E5: client remains after project cascade',
+    passed: Boolean(clientsAfter?.[0]?.id),
+    expected: client.id,
+    actual: clientsAfter?.[0]?.id || '',
+  });
+  ctx.steps.push({
+    name: 'Test 44 – Deletion E5: inquiry remains after project cascade',
+    passed: Boolean(inquiriesAfter?.[0]?.id),
+    expected: inquiry.id,
+    actual: inquiriesAfter?.[0]?.id || '',
+  });
+}
+
 const REMINDER_INTEGRATION_TEST_DEFINITIONS = [
   { name: 'Test 1', fn: runTest1 },
   { name: 'Test 2', fn: runTest2 },
@@ -3135,6 +3366,11 @@ const REMINDER_INTEGRATION_TEST_DEFINITIONS = [
   { name: 'Test 37', fn: runTest37 },
   { name: 'Test 38', fn: runTest38 },
   { name: 'Test 39', fn: runTest39 },
+  { name: 'Test 40', fn: runTest40 },
+  { name: 'Test 41', fn: runTest41 },
+  { name: 'Test 42', fn: runTest42 },
+  { name: 'Test 43', fn: runTest43 },
+  { name: 'Test 44', fn: runTest44 },
 ];
 
 export const REMINDER_TEST_GROUP_DEFINITIONS = {
@@ -3156,16 +3392,26 @@ export const REMINDER_TEST_GROUP_DEFINITIONS = {
   [TEST_GROUP.COLLECTION]: {
     key: TEST_GROUP.COLLECTION,
     label: TEST_GROUP_LABELS[TEST_GROUP.COLLECTION],
-    tests: REMINDER_INTEGRATION_TEST_DEFINITIONS.slice(34),
+    tests: REMINDER_INTEGRATION_TEST_DEFINITIONS.slice(34, 39),
+  },
+  [TEST_GROUP.DELETION]: {
+    key: TEST_GROUP.DELETION,
+    label: TEST_GROUP_LABELS[TEST_GROUP.DELETION],
+    tests: REMINDER_INTEGRATION_TEST_DEFINITIONS.slice(39),
   },
 };
 
-/** Ordered groups shown in Dashboard test dropup and Run All Slowly. */
-export const REMINDER_TEST_RUN_GROUPS = [
+/** Groups included in Run All Slowly (Deletion excluded to reduce 429 risk). */
+export const REMINDER_TEST_RUN_GROUPS_SLOW = [
   TEST_GROUP.CORE,
   TEST_GROUP.WORKSTAGES,
   TEST_GROUP.INVOICE,
   TEST_GROUP.COLLECTION,
+];
+
+export const REMINDER_TEST_RUN_GROUPS = [
+  ...REMINDER_TEST_RUN_GROUPS_SLOW,
+  TEST_GROUP.DELETION,
 ];
 
 function buildTestRunSummary(steps, testDefinitions, ctx = {}) {
@@ -3431,6 +3677,10 @@ export async function runCollectionReminderIntegrationTests(options = {}) {
   return runReminderIntegrationTestGroup(TEST_GROUP.COLLECTION, options);
 }
 
+export async function runDeletionReminderIntegrationTests(options = {}) {
+  return runReminderIntegrationTestGroup(TEST_GROUP.DELETION, options);
+}
+
 export async function runReminderIntegrationTestsSlowly() {
   if (!acquireReminderIntegrationTestLock()) {
     return buildTestRunResult({
@@ -3451,7 +3701,7 @@ export async function runReminderIntegrationTestsSlowly() {
   const combinedSteps = [];
   const combinedErrors = [];
   const groupResults = [];
-  const groupOrder = [...REMINDER_TEST_RUN_GROUPS];
+  const groupOrder = [...REMINDER_TEST_RUN_GROUPS_SLOW];
 
   try {
     for (let index = 0; index < groupOrder.length; index += 1) {
