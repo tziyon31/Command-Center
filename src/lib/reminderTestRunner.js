@@ -55,6 +55,9 @@ import {
   reloadRemindersInCache,
   REMINDER_INTEGRATION_TEST_LOCK_KEY,
   REMINDER_STATUS,
+  REMINDER_TEST_CLEANUP_RUNNING_KEY,
+  REMINDER_TEST_RATE_LIMIT_AT_KEY,
+  REMINDER_TEST_RATE_LIMIT_COOLDOWN_MS,
   upsertReminderInCache,
 } from '@/lib/reminderEngine';
 
@@ -62,12 +65,26 @@ export const TEST_REMINDER_FLOW_PREFIX = 'TEST_REMINDER_FLOW';
 export const REMINDER_TEST_RUN_STATE_KEY = 'reminderTestRunState';
 export const REMINDER_TEST_CLEANUP_RATE_LIMIT_KEY = 'reminderTestCleanupRateLimitedAt';
 
+export const TEST_GROUP = {
+  CORE: 'core',
+  WORKSTAGES: 'workstages',
+  INVOICE: 'invoice',
+};
+
+export const TEST_GROUP_LABELS = {
+  [TEST_GROUP.CORE]: 'Core Tests',
+  [TEST_GROUP.WORKSTAGES]: 'WorkStage Tests',
+  [TEST_GROUP.INVOICE]: 'Invoice Tests',
+};
+
 const OPEN_STATUSES = new Set([REMINDER_STATUS.ACTIVE, REMINDER_STATUS.SNOOZED]);
-const MAX_CLEANUP_MUTATIONS_PER_BATCH = 5;
-const CLEANUP_BATCH_DELAY_MS = 400;
-const RATE_LIMIT_RETRY_DELAY_MS = 1500;
+const MAX_CLEANUP_MUTATIONS_PER_BATCH = 2;
+const CLEANUP_BATCH_DELAY_MS = 1000;
+const CLEANUP_SUCCESS_PAUSE_EVERY = 5;
+const CLEANUP_SUCCESS_PAUSE_MS = 2000;
+const RUN_ALL_SLOW_GROUP_DELAY_MS = 75000;
 const STALE_TEST_RUN_THRESHOLD_MS = 30 * 1000;
-const CLEANUP_RATE_LIMIT_COOLDOWN_MS = 2 * 60 * 1000;
+const CLEANUP_RATE_LIMIT_COOLDOWN_MS = REMINDER_TEST_RATE_LIMIT_COOLDOWN_MS;
 
 const TEST_ENTITY_SCAN_FIELDS = {
   Inquiry: ['client_name', 'notes'],
@@ -134,6 +151,33 @@ function releaseReminderIntegrationTestLock() {
   } catch (_error) {}
 }
 
+function acquireReminderTestCleanupLock() {
+  if (!hasBrowserStorage()) return true;
+  try {
+    if (globalThis.localStorage.getItem(REMINDER_TEST_CLEANUP_RUNNING_KEY) === 'true') return false;
+    globalThis.localStorage.setItem(REMINDER_TEST_CLEANUP_RUNNING_KEY, 'true');
+    return true;
+  } catch (_error) {
+    return true;
+  }
+}
+
+function releaseReminderTestCleanupLock() {
+  if (!hasBrowserStorage()) return;
+  try {
+    globalThis.localStorage.removeItem(REMINDER_TEST_CLEANUP_RUNNING_KEY);
+  } catch (_error) {}
+}
+
+export function isReminderTestCleanupRunningLocal() {
+  if (!hasBrowserStorage()) return false;
+  try {
+    return globalThis.localStorage.getItem(REMINDER_TEST_CLEANUP_RUNNING_KEY) === 'true';
+  } catch (_error) {
+    return false;
+  }
+}
+
 function isTestLabel(value) {
   return String(value || '').startsWith(TEST_REMINDER_FLOW_PREFIX);
 }
@@ -171,6 +215,7 @@ export function loadReminderTestRunState() {
     if (!parsed || typeof parsed !== 'object') return null;
     return {
       runId: parsed.runId || null,
+      group: parsed.group || null,
       startedAt: parsed.startedAt || null,
       status: parsed.status || 'completed',
       createdEntities: {
@@ -206,9 +251,10 @@ function markReminderTestRunStatus(status) {
   saveReminderTestRunState({ ...current, status });
 }
 
-export function startReminderTestRunRegistry() {
+export function startReminderTestRunRegistry(group = null) {
   const state = {
     runId: createTestRunId(),
+    group: group || null,
     startedAt: new Date().toISOString(),
     status: 'running',
     createdEntities: emptyEntityIdRegistry(),
@@ -254,14 +300,17 @@ export function registerTestConditionKey(conditionKey) {
   saveReminderTestRunState(state);
 }
 
-function saveCleanupRateLimitTimestamp() {
+function saveReminderTestRateLimitTimestamp() {
   if (!hasBrowserStorage()) return;
   try {
-    globalThis.localStorage.setItem(
-      REMINDER_TEST_CLEANUP_RATE_LIMIT_KEY,
-      String(Date.now()),
-    );
+    const now = String(Date.now());
+    globalThis.localStorage.setItem(REMINDER_TEST_RATE_LIMIT_AT_KEY, now);
+    globalThis.localStorage.setItem(REMINDER_TEST_CLEANUP_RATE_LIMIT_KEY, now);
   } catch (_error) {}
+}
+
+function saveCleanupRateLimitTimestamp() {
+  saveReminderTestRateLimitTimestamp();
 }
 
 export function isReminderTestCleanupRateLimitCooldownActive(now = Date.now()) {
@@ -360,9 +409,11 @@ function isNotFoundError(error) {
 
 function markRateLimited(ctx, stage) {
   ctx.rateLimited = true;
-  if (!ctx.errors.some((item) => item.message?.includes('Rate limit hit'))) {
-    ctx.errors.push({ stage, message: 'Rate limit hit; wait 2 minutes and rerun' });
+  if (!ctx.rateLimitedAt) ctx.rateLimitedAt = stage;
+  if (!ctx.errors.some((item) => item.type === 'rate_limit')) {
+    ctx.errors.push({ stage, type: 'rate_limit', message: 'Rate limit hit; wait 2 minutes and rerun' });
   }
+  saveReminderTestRateLimitTimestamp();
 }
 
 async function safeRequest(ctx, label, fn) {
@@ -373,18 +424,10 @@ async function safeRequest(ctx, label, fn) {
   try {
     return await fn();
   } catch (error) {
-    if (!isRateLimitError(error)) throw error;
-
-    await delay(RATE_LIMIT_RETRY_DELAY_MS);
-
-    try {
-      return await fn();
-    } catch (retryError) {
-      if (isRateLimitError(retryError)) {
-        markRateLimited(ctx, label);
-      }
-      throw retryError;
+    if (isRateLimitError(error)) {
+      markRateLimited(ctx, label);
     }
+    throw error;
   }
 }
 
@@ -425,6 +468,8 @@ async function runBatchedCleanup(ctx, items, handler) {
     pending: [],
   };
 
+  let successCount = 0;
+
   for (let index = 0; index < items.length; index += MAX_CLEANUP_MUTATIONS_PER_BATCH) {
     if (ctx.rateLimited) {
       summary.passed = false;
@@ -445,6 +490,7 @@ async function runBatchedCleanup(ctx, items, handler) {
       if (result.status === 'already_deleted') {
         summary.alreadyDeleted += 1;
         summary.completed += 1;
+        successCount += 1;
         continue;
       }
 
@@ -462,6 +508,11 @@ async function runBatchedCleanup(ctx, items, handler) {
       }
 
       summary.completed += 1;
+      successCount += 1;
+
+      if (successCount > 0 && successCount % CLEANUP_SUCCESS_PAUSE_EVERY === 0) {
+        await delay(CLEANUP_SUCCESS_PAUSE_MS);
+      }
     }
 
     if (ctx.rateLimited || summary.pending.length > 0) break;
@@ -616,6 +667,7 @@ async function scanTestEntitiesByPrefix(ctx) {
     proposals: [],
     signedProposals: [],
     workStages: [],
+    invoiceProcesses: [],
   };
 
   for (const { entityName, bucket } of TEST_ENTITY_BUCKETS) {
@@ -695,6 +747,11 @@ function buildCleanupEntityPlan({
       registryIdsToEntityRecords(registryIds.workStages, prefixScan?.workStages),
       sessionLists.workStages,
       prefixScan?.workStages,
+    ),
+    invoiceProcesses: mergeEntityRecordsById(
+      registryIdsToEntityRecords(registryIds.invoiceProcesses, prefixScan?.invoiceProcesses),
+      sessionLists.invoiceProcesses,
+      prefixScan?.invoiceProcesses,
     ),
   };
 }
@@ -818,32 +875,21 @@ async function cancelTestRemindersForCleanup(ctx, {
 }
 
 async function deleteTestEntitiesForCleanup(ctx, entityPlan) {
+  const emptyBucketSummary = () => ({
+    workStages: [],
+    signedProposals: [],
+    proposals: [],
+    projects: [],
+    inquiries: [],
+    clients: [],
+    invoiceProcesses: [],
+  });
+
   const summary = {
     passed: true,
-    deleted: {
-      workStages: [],
-      signedProposals: [],
-      proposals: [],
-      projects: [],
-      inquiries: [],
-      clients: [],
-    },
-    alreadyDeleted: {
-      workStages: [],
-      signedProposals: [],
-      proposals: [],
-      projects: [],
-      inquiries: [],
-      clients: [],
-    },
-    failed: {
-      workStages: [],
-      signedProposals: [],
-      proposals: [],
-      projects: [],
-      inquiries: [],
-      clients: [],
-    },
+    deleted: emptyBucketSummary(),
+    alreadyDeleted: emptyBucketSummary(),
+    failed: emptyBucketSummary(),
     pending: [],
   };
 
@@ -871,15 +917,28 @@ async function deleteTestEntitiesForCleanup(ctx, entityPlan) {
   return summary;
 }
 
-export async function cleanupAllReminderTestData(options = {}) {
+async function runReminderTestCleanupInternal(options = {}) {
   const ctx = createCleanupContext();
+  const deepScan = options.deepScan === true;
+  const skipLeftoverScan = options.skipLeftoverScan === true;
 
   if (isReminderTestCleanupRateLimitCooldownActive()) {
     return {
       passed: false,
       rateLimited: true,
       skippedDueToRateLimit: true,
+      cleanupStatus: 'pending',
       message: 'Rate limit reached. Cleanup is pending. Wait 2 minutes and run cleanup again.',
+      entities: null,
+      reminders: null,
+    };
+  }
+
+  if (!acquireReminderTestCleanupLock()) {
+    return {
+      passed: false,
+      skipped: true,
+      message: 'Cleanup already running',
       entities: null,
       reminders: null,
     };
@@ -891,110 +950,145 @@ export async function cleanupAllReminderTestData(options = {}) {
   let prefixScan = null;
 
   try {
-    prefixScan = await scanTestEntitiesByPrefix(ctx);
-  } catch (error) {
-    if (isRateLimitError(error)) {
-      saveCleanupRateLimitTimestamp();
-      return {
-        passed: false,
-        rateLimited: true,
-        message: 'Rate limit reached. Cleanup is pending. Wait 2 minutes and run cleanup again.',
-        errors: ctx.errors,
-      };
+    if (deepScan) {
+      try {
+        prefixScan = await scanTestEntitiesByPrefix(ctx);
+      } catch (error) {
+        if (isRateLimitError(error)) {
+          saveCleanupRateLimitTimestamp();
+          return {
+            passed: false,
+            rateLimited: true,
+            cleanupStatus: 'pending',
+            message: 'Rate limit reached. Cleanup paused. Wait 2 minutes and press Clean Pending Test Data.',
+            errors: ctx.errors,
+          };
+        }
+        throw error;
+      }
     }
-    throw error;
-  }
 
-  const entityPlan = buildCleanupEntityPlan({
-    registryState,
-    sessionEntities: options.sessionEntities || null,
-    prefixScan,
-  });
-
-  const trackedConditionKeys = [
-    ...(registryState?.trackedConditionKeys || []),
-    ...(options.trackedConditionKeys || []),
-  ];
-
-  let reminders = null;
-  try {
-    reminders = await cancelTestRemindersForCleanup(ctx, {
-      entityPlan,
-      trackedConditionKeys,
-      registryReminderIds: registryState?.createdEntities?.reminders || [],
-      cache: options.cache || null,
+    const entityPlan = buildCleanupEntityPlan({
+      registryState,
+      sessionEntities: options.sessionEntities || null,
+      prefixScan,
     });
-  } catch (error) {
-    if (isRateLimitError(error)) {
+
+    const trackedConditionKeys = [
+      ...(registryState?.trackedConditionKeys || []),
+      ...(options.trackedConditionKeys || []),
+    ];
+
+    let reminders = null;
+    try {
+      reminders = await cancelTestRemindersForCleanup(ctx, {
+        entityPlan,
+        trackedConditionKeys,
+        registryReminderIds: registryState?.createdEntities?.reminders || [],
+        cache: options.cache || null,
+      });
+    } catch (error) {
+      if (isRateLimitError(error)) {
+        saveCleanupRateLimitTimestamp();
+        markReminderTestRunStatus('cleanup_pending');
+        return {
+          passed: false,
+          rateLimited: true,
+          cleanupStatus: 'pending',
+          message: 'Rate limit reached. Cleanup paused. Wait 2 minutes and press Clean Pending Test Data.',
+          reminders: null,
+          entities: null,
+          errors: ctx.errors,
+        };
+      }
+      throw error;
+    }
+
+    let entities = null;
+    try {
+      entities = await deleteTestEntitiesForCleanup(ctx, entityPlan);
+    } catch (error) {
+      if (isRateLimitError(error)) {
+        saveCleanupRateLimitTimestamp();
+        markReminderTestRunStatus('cleanup_pending');
+        return {
+          passed: false,
+          rateLimited: true,
+          cleanupStatus: 'pending',
+          message: 'Rate limit reached. Cleanup paused. Wait 2 minutes and press Clean Pending Test Data.',
+          reminders,
+          entities: null,
+          errors: ctx.errors,
+        };
+      }
+      throw error;
+    }
+
+    const passed = Boolean(
+      !ctx.rateLimited
+      && (reminders?.passed ?? true)
+      && (entities?.passed ?? true)
+      && !(reminders?.pending?.length)
+      && !(entities?.pending?.length),
+    );
+
+    if (ctx.rateLimited) {
       saveCleanupRateLimitTimestamp();
       markReminderTestRunStatus('cleanup_pending');
-      return {
-        passed: false,
-        rateLimited: true,
-        message: 'Rate limit reached. Cleanup is pending. Wait 2 minutes and run cleanup again.',
-        reminders: null,
-        entities: null,
-        errors: ctx.errors,
-      };
-    }
-    throw error;
-  }
-
-  let entities = null;
-  try {
-    entities = await deleteTestEntitiesForCleanup(ctx, entityPlan);
-  } catch (error) {
-    if (isRateLimitError(error)) {
-      saveCleanupRateLimitTimestamp();
+    } else if (passed) {
+      markReminderTestRunStatus('completed');
+      clearReminderTestRunState();
+    } else {
       markReminderTestRunStatus('cleanup_pending');
-      return {
-        passed: false,
-        rateLimited: true,
-        message: 'Rate limit reached. Cleanup is pending. Wait 2 minutes and run cleanup again.',
-        reminders,
-        entities: null,
-        errors: ctx.errors,
-      };
     }
-    throw error;
+
+    let leftovers = null;
+    if (!skipLeftoverScan && !ctx.rateLimited) {
+      try {
+        leftovers = await findReminderTestLeftovers();
+      } catch (leftoverError) {
+        console.warn('[ReminderTestRunner] failed to scan leftovers after cleanup', leftoverError);
+      }
+    }
+
+    return {
+      passed,
+      rateLimited: ctx.rateLimited,
+      cleanupStatus: ctx.rateLimited || !passed ? 'pending' : 'completed',
+      message: ctx.rateLimited
+        ? 'Rate limit reached. Cleanup paused. Wait 2 minutes and press Clean Pending Test Data.'
+        : (passed ? 'Cleanup completed' : 'Cleanup incomplete'),
+      reminders,
+      entities,
+      leftovers,
+      errors: ctx.errors,
+    };
+  } finally {
+    releaseReminderTestCleanupLock();
   }
+}
 
-  const passed = Boolean(
-    !ctx.rateLimited
-    && (reminders?.passed ?? true)
-    && (entities?.passed ?? true)
-    && !(reminders?.pending?.length)
-    && !(entities?.pending?.length),
-  );
+export async function cleanupPendingReminderTestData(options = {}) {
+  return runReminderTestCleanupInternal({
+    ...options,
+    deepScan: false,
+    skipLeftoverScan: options.skipLeftoverScan ?? false,
+  });
+}
 
-  if (ctx.rateLimited) {
-    saveCleanupRateLimitTimestamp();
-    markReminderTestRunStatus('cleanup_pending');
-  } else if (passed) {
-    markReminderTestRunStatus('completed');
-    clearReminderTestRunState();
-  } else {
-    markReminderTestRunStatus('cleanup_pending');
+export async function deepCleanReminderTestData(options = {}) {
+  return runReminderTestCleanupInternal({
+    ...options,
+    deepScan: true,
+    skipLeftoverScan: options.skipLeftoverScan ?? false,
+  });
+}
+
+export async function cleanupAllReminderTestData(options = {}) {
+  if (options.deepScan === true) {
+    return deepCleanReminderTestData(options);
   }
-
-  let leftovers = null;
-  try {
-    leftovers = await findReminderTestLeftovers();
-  } catch (leftoverError) {
-    console.warn('[ReminderTestRunner] failed to scan leftovers after cleanup', leftoverError);
-  }
-
-  return {
-    passed,
-    rateLimited: ctx.rateLimited,
-    message: ctx.rateLimited
-      ? 'Rate limit reached. Cleanup is pending. Wait 2 minutes and run cleanup again.'
-      : (passed ? 'Cleanup completed' : 'Cleanup incomplete'),
-    reminders,
-    entities,
-    leftovers,
-    errors: ctx.errors,
-  };
+  return cleanupPendingReminderTestData(options);
 }
 
 const emptyCreatedEntities = () => ({
@@ -1419,6 +1513,46 @@ async function createTestProjectWithSignedProposal(ctx, label) {
   });
 
   return { client, project, signedProposal };
+}
+
+async function prepareInvoiceGroupFixture(ctx) {
+  if (ctx.invoiceGroupFixture) return ctx.invoiceGroupFixture;
+
+  const client = await createTestClient(ctx, ctx.createdEntities, {
+    name: `${TEST_REMINDER_FLOW_PREFIX} invoice-group client`,
+  });
+
+  ctx.invoiceGroupFixture = {
+    client,
+    lifecycleProject: null,
+  };
+
+  return ctx.invoiceGroupFixture;
+}
+
+async function getInvoiceGroupClient(ctx) {
+  const fixture = await prepareInvoiceGroupFixture(ctx);
+  return fixture.client;
+}
+
+async function createInvoiceGroupProject(ctx, label, overrides = {}) {
+  const client = await getInvoiceGroupClient(ctx);
+  return createTestProject(ctx, ctx.createdEntities, {
+    name: `${TEST_REMINDER_FLOW_PREFIX} ${label} project`,
+    client_id: client.id,
+    client_name: client.name,
+    total_amount: 50000,
+    collected_amount: 0,
+    ...overrides,
+  });
+}
+
+async function getInvoiceLifecycleProject(ctx) {
+  const fixture = await prepareInvoiceGroupFixture(ctx);
+  if (!fixture.lifecycleProject) {
+    fixture.lifecycleProject = await createInvoiceGroupProject(ctx, 'invoice-lifecycle');
+  }
+  return { client: fixture.client, project: fixture.lifecycleProject };
 }
 
 async function runTest1(ctx) {
@@ -2281,7 +2415,8 @@ async function runTest22(ctx) {
 }
 
 async function runTest23(ctx) {
-  const { client, project } = await createTestProjectWithClient(ctx, 'WSI1');
+  const client = await getInvoiceGroupClient(ctx);
+  const project = await createInvoiceGroupProject(ctx, 'WSI1');
   const stage = await createTestWorkStageForProject(ctx, project, client, {
     title: `${TEST_REMINDER_FLOW_PREFIX} invoice required stage`,
     status: 'completed',
@@ -2315,7 +2450,8 @@ async function runTest23(ctx) {
 }
 
 async function runTest24(ctx) {
-  const { client, project } = await createTestProjectWithClient(ctx, 'general coverage');
+  const client = await getInvoiceGroupClient(ctx);
+  const project = await createInvoiceGroupProject(ctx, 'general coverage');
   const invoiceSubmittedAt = new Date().toISOString();
 
   const stageA = await createTestWorkStageForProject(ctx, project, client, {
@@ -2372,7 +2508,8 @@ async function runTest24(ctx) {
 }
 
 async function runTest25(ctx) {
-  const { client, project } = await createTestProjectWithClient(ctx, 'WSI2 final');
+  const client = await getInvoiceGroupClient(ctx);
+  const project = await createInvoiceGroupProject(ctx, 'WSI2 final');
   const completedAt = new Date().toISOString();
 
   await createTestWorkStageForProject(ctx, project, client, {
@@ -2417,7 +2554,7 @@ async function runTest25(ctx) {
 }
 
 async function runTest26(ctx) {
-  const { client, project } = await createTestProjectWithClient(ctx, 'INV1');
+  const { client, project } = await getInvoiceLifecycleProject(ctx);
   let invoice = await createTestInvoiceProcess(ctx, ctx.createdEntities, {
     project_id: project.id,
     project_name: project.name,
@@ -2440,7 +2577,7 @@ async function runTest26(ctx) {
 }
 
 async function runTest27(ctx) {
-  const { client, project } = await createTestProjectWithClient(ctx, 'INV2');
+  const { client, project } = await getInvoiceLifecycleProject(ctx);
   let invoice = await createTestInvoiceProcess(ctx, ctx.createdEntities, {
     project_id: project.id,
     project_name: project.name,
@@ -2464,7 +2601,7 @@ async function runTest27(ctx) {
 }
 
 async function runTest28(ctx) {
-  const { client, project } = await createTestProjectWithClient(ctx, 'INV3');
+  const { client, project } = await getInvoiceLifecycleProject(ctx);
   let invoice = await createTestInvoiceProcess(ctx, ctx.createdEntities, {
     project_id: project.id,
     project_name: project.name,
@@ -2489,11 +2626,7 @@ async function runTest28(ctx) {
 }
 
 async function runTest29(ctx) {
-  const { client, project } = await createTestProjectWithClient(ctx, 'INV4', {
-    total_amount: 10000,
-    collected_amount: 0,
-  });
-
+  const { client, project } = await getInvoiceLifecycleProject(ctx);
   let invoice = await createTestInvoiceProcess(ctx, ctx.createdEntities, {
     project_id: project.id,
     project_name: project.name,
@@ -2536,7 +2669,7 @@ async function runTest29(ctx) {
 }
 
 async function runTest30(ctx) {
-  const { client, project } = await createTestProjectWithClient(ctx, 'invoice draft');
+  const { client, project } = await getInvoiceLifecycleProject(ctx);
 
   const draftInvoice = await createTestInvoiceProcess(ctx, ctx.createdEntities, {
     project_id: project.id,
@@ -2572,10 +2705,7 @@ async function runTest30(ctx) {
 }
 
 async function runTest31(ctx) {
-  const { client, project } = await createTestProjectWithClient(ctx, 'INV sequential', {
-    total_amount: 5000,
-    collected_amount: 0,
-  });
+  const { client, project } = await getInvoiceLifecycleProject(ctx);
 
   let invoice = await createTestInvoiceProcess(ctx, ctx.createdEntities, {
     project_id: project.id,
@@ -2650,9 +2780,28 @@ const REMINDER_INTEGRATION_TEST_DEFINITIONS = [
   { name: 'Test 31', fn: runTest31 },
 ];
 
-function buildTestRunSummary(steps, testDefinitions, testRunLog = []) {
+export const REMINDER_TEST_GROUP_DEFINITIONS = {
+  [TEST_GROUP.CORE]: {
+    key: TEST_GROUP.CORE,
+    label: TEST_GROUP_LABELS[TEST_GROUP.CORE],
+    tests: REMINDER_INTEGRATION_TEST_DEFINITIONS.slice(0, 11),
+  },
+  [TEST_GROUP.WORKSTAGES]: {
+    key: TEST_GROUP.WORKSTAGES,
+    label: TEST_GROUP_LABELS[TEST_GROUP.WORKSTAGES],
+    tests: REMINDER_INTEGRATION_TEST_DEFINITIONS.slice(11, 22),
+  },
+  [TEST_GROUP.INVOICE]: {
+    key: TEST_GROUP.INVOICE,
+    label: TEST_GROUP_LABELS[TEST_GROUP.INVOICE],
+    tests: REMINDER_INTEGRATION_TEST_DEFINITIONS.slice(22),
+  },
+};
+
+function buildTestRunSummary(steps, testDefinitions, ctx = {}) {
+  const testRunLog = ctx.testRunLog || [];
   const passedSteps = steps.filter((step) => step.passed).length;
-  const failedSteps = steps.filter((step) => !step.passed).length;
+  const failedAssertions = steps.filter((step) => !step.passed).length;
   const stepsByTest = {};
 
   for (const step of steps) {
@@ -2662,43 +2811,105 @@ function buildTestRunSummary(steps, testDefinitions, testRunLog = []) {
     stepsByTest[match[1]].push(step);
   }
 
+  const skippedDueToRateLimit = testRunLog
+    .filter((entry) => entry.status === 'skipped_rate_limit')
+    .map((entry) => entry.name);
+
+  const runtimeErrors = (ctx.errors || []).filter((item) => item.type !== 'rate_limit');
+
   return {
     totalSteps: steps.length,
     passedSteps,
-    failedSteps,
+    failedSteps: failedAssertions,
+    failedAssertions,
+    runtimeErrors: runtimeErrors.length,
+    skippedDueToRateLimit,
+    abortedBecauseRateLimit: Boolean(ctx.rateLimited),
+    rateLimitedAt: ctx.rateLimitedAt || null,
     testNames: testDefinitions.map((test) => test.name),
     testsWithSteps: Object.keys(stepsByTest),
     testsRan: testRunLog.filter((entry) => entry.status === 'ran').map((entry) => entry.name),
-    testsSkipped: testRunLog.filter((entry) => entry.status === 'skipped_rate_limit').map((entry) => entry.name),
+    testsSkipped: skippedDueToRateLimit,
     testsErrored: testRunLog.filter((entry) => entry.status === 'error').map((entry) => entry.name),
   };
 }
 
-export async function runReminderIntegrationTests() {
-  if (!acquireReminderIntegrationTestLock()) {
-    return {
-      passed: false,
-      skipped: true,
-      message: 'Reminder tests already running',
-      startedAt: new Date().toISOString(),
-      finishedAt: new Date().toISOString(),
-      durationMs: 0,
+function buildTestRunResult({
+  group,
+  startedAtMs,
+  steps,
+  errors,
+  createdEntities,
+  cleanup,
+  ctx,
+  testDefinitions,
+  skipped = false,
+  message = '',
+}) {
+  const finishedAtMs = Date.now();
+  const summary = buildTestRunSummary(steps, testDefinitions, ctx);
+  const hasFailedAssertions = summary.failedAssertions > 0;
+  const abortedBecauseRateLimit = Boolean(ctx.rateLimited);
+
+  let status = 'passed';
+  if (skipped) status = 'skipped';
+  else if (abortedBecauseRateLimit) status = 'aborted_rate_limited';
+  else if (hasFailedAssertions || summary.runtimeErrors > 0) status = 'failed';
+
+  const passed = status === 'passed';
+
+  console.info('[ReminderTestRunner] summary', { group, status, ...summary });
+
+  return {
+    passed,
+    status,
+    group,
+    skipped,
+    message,
+    startedAt: new Date(startedAtMs).toISOString(),
+    finishedAt: new Date(finishedAtMs).toISOString(),
+    durationMs: finishedAtMs - startedAtMs,
+    steps,
+    summary,
+    createdEntities,
+    cleanup,
+    errors,
+    rateLimited: abortedBecauseRateLimit,
+    rateLimitedAt: ctx.rateLimitedAt || null,
+    cleanupStatus: cleanup?.cleanupStatus || cleanup?.status || (cleanup?.passed ? 'completed' : 'pending'),
+  };
+}
+
+async function executeReminderTestGroup(group, options = {}) {
+  const groupDefinition = REMINDER_TEST_GROUP_DEFINITIONS[group];
+  if (!groupDefinition) {
+    throw new Error(`Unknown reminder test group: ${group}`);
+  }
+
+  const acquireLock = options.acquireLock !== false;
+  if (acquireLock && !acquireReminderIntegrationTestLock()) {
+    return buildTestRunResult({
+      group,
+      startedAtMs: Date.now(),
       steps: [],
+      errors: [{ stage: 'lock', message: 'Reminder tests already running' }],
       createdEntities: emptyCreatedEntities(),
       cleanup: { passed: true, skipped: true },
-      errors: [{ stage: 'lock', message: 'Reminder tests already running' }],
-    };
+      ctx: { testRunLog: [], errors: [], rateLimited: false },
+      testDefinitions: groupDefinition.tests,
+      skipped: true,
+      message: 'Reminder tests already running',
+    });
   }
 
   const startedAtMs = Date.now();
-  const startedAt = new Date(startedAtMs).toISOString();
   const steps = [];
   const errors = [];
   const createdEntities = emptyCreatedEntities();
   const trackedConditionKeys = new Set();
   const cache = createReminderEngineCache();
 
-  startReminderTestRunRegistry();
+  startReminderTestRunRegistry(group);
 
   const ctx = {
     cache,
@@ -2707,31 +2918,33 @@ export async function runReminderIntegrationTests() {
     steps,
     errors,
     rateLimited: false,
+    rateLimitedAt: null,
     testRunLog: [],
+    skippedDueToRateLimit: [],
+    invoiceGroupFixture: null,
   };
 
   let cleanup = {
     passed: true,
+    cleanupStatus: 'completed',
     entities: null,
     reminders: null,
   };
+
+  const tests = groupDefinition.tests;
 
   try {
     await safeRequest(ctx, 'initial_cache_load', () => loadReminderEngineCache(cache));
     initializeTestRunnerCache(cache);
 
-    const tests = REMINDER_INTEGRATION_TEST_DEFINITIONS;
+    if (group === TEST_GROUP.INVOICE) {
+      await prepareInvoiceGroupFixture(ctx);
+    }
 
     for (const test of tests) {
       if (ctx.rateLimited) {
-        ctx.steps.push({
-          name: `${test.name} – skipped (rate limit)`,
-          passed: false,
-          expected: 'run test',
-          actual: 'skipped due to rate limit',
-          details: { test: test.name },
-        });
         ctx.testRunLog.push({ name: test.name, status: 'skipped_rate_limit' });
+        ctx.skippedDueToRateLimit.push(test.name);
         continue;
       }
 
@@ -2739,8 +2952,15 @@ export async function runReminderIntegrationTests() {
         await test.fn(ctx);
         ctx.testRunLog.push({ name: test.name, status: 'ran' });
       } catch (error) {
-        if (isRateLimitError(error)) {
+        if (isRateLimitError(error) || ctx.rateLimited) {
           markRateLimited(ctx, test.name);
+          ctx.testRunLog.push({ name: test.name, status: 'error_rate_limit' });
+          errors.push({
+            test: test.name,
+            type: 'rate_limit',
+            message: error instanceof Error ? error.message : String(error),
+          });
+          break;
         }
 
         ctx.steps.push({
@@ -2753,6 +2973,7 @@ export async function runReminderIntegrationTests() {
         ctx.testRunLog.push({ name: test.name, status: 'error' });
         errors.push({
           test: test.name,
+          type: 'runtime',
           message: error instanceof Error ? error.message : String(error),
         });
       }
@@ -2760,108 +2981,175 @@ export async function runReminderIntegrationTests() {
   } catch (error) {
     if (isRateLimitError(error)) {
       markRateLimited(ctx, 'setup');
+      errors.push({ stage: 'setup', type: 'rate_limit', message: error instanceof Error ? error.message : String(error) });
     } else {
       errors.push({
         stage: 'runner',
+        type: 'runtime',
         message: error instanceof Error ? error.message : String(error),
       });
     }
   } finally {
     try {
-      markReminderTestRunStatus('cleanup_pending');
-
       if (ctx.rateLimited) {
-        cleanup.skippedDueToRateLimit = true;
-        cleanup.pendingEntityIds = [...collectEntityIds(createdEntities)];
+        markReminderTestRunStatus('cleanup_pending');
+        cleanup = {
+          passed: false,
+          skippedDueToRateLimit: true,
+          cleanupStatus: 'pending',
+          pendingEntityIds: [...collectEntityIds(createdEntities)],
+          message: 'Rate limit reached. Cleanup paused. Wait 2 minutes and press Clean Pending Test Data.',
+        };
       } else {
         await refreshReminderSnapshot(ctx, 'pre_cleanup');
-      }
 
-      const cleanupResult = await cleanupAllReminderTestData({
-        sessionEntities: createdEntities,
-        trackedConditionKeys: [...trackedConditionKeys],
-        cache,
-      });
-
-      cleanup = {
-        passed: cleanupResult.passed,
-        reminders: cleanupResult.reminders,
-        entities: cleanupResult.entities,
-        skippedDueToRateLimit: cleanupResult.rateLimited || cleanup.skippedDueToRateLimit,
-        pendingEntityIds: cleanup.skippedDueToRateLimit
-          ? cleanup.pendingEntityIds
-          : cleanupResult.entities?.pending,
-        message: cleanupResult.message,
-        leftovers: cleanupResult.leftovers,
-      };
-
-      if (!cleanup.passed) {
-        console.warn('[ReminderTestRunner] cleanup incomplete', {
-          message: cleanupResult.message,
-          reminderFailures: cleanup.reminders?.failedIds,
-          reminderConditionKeys: cleanup.reminders?.failedConditionKeys,
-          entityFailures: cleanup.entities?.failed,
-          pending: {
-            reminders: cleanup.reminders?.pending,
-            entities: cleanup.entities?.pending,
-            entityIds: cleanup.pendingEntityIds,
-          },
+        const cleanupResult = await cleanupPendingReminderTestData({
+          sessionEntities: createdEntities,
+          trackedConditionKeys: [...trackedConditionKeys],
+          cache,
+          skipLeftoverScan: true,
         });
-      } else {
-        markReminderTestRunStatus('completed');
-      }
 
-      try {
-        const leftovers = cleanupResult.leftovers || await findReminderTestLeftovers();
-        if (leftovers.total > 0 || leftovers.cleanupRequired) {
-          console.info('[ReminderTestRunner] leftover test data report (read-only)', {
-            note: leftovers.note,
-            cleanupRequired: leftovers.cleanupRequired,
-            entityTotal: leftovers.entityTotal,
-            total: leftovers.total,
-            totalReminderLeftovers: leftovers.totalReminderLeftovers,
-            openReminderLeftovers: leftovers.openReminderLeftovers,
-            remindersSummary: leftovers.remindersSummary,
-            entities: leftovers.entities,
-            openReminders: [
-              ...leftovers.remindersByStatus.active,
-              ...leftovers.remindersByStatus.snoozed,
-            ],
+        cleanup = {
+          passed: cleanupResult.passed,
+          reminders: cleanupResult.reminders,
+          entities: cleanupResult.entities,
+          skippedDueToRateLimit: cleanupResult.rateLimited,
+          cleanupStatus: cleanupResult.cleanupStatus,
+          pendingEntityIds: cleanupResult.rateLimited
+            ? [...collectEntityIds(createdEntities)]
+            : cleanupResult.entities?.pending,
+          message: cleanupResult.message,
+        };
+
+        if (!cleanup.passed) {
+          console.warn('[ReminderTestRunner] cleanup incomplete', {
+            group,
+            message: cleanupResult.message,
+            reminderFailures: cleanup.reminders?.failedIds,
+            entityFailures: cleanup.entities?.failed,
           });
         }
-      } catch (leftoverError) {
-        console.warn('[ReminderTestRunner] failed to scan leftovers', leftoverError);
       }
     } catch (error) {
       cleanup.passed = false;
+      cleanup.cleanupStatus = 'pending';
       cleanup.error = error instanceof Error ? error.message : String(error);
       console.warn('[ReminderTestRunner] cleanup threw', error);
     } finally {
-      releaseReminderIntegrationTestLock();
+      if (acquireLock) releaseReminderIntegrationTestLock();
     }
   }
 
-  const finishedAtMs = Date.now();
-  const summary = buildTestRunSummary(steps, REMINDER_INTEGRATION_TEST_DEFINITIONS, ctx.testRunLog || []);
-  console.info('[ReminderTestRunner] summary', summary);
-
-  const passed = steps.length > 0
-    && steps.every((step) => step.passed)
-    && !ctx.rateLimited
-    && errors.length === 0
-    && (cleanup.passed ?? true);
-
-  return {
-    passed,
-    skipped: false,
-    startedAt,
-    finishedAt: new Date(finishedAtMs).toISOString(),
-    durationMs: finishedAtMs - startedAtMs,
+  return buildTestRunResult({
+    group,
+    startedAtMs,
     steps,
-    summary,
+    errors,
     createdEntities,
     cleanup,
-    errors,
-    rateLimited: ctx.rateLimited,
-  };
+    ctx,
+    testDefinitions: tests,
+  });
+}
+
+export async function runReminderIntegrationTestGroup(group, options = {}) {
+  return executeReminderTestGroup(group, options);
+}
+
+export async function runReminderIntegrationTestsSlowly() {
+  if (!acquireReminderIntegrationTestLock()) {
+    return buildTestRunResult({
+      group: 'all_slow',
+      startedAtMs: Date.now(),
+      steps: [],
+      errors: [{ stage: 'lock', message: 'Reminder tests already running' }],
+      createdEntities: emptyCreatedEntities(),
+      cleanup: { passed: true, skipped: true },
+      ctx: { testRunLog: [], errors: [], rateLimited: false },
+      testDefinitions: REMINDER_INTEGRATION_TEST_DEFINITIONS,
+      skipped: true,
+      message: 'Reminder tests already running',
+    });
+  }
+
+  const startedAtMs = Date.now();
+  const combinedSteps = [];
+  const combinedErrors = [];
+  const groupResults = [];
+  const groupOrder = [TEST_GROUP.CORE, TEST_GROUP.WORKSTAGES, TEST_GROUP.INVOICE];
+
+  try {
+    for (let index = 0; index < groupOrder.length; index += 1) {
+      const group = groupOrder[index];
+      const result = await executeReminderTestGroup(group, { acquireLock: false });
+      groupResults.push(result);
+      combinedSteps.push(...result.steps);
+      combinedErrors.push(...result.errors);
+
+      if (result.rateLimited || result.status === 'aborted_rate_limited') {
+        return {
+          ...result,
+          group: 'all_slow',
+          groupResults,
+          steps: combinedSteps,
+          errors: combinedErrors,
+          message: 'Rate limit reached. Wait 2 minutes and rerun only the failed group.',
+          startedAt: new Date(startedAtMs).toISOString(),
+          durationMs: Date.now() - startedAtMs,
+        };
+      }
+
+      const cleanupResult = await cleanupPendingReminderTestData({ skipLeftoverScan: true });
+      if (cleanupResult.rateLimited) {
+        saveReminderTestRateLimitTimestamp();
+        return buildTestRunResult({
+          group: 'all_slow',
+          startedAtMs,
+          steps: combinedSteps,
+          errors: [...combinedErrors, {
+            stage: `cleanup_${group}`,
+            type: 'rate_limit',
+            message: cleanupResult.message,
+          }],
+          createdEntities: emptyCreatedEntities(),
+          cleanup: cleanupResult,
+          ctx: {
+            testRunLog: [],
+            errors: combinedErrors,
+            rateLimited: true,
+            rateLimitedAt: `cleanup_after_${group}`,
+          },
+          testDefinitions: REMINDER_INTEGRATION_TEST_DEFINITIONS,
+          message: 'Rate limit reached. Wait 2 minutes and rerun only the failed group.',
+        });
+      }
+
+      if (index < groupOrder.length - 1) {
+        await delay(RUN_ALL_SLOW_GROUP_DELAY_MS);
+      }
+    }
+  } finally {
+    releaseReminderIntegrationTestLock();
+  }
+
+  const allPassed = groupResults.every((result) => result.passed);
+  return buildTestRunResult({
+    group: 'all_slow',
+    startedAtMs,
+    steps: combinedSteps,
+    errors: combinedErrors,
+    createdEntities: emptyCreatedEntities(),
+    cleanup: { passed: allPassed, cleanupStatus: allPassed ? 'completed' : 'pending' },
+    ctx: {
+      testRunLog: groupResults.flatMap((result) => result.summary?.testsRan?.map((name) => ({ name, status: 'ran' })) || []),
+      errors: combinedErrors,
+      rateLimited: false,
+    },
+    testDefinitions: REMINDER_INTEGRATION_TEST_DEFINITIONS,
+  });
+}
+
+export async function runReminderIntegrationTests() {
+  return runReminderIntegrationTestsSlowly();
 }

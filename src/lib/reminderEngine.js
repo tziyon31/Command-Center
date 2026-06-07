@@ -280,6 +280,9 @@ const RECONCILIATION_STORAGE_KEYS = {
 };
 
 export const REMINDER_INTEGRATION_TEST_LOCK_KEY = 'reminderIntegrationTestRunning';
+export const REMINDER_TEST_CLEANUP_RUNNING_KEY = 'reminderTestCleanupRunning';
+export const REMINDER_TEST_RATE_LIMIT_AT_KEY = 'lastReminderTestRateLimitAt';
+export const REMINDER_TEST_RATE_LIMIT_COOLDOWN_MS = 2 * 60 * 1000;
 
 export function isReminderIntegrationTestRunning() {
   if (typeof globalThis === 'undefined' || !globalThis.localStorage) return false;
@@ -288,6 +291,34 @@ export function isReminderIntegrationTestRunning() {
   } catch (_error) {
     return false;
   }
+}
+
+export function isReminderTestCleanupRunning() {
+  if (typeof globalThis === 'undefined' || !globalThis.localStorage) return false;
+  try {
+    return globalThis.localStorage.getItem(REMINDER_TEST_CLEANUP_RUNNING_KEY) === 'true';
+  } catch (_error) {
+    return false;
+  }
+}
+
+export function isReminderTestRateLimitCooldownActive(now = Date.now()) {
+  if (typeof globalThis === 'undefined' || !globalThis.localStorage) return false;
+  try {
+    const raw = globalThis.localStorage.getItem(REMINDER_TEST_RATE_LIMIT_AT_KEY);
+    const timestamp = Number(raw);
+    if (!Number.isFinite(timestamp) || timestamp <= 0) return false;
+    return now - timestamp < REMINDER_TEST_RATE_LIMIT_COOLDOWN_MS;
+  } catch (_error) {
+    return false;
+  }
+}
+
+export function shouldSkipDashboardReconciliation(now = Date.now()) {
+  if (isReminderIntegrationTestRunning()) return true;
+  if (isReminderTestCleanupRunning()) return true;
+  if (isReminderTestRateLimitCooldownActive(now)) return true;
+  return false;
 }
 
 const REMINDER_PREFIXES = {
@@ -1559,6 +1590,12 @@ const countMutationsFromSummary = (result) => {
 export async function runReminderReconciliationNow(reason = 'manual') {
   const result = { reason, startedAt: nowIso(), skipped: false, skipReason: null, mutationCount: 0, maxMutationsPerRun: RECONCILIATION_MAX_MUTATIONS_PER_RUN, hasMore: false, errors: [] };
 
+  if (shouldSkipDashboardReconciliation()) {
+    result.skipped = true;
+    result.skipReason = 'test_activity_or_cooldown';
+    return result;
+  }
+
   if (!acquireReconciliationLock(reason)) { result.skipped = true; result.skipReason = 'lock_active'; return result; }
 
   const cache = {};
@@ -1677,8 +1714,13 @@ export async function runReminderReconciliationNow(reason = 'manual') {
 export function runReminderReconciliationInBackground(reason = 'dashboard_load') {
   const now = nowMs();
 
-  if (isReminderIntegrationTestRunning()) {
-    return Promise.resolve({ skipped: true, skipReason: 'integration_test_running' });
+  if (shouldSkipDashboardReconciliation(now)) {
+    const skipReason = isReminderIntegrationTestRunning()
+      ? 'integration_test_running'
+      : isReminderTestCleanupRunning()
+        ? 'test_cleanup_running'
+        : 'test_rate_limit_cooldown';
+    return Promise.resolve({ skipped: true, skipReason });
   }
 
   if (reminderReconciliationPromise) return reminderReconciliationPromise;
