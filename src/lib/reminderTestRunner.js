@@ -36,7 +36,12 @@ import {
   runInvoiceReminderRulesForInvoice,
   runWorkStageInvoiceReviewRulesForProject,
 } from '@/lib/invoiceReminderRules';
-import { buildInvoiceCollectionNote, openProjectCollectionDue } from '@/lib/projectCollectionDue';
+import {
+  buildInvoiceCollectionNote,
+  getProjectCumulativeInvoiceAmountValidation,
+  openProjectCollectionDue,
+  sumExistingProjectInvoiceAmounts,
+} from '@/lib/projectCollectionDue';
 import { serializeWorkStageIds } from '@/lib/invoiceProcessUtils';
 import {
   countActiveWorkStages,
@@ -2746,6 +2751,108 @@ async function runTest31(ctx) {
   ctx.steps.push(assertReminderExists(ctx, 'Test 31 – INV4 open in parallel after sent', inv4Key));
 }
 
+async function runTest32(ctx) {
+  const project = { id: 'test-project-fee-32', total_amount: 4000 };
+  const existingInvoices = [
+    {
+      id: 'test-invoice-existing-32',
+      project_id: project.id,
+      form_status: 'submitted',
+      amount: 3000,
+    },
+  ];
+
+  const result = getProjectCumulativeInvoiceAmountValidation({
+    project,
+    currentAmountValue: 2000,
+    projectInvoices: existingInvoices,
+    currentInvoiceId: null,
+  });
+
+  ctx.steps.push({
+    name: 'Test 32 – cumulative invoice amount exceeds project fee',
+    passed: result.exceedsProjectFee === true
+      && result.existingProjectInvoiceTotal === 3000
+      && result.currentAmount === 2000
+      && result.overBy === 1000,
+    expected: 'exceedsProjectFee=true, existingTotal=3000, currentAmount=2000, overBy=1000',
+    actual: JSON.stringify({
+      exceedsProjectFee: result.exceedsProjectFee,
+      existingProjectInvoiceTotal: result.existingProjectInvoiceTotal,
+      currentAmount: result.currentAmount,
+      overBy: result.overBy,
+    }),
+  });
+}
+
+async function runTest33(ctx) {
+  const project = { id: 'test-project-fee-33', total_amount: 4000 };
+  const invoiceId = 'test-invoice-edit-33';
+  const existingInvoices = [
+    {
+      id: invoiceId,
+      project_id: project.id,
+      form_status: 'submitted',
+      amount: 3000,
+    },
+  ];
+
+  const result = getProjectCumulativeInvoiceAmountValidation({
+    project,
+    currentAmountValue: 3500,
+    projectInvoices: existingInvoices,
+    currentInvoiceId: invoiceId,
+  });
+
+  ctx.steps.push({
+    name: 'Test 33 – editing invoice excludes current invoice from total',
+    passed: result.existingProjectInvoiceTotal === 0
+      && result.currentAmount === 3500
+      && result.exceedsProjectFee === false
+      && result.hasIssue === false,
+    expected: 'existingTotal=0, currentAmount=3500, no exceed',
+    actual: JSON.stringify({
+      existingProjectInvoiceTotal: result.existingProjectInvoiceTotal,
+      currentAmount: result.currentAmount,
+      exceedsProjectFee: result.exceedsProjectFee,
+      hasIssue: result.hasIssue,
+    }),
+  });
+}
+
+async function runTest34(ctx) {
+  const project = { id: 'test-project-fee-34', total_amount: 4000 };
+  const existingInvoices = [
+    {
+      id: 'test-invoice-cancelled-34',
+      project_id: project.id,
+      form_status: 'cancelled',
+      amount: 3000,
+    },
+  ];
+
+  const existingTotal = sumExistingProjectInvoiceAmounts(existingInvoices);
+  const result = getProjectCumulativeInvoiceAmountValidation({
+    project,
+    currentAmountValue: 2000,
+    projectInvoices: existingInvoices,
+    currentInvoiceId: null,
+  });
+
+  ctx.steps.push({
+    name: 'Test 34 – cancelled invoice ignored in project total',
+    passed: existingTotal === 0
+      && result.existingProjectInvoiceTotal === 0
+      && result.exceedsProjectFee === false,
+    expected: 'cancelled invoice not counted, no exceed for 2000',
+    actual: JSON.stringify({
+      existingTotal,
+      existingProjectInvoiceTotal: result.existingProjectInvoiceTotal,
+      exceedsProjectFee: result.exceedsProjectFee,
+    }),
+  });
+}
+
 const REMINDER_INTEGRATION_TEST_DEFINITIONS = [
   { name: 'Test 1', fn: runTest1 },
   { name: 'Test 2', fn: runTest2 },
@@ -2778,6 +2885,9 @@ const REMINDER_INTEGRATION_TEST_DEFINITIONS = [
   { name: 'Test 29', fn: runTest29 },
   { name: 'Test 30', fn: runTest30 },
   { name: 'Test 31', fn: runTest31 },
+  { name: 'Test 32', fn: runTest32 },
+  { name: 'Test 33', fn: runTest33 },
+  { name: 'Test 34', fn: runTest34 },
 ];
 
 export const REMINDER_TEST_GROUP_DEFINITIONS = {

@@ -7,7 +7,7 @@ import { buildInvoiceProcessFormPageUrl, buildProjectFeeEditPageUrl } from '@/li
 import { getGmailUrl, getPaperlessUrl } from '@/lib/invoiceExternalLinks';
 import {
   buildInvoiceCollectionNote,
-  getInvoiceAmountCollectionValidation,
+  getInvoiceProcessAmountValidation,
   openProjectCollectionDue,
 } from '@/lib/projectCollectionDue';
 import {
@@ -227,6 +227,15 @@ export default function InvoiceProcessForm() {
     refetchOnWindowFocus: true,
   });
 
+  const { data: projectInvoiceProcesses = [] } = useQuery({
+    queryKey: ['invoice-processes', 'project', formData.project_id],
+    queryFn: async () => {
+      const items = await base44.entities.InvoiceProcess.filter({ project_id: formData.project_id });
+      return items || [];
+    },
+    enabled: Boolean(formData.project_id),
+  });
+
   const selectedProject = useMemo(() => {
     if (selectedProjectRecord) return selectedProjectRecord;
     return projects.find((item) => item.id === formData.project_id) || null;
@@ -250,23 +259,31 @@ export default function InvoiceProcessForm() {
   }, [projects, formData.client_id]);
 
   const projectFeeAmount = getProjectFeeAmount(selectedProject);
-  const amountCollectionValidation = useMemo(
-    () => getInvoiceAmountCollectionValidation({
+  const amountValidation = useMemo(
+    () => getInvoiceProcessAmountValidation({
       project: selectedProject,
       amountValue: parsedInvoiceAmount,
+      projectInvoices: projectInvoiceProcesses,
+      currentInvoiceId: recordId || null,
     }),
-    [selectedProject, parsedInvoiceAmount],
+    [selectedProject, parsedInvoiceAmount, projectInvoiceProcesses, recordId],
   );
   const showEditProjectFeeButton = Boolean(
     formData.project_id
     && parsedInvoiceAmount > 0
-    && amountCollectionValidation.hasIssue,
+    && amountValidation.hasIssue,
   );
+  const canSubmitInvoice = !amountValidation.blocksSubmit;
   const canOpenCollection = (
     formData.invoice_sent_to_client === true
     && parsedInvoiceAmount > 0
-    && !amountCollectionValidation.hasIssue
+    && !amountValidation.blocksCollection
   );
+
+  const formatCurrency = (value) => {
+    const num = Number(value);
+    return new Intl.NumberFormat('he-IL').format(Number.isFinite(num) ? num : 0);
+  };
 
   const applyCalculatedAmount = (project, percentValue) => {
     const calculated = calculateAmountFromProjectPercent(project, percentValue);
@@ -417,6 +434,14 @@ export default function InvoiceProcessForm() {
       return { success: false, savedId: recordId || '' };
     }
 
+    if (asSubmit && amountValidation.blocksSubmit) {
+      return { success: false, savedId: recordId || '' };
+    }
+
+    if (!asSubmit && isSubmitted && amountValidation.blocksSubmit) {
+      return { success: false, savedId: recordId || '' };
+    }
+
     const nextStatus = asSubmit ? 'submitted' : (formStatus === 'submitted' ? 'submitted' : 'draft');
     const nextSubmittedAt = asSubmit
       ? (submittedAt || new Date().toISOString())
@@ -453,6 +478,9 @@ export default function InvoiceProcessForm() {
     if (asSubmit) setSubmittedAt(nextSubmittedAt);
 
     await queryClient.invalidateQueries({ queryKey: ['invoice-processes'] });
+    if (formData.project_id) {
+      await queryClient.invalidateQueries({ queryKey: ['invoice-processes', 'project', formData.project_id] });
+    }
     if (savedId) {
       await queryClient.invalidateQueries({ queryKey: ['invoice-process', savedId] });
     }
@@ -525,7 +553,7 @@ export default function InvoiceProcessForm() {
   };
 
   const handleSubmit = async () => {
-    if (isSubmitted) return;
+    if (isSubmitted || !canSubmitInvoice) return;
 
     setIsSubmitting(true);
     try {
@@ -842,12 +870,44 @@ export default function InvoiceProcessForm() {
                     value={formData.amount}
                     onChange={(event) => handleAmountChange(event.target.value)}
                     disabled={isBusy}
-                    aria-invalid={amountCollectionValidation.hasIssue || undefined}
+                    aria-invalid={amountValidation.hasIssue || undefined}
                   />
-                  {amountCollectionValidation.hasIssue ? (
-                    <p className="text-xs text-amber-700">
-                      {amountCollectionValidation.message}
-                    </p>
+                  {amountValidation.hasIssue ? (
+                    <div className="space-y-1 text-xs text-amber-700">
+                      <p>{amountValidation.message}</p>
+                      {!amountValidation.missingProjectFee && amountValidation.exceedsProjectFee ? (
+                        <div className="rounded-md border border-amber-200 bg-amber-50/80 p-2 text-amber-900">
+                          <p>
+                            שכ״ט פרויקט:
+                            {' '}
+                            {formatCurrency(amountValidation.projectFee)}
+                            {' '}
+                            ₪
+                          </p>
+                          <p>
+                            חשבוניות קיימות:
+                            {' '}
+                            {formatCurrency(amountValidation.existingProjectInvoiceTotal)}
+                            {' '}
+                            ₪
+                          </p>
+                          <p>
+                            חשבונית נוכחית:
+                            {' '}
+                            {formatCurrency(amountValidation.currentAmount)}
+                            {' '}
+                            ₪
+                          </p>
+                          <p>
+                            חריגה:
+                            {' '}
+                            {formatCurrency(amountValidation.overBy)}
+                            {' '}
+                            ₪
+                          </p>
+                        </div>
+                      ) : null}
+                    </div>
                   ) : null}
                   {showEditProjectFeeButton ? (
                     <Button
@@ -861,11 +921,11 @@ export default function InvoiceProcessForm() {
                       ערוך שכ״ט פרויקט
                     </Button>
                   ) : null}
-                  {formData.project_id && parsedInvoiceAmount > 0 && !amountCollectionValidation.hasIssue ? (
+                  {formData.project_id && parsedInvoiceAmount > 0 && !amountValidation.hasIssue ? (
                     <p className="text-xs text-muted-foreground">
                       יתרת גבייה זמינה:
                       {' '}
-                      {new Intl.NumberFormat('he-IL').format(amountCollectionValidation.outstandingAmount)}
+                      {formatCurrency(amountValidation.outstandingAmount)}
                       {' '}
                       ₪
                     </p>
@@ -950,7 +1010,11 @@ export default function InvoiceProcessForm() {
 
               <div className="flex flex-wrap gap-2 pt-2">
                 {isSubmitted ? (
-                  <Button type="button" onClick={handleSaveChanges} disabled={isBusy}>
+                  <Button
+                    type="button"
+                    onClick={handleSaveChanges}
+                    disabled={isBusy || amountValidation.blocksSubmit}
+                  >
                     שמור שינויים
                   </Button>
                 ) : (
@@ -958,7 +1022,7 @@ export default function InvoiceProcessForm() {
                     <Button type="button" variant="outline" onClick={handleSaveDraft} disabled={isBusy}>
                       שמור טיוטה
                     </Button>
-                    <Button type="button" onClick={handleSubmit} disabled={isBusy}>
+                    <Button type="button" onClick={handleSubmit} disabled={isBusy || !canSubmitInvoice}>
                       הגש טופס
                     </Button>
                   </>
@@ -992,8 +1056,8 @@ export default function InvoiceProcessForm() {
                         ? COLLECTION_DISABLED_HINT
                         : parsedInvoiceAmount <= 0
                           ? 'יש למלא סכום לפני פתיחת גבייה.'
-                          : amountCollectionValidation.hasIssue
-                            ? 'יש לתקן את הסכום או את שכ״ט הפרויקט לפני פתיחת גבייה.'
+                          : amountValidation.hasIssue
+                            ? amountValidation.message
                             : COLLECTION_DISABLED_HINT}
                     </p>
                   ) : null}

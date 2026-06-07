@@ -19,6 +19,92 @@ export function getProjectFeeAmount(project) {
   return toNumber(project?.total_amount);
 }
 
+export function sumExistingProjectInvoiceAmounts(
+  invoices = [],
+  { excludeInvoiceId = null } = {},
+) {
+  const excludedId = excludeInvoiceId ? String(excludeInvoiceId).trim() : '';
+
+  return (invoices || []).reduce((sum, invoice) => {
+    if (!invoice) return sum;
+    if (invoice.form_status === 'cancelled') return sum;
+    if (excludedId && String(invoice.id || '').trim() === excludedId) return sum;
+
+    const amount = toNumber(invoice.amount);
+    if (amount <= 0) return sum;
+
+    return sum + amount;
+  }, 0);
+}
+
+export function getProjectCumulativeInvoiceAmountValidation({
+  project,
+  currentAmountValue,
+  projectInvoices = [],
+  currentInvoiceId = null,
+}) {
+  const projectFee = getProjectFeeAmount(project);
+  const currentAmount = toNumber(currentAmountValue);
+  const existingProjectInvoiceTotal = sumExistingProjectInvoiceAmounts(
+    projectInvoices,
+    { excludeInvoiceId: currentInvoiceId },
+  );
+  const projectInvoiceTotalAfterCurrent = existingProjectInvoiceTotal + currentAmount;
+  const remainingBeforeCurrent = Math.max(projectFee - existingProjectInvoiceTotal, 0);
+  const overBy = Math.max(projectInvoiceTotalAfterCurrent - projectFee, 0);
+  const missingProjectFee = currentAmount > 0 && (!project?.id || projectFee <= 0);
+  const exceedsProjectFee = projectFee > 0 && projectInvoiceTotalAfterCurrent > projectFee;
+
+  let message = '';
+  if (missingProjectFee) {
+    message = 'לא הוגדר שכ״ט לפרויקט. יש לעדכן שכ״ט לפני הגשת חשבונית או פתיחת גבייה.';
+  } else if (exceedsProjectFee) {
+    message = 'סך תהליכי החשבונית לפרויקט יהיה גבוה משכ״ט הפרויקט.';
+  }
+
+  return {
+    hasIssue: missingProjectFee || exceedsProjectFee,
+    missingProjectFee,
+    exceedsProjectFee,
+    projectFee,
+    existingProjectInvoiceTotal,
+    currentAmount,
+    projectInvoiceTotalAfterCurrent,
+    remainingBeforeCurrent,
+    overBy,
+    message,
+  };
+}
+
+export function getInvoiceProcessAmountValidation({
+  project,
+  amountValue,
+  projectInvoices = [],
+  currentInvoiceId = null,
+}) {
+  const cumulative = getProjectCumulativeInvoiceAmountValidation({
+    project,
+    currentAmountValue: amountValue,
+    projectInvoices,
+    currentInvoiceId,
+  });
+  const collection = getInvoiceAmountCollectionValidation({
+    project,
+    amountValue,
+  });
+
+  const blocksSubmit = cumulative.hasIssue;
+  const blocksCollection = cumulative.hasIssue || collection.hasIssue;
+
+  return {
+    ...cumulative,
+    outstandingAmount: collection.outstandingAmount,
+    exceedsOutstanding: collection.exceedsOutstanding,
+    blocksSubmit,
+    blocksCollection,
+  };
+}
+
 export function getInvoiceAmountCollectionValidation({ project, amountValue }) {
   const amount = toNumber(amountValue);
   const outstandingAmount = getProjectOutstandingAmount(project);
