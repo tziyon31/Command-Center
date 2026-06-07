@@ -12,6 +12,8 @@ import WorkStageSortableList from '@/components/workflow/WorkStageSortableList';
 import WorkStagesProjectPicker from '@/components/workflow/WorkStagesProjectPicker';
 import {
   buildWorkStagePayloadWithStatus,
+  buildWorkStageReorderConfirmMessage,
+  findCompletedStagesInvalidatedByReorder,
   getActiveWorkStage,
   isWorkStageCompleted,
   normalizeWorkStageStatuses,
@@ -281,20 +283,43 @@ function WorkStagesProjectView({
 
   const applyReorder = async (nextStages) => {
     const nextActive = previewActiveStageAfterReorder(nextStages);
-    const activeName = nextActive?.title || '(אין שלב פעיל)';
-    const confirmed = window.confirm(
-      `הסדר החדש ישנה את השלב הפעיל ואת התזכורות.\nהשלב הפעיל החדש יהיה: ${activeName}.\nהאם לשמור את הסדר החדש?`,
-    );
+    const invalidatedStages = findCompletedStagesInvalidatedByReorder(nextStages);
+    const confirmMessage = buildWorkStageReorderConfirmMessage({
+      nextActiveStage: nextActive,
+      invalidatedStages,
+    });
+    const confirmed = window.confirm(confirmMessage);
     if (!confirmed) return;
 
     setBusyStageId('reorder');
     try {
-      for (let index = 0; index < nextStages.length; index += 1) {
-        const stage = nextStages[index];
-        if (Number(stage.order_index) !== index + 1) {
-          await base44.entities.WorkStage.update(stage.id, { order_index: index + 1 });
+      const invalidatedIds = new Set(invalidatedStages.map((stage) => stage.id));
+      const orderById = new Map(
+        nextStages.map((stage, index) => [stage.id, index + 1]),
+      );
+
+      for (const stage of workStages) {
+        const nextOrder = orderById.get(stage.id);
+        if (nextOrder === undefined) continue;
+
+        const patch = {};
+        const currentOrder = Number(stage.order_index) || 0;
+        if (currentOrder !== nextOrder) {
+          patch.order_index = nextOrder;
         }
+
+        if (invalidatedIds.has(stage.id)) {
+          patch.aaron_approved = false;
+          patch.client_approved = false;
+          patch.draftsman_approved = false;
+          patch.completed_at = '';
+        }
+
+        if (!Object.keys(patch).length) continue;
+
+        await base44.entities.WorkStage.update(stage.id, patch);
       }
+
       await handleAfterMutation();
     } catch (error) {
       console.error('[WorkStages] failed to reorder work stages', error);
