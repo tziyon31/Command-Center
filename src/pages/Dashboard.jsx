@@ -42,7 +42,7 @@ import {
   runReminderIntegrationTestGroup,
   runReminderIntegrationTestsSlowly,
   REMINDER_TEST_GROUP_DEFINITIONS,
-  REMINDER_TEST_RUN_GROUPS,
+  REMINDER_TEST_DASHBOARD_RUN_GROUPS,
   TEST_GROUP_LABELS,
 } from '@/lib/reminderTestRunner';
 import { toast } from '@/components/ui/use-toast';
@@ -304,11 +304,18 @@ export default function Dashboard() {
     }
 
     if (result.status === 'aborted_rate_limited' || result.rateLimited) {
+      const recommendation = result.summary?.recommendation
+        || result.message
+        || 'Rate limit reached. Wait 2 minutes and rerun only the failed group.';
       toast({
-        title: 'Rate limit reached. Wait 2 minutes and rerun only the failed group.',
+        title: recommendation,
         variant: 'destructive',
       });
-      setReminderCleanupPendingMessage('Cleanup pending. Run Clean Pending Test Data first.');
+      setReminderCleanupPendingMessage(
+        result.group?.startsWith('deletion')
+          ? 'Cleanup pending. Wait 2 minutes, then Clean Pending Test Data before rerunning deletion subgroups.'
+          : 'Cleanup pending. Run Clean Pending Test Data first.',
+      );
       return;
     }
 
@@ -987,7 +994,7 @@ export default function Dashboard() {
           >
             {reminderTestDropupOpen ? (
               <div className="absolute bottom-full left-0 mb-1 flex min-w-[220px] flex-col gap-1 rounded-md border bg-background p-1 shadow-lg">
-                {REMINDER_TEST_RUN_GROUPS.map((groupKey) => {
+                {REMINDER_TEST_DASHBOARD_RUN_GROUPS.map((groupKey) => {
                   const groupDefinition = REMINDER_TEST_GROUP_DEFINITIONS[groupKey];
                   if (!groupDefinition) return null;
 

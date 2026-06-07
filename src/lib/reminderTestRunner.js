@@ -23,6 +23,7 @@ import {
   getSignedProposalNeedsWorkStagesConditionKey,
   getWorkStageNeedsCheckConditionKey,
   getWorkStageTargetDateConditionKey,
+  runWorkStageActiveReminderRulesForStage,
   runWorkStageReminderRulesForProject,
   runWorkStageReminderRulesForSignedProposal,
 } from '@/lib/workStageReminderRules';
@@ -90,6 +91,9 @@ export const TEST_GROUP = {
   INVOICE: 'invoice',
   COLLECTION: 'collection',
   DELETION: 'deletion',
+  DELETION_BASIC: 'deletion_basic',
+  DELETION_REMINDER: 'deletion_reminder',
+  DELETION_SAFETY: 'deletion_safety',
 };
 
 export const TEST_GROUP_LABELS = {
@@ -98,7 +102,64 @@ export const TEST_GROUP_LABELS = {
   [TEST_GROUP.INVOICE]: 'Invoice Tests',
   [TEST_GROUP.COLLECTION]: 'Collection Tests',
   [TEST_GROUP.DELETION]: 'Deletion Tests',
+  [TEST_GROUP.DELETION_BASIC]: 'Deletion Basic Tests',
+  [TEST_GROUP.DELETION_REMINDER]: 'Deletion E4 Only',
+  [TEST_GROUP.DELETION_SAFETY]: 'Deletion E5 Only',
 };
+
+const DELETION_TEST_SHORT_LABELS = {
+  'Test 40': 'E1',
+  'Test 41': 'E2',
+  'Test 42': 'E3',
+  'Test 43': 'E4',
+  'Test 44': 'E5',
+};
+
+function isDeletionTestGroup(group) {
+  return group === TEST_GROUP.DELETION
+    || group === TEST_GROUP.DELETION_BASIC
+    || group === TEST_GROUP.DELETION_REMINDER
+    || group === TEST_GROUP.DELETION_SAFETY;
+}
+
+function isLightweightDeletionTestGroup(group) {
+  return group === TEST_GROUP.DELETION_REMINDER
+    || group === TEST_GROUP.DELETION_SAFETY;
+}
+
+function buildDeletionNotCompleted(testDefinitions = [], testsRan = []) {
+  const ran = new Set(testsRan);
+  return testDefinitions
+    .filter((test) => !ran.has(test.name))
+    .map((test) => DELETION_TEST_SHORT_LABELS[test.name] || test.name);
+}
+
+function buildDeletionRateLimitRecommendation(group, summary) {
+  if (!summary.abortedBecauseRateLimit) return '';
+
+  const notCompleted = summary.notCompleted || [];
+
+  if (group === TEST_GROUP.DELETION) {
+    if (notCompleted.includes('E4') || notCompleted.includes('E5')) {
+      return 'Wait 2 minutes and run Deletion E4 Only, then E5 Only.';
+    }
+    return 'Wait 2 minutes and rerun only the failed deletion subgroup.';
+  }
+
+  if (group === TEST_GROUP.DELETION_BASIC) {
+    return 'Wait 2 minutes and run Deletion E4 Only, then E5 Only.';
+  }
+
+  if (group === TEST_GROUP.DELETION_REMINDER) {
+    return 'Wait 2 minutes and rerun Deletion E4 Only, then run E5 Only.';
+  }
+
+  if (group === TEST_GROUP.DELETION_SAFETY) {
+    return 'Wait 2 minutes and rerun Deletion E5 Only.';
+  }
+
+  return 'Wait 2 minutes and rerun only the failed group.';
+}
 
 const OPEN_STATUSES = new Set([REMINDER_STATUS.ACTIVE, REMINDER_STATUS.SNOOZED]);
 const MAX_CLEANUP_MUTATIONS_PER_BATCH = 2;
@@ -3273,22 +3334,69 @@ async function runTest43(ctx) {
   const stage = await createTestWorkStageForProject(ctx, project, client, {
     title: `${TEST_REMINDER_FLOW_PREFIX} E4 stage`,
     status: 'active',
+    client_name: client.name,
+  });
+  const invoice = await createTestInvoiceProcess(ctx, ctx.createdEntities, {
+    project_id: project.id,
+    project_name: project.name,
+    client_id: client.id,
+    client_name: client.name,
+    form_status: 'submitted',
+    submitted_at: new Date().toISOString(),
+    invoice_created_in_paperless: true,
+    invoice_sent_to_client: true,
+    amount: 1000,
   });
 
   const ws1Key = getWorkStageNeedsCheckConditionKey(stage.id);
-  await runWorkStageProjectRules(ctx, project.id, 'test43_before_delete');
-  ctx.steps.push(assertReminderExists(ctx, 'Test 43 – Deletion E4: WS1 active before cascade', ws1Key));
+  const inv4Key = getInvoiceNeedsCollectionConditionKey(invoice.id);
+
+  trackConditionKey(ctx, ws1Key);
+  trackConditionKey(ctx, inv4Key);
+
+  await safeRequest(ctx, 'test43_ws1_only', () => runWorkStageActiveReminderRulesForStage(stage, ctx.cache, {
+    activeStageId: stage.id,
+  }));
+  await safeRequest(ctx, 'test43_inv4_only', () => runInvoiceReminderRulesForInvoice(invoice, ctx.cache));
+
+  const ws1Before = await safeRequest(ctx, 'fetch_ws1_before_e4', () => findReminderByConditionKey(ws1Key));
+  const inv4Before = await safeRequest(ctx, 'fetch_inv4_before_e4', () => findReminderByConditionKey(inv4Key));
+  const isOpen = (reminder) => (
+    reminder?.status === REMINDER_STATUS.ACTIVE || reminder?.status === REMINDER_STATUS.SNOOZED
+  );
+
+  ctx.steps.push({
+    name: 'Test 43 – Deletion E4: WS1 active before cascade',
+    passed: isOpen(ws1Before),
+    expected: 'open reminder (active or snoozed)',
+    actual: ws1Before?.status || 'not found',
+  });
+  ctx.steps.push({
+    name: 'Test 43 – Deletion E4: INV4 active before cascade',
+    passed: isOpen(inv4Before),
+    expected: 'open reminder (active or snoozed)',
+    actual: inv4Before?.status || 'not found',
+  });
 
   await safeRequest(ctx, 'cascade_delete_e4', () => deleteProjectCascade(project.id));
 
-  const reminder = await safeRequest(ctx, 'fetch_ws1_e4', () => findReminderByConditionKey(ws1Key));
-  const closed = reminder?.status === REMINDER_STATUS.RESOLVED || reminder?.status === REMINDER_STATUS.CANCELLED;
+  const ws1After = await safeRequest(ctx, 'fetch_ws1_e4', () => findReminderByConditionKey(ws1Key));
+  const inv4After = await safeRequest(ctx, 'fetch_inv4_e4', () => findReminderByConditionKey(inv4Key));
+  const isClosed = (reminder) => (
+    reminder?.status === REMINDER_STATUS.RESOLVED || reminder?.status === REMINDER_STATUS.CANCELLED
+  );
 
   ctx.steps.push({
-    name: 'Test 43 – Deletion E4: related reminder closed after cascade',
-    passed: closed,
+    name: 'Test 43 – Deletion E4: WS1 closed after cascade',
+    passed: isClosed(ws1After),
     expected: 'resolved or cancelled',
-    actual: reminder?.status || 'missing',
+    actual: ws1After?.status || 'missing',
+  });
+  ctx.steps.push({
+    name: 'Test 43 – Deletion E4: INV4 closed after cascade',
+    passed: isClosed(inv4After),
+    expected: 'resolved or cancelled',
+    actual: inv4After?.status || 'missing',
   });
 }
 
@@ -3399,6 +3507,21 @@ export const REMINDER_TEST_GROUP_DEFINITIONS = {
     label: TEST_GROUP_LABELS[TEST_GROUP.DELETION],
     tests: REMINDER_INTEGRATION_TEST_DEFINITIONS.slice(39),
   },
+  [TEST_GROUP.DELETION_BASIC]: {
+    key: TEST_GROUP.DELETION_BASIC,
+    label: TEST_GROUP_LABELS[TEST_GROUP.DELETION_BASIC],
+    tests: REMINDER_INTEGRATION_TEST_DEFINITIONS.slice(39, 42),
+  },
+  [TEST_GROUP.DELETION_REMINDER]: {
+    key: TEST_GROUP.DELETION_REMINDER,
+    label: TEST_GROUP_LABELS[TEST_GROUP.DELETION_REMINDER],
+    tests: REMINDER_INTEGRATION_TEST_DEFINITIONS.slice(42, 43),
+  },
+  [TEST_GROUP.DELETION_SAFETY]: {
+    key: TEST_GROUP.DELETION_SAFETY,
+    label: TEST_GROUP_LABELS[TEST_GROUP.DELETION_SAFETY],
+    tests: REMINDER_INTEGRATION_TEST_DEFINITIONS.slice(43),
+  },
 };
 
 /** Groups included in Run All Slowly (Deletion excluded to reduce 429 risk). */
@@ -3409,12 +3532,24 @@ export const REMINDER_TEST_RUN_GROUPS_SLOW = [
   TEST_GROUP.COLLECTION,
 ];
 
-export const REMINDER_TEST_RUN_GROUPS = [
-  ...REMINDER_TEST_RUN_GROUPS_SLOW,
+/** Primary workflow groups shown first in the test dropup. */
+export const REMINDER_TEST_RUN_GROUPS = [...REMINDER_TEST_RUN_GROUPS_SLOW];
+
+/** Deletion groups — run separately to avoid rate limits. */
+export const REMINDER_TEST_DELETION_RUN_GROUPS = [
   TEST_GROUP.DELETION,
+  TEST_GROUP.DELETION_BASIC,
+  TEST_GROUP.DELETION_REMINDER,
+  TEST_GROUP.DELETION_SAFETY,
 ];
 
-function buildTestRunSummary(steps, testDefinitions, ctx = {}) {
+/** All runnable groups for Dashboard dropup. */
+export const REMINDER_TEST_DASHBOARD_RUN_GROUPS = [
+  ...REMINDER_TEST_RUN_GROUPS,
+  ...REMINDER_TEST_DELETION_RUN_GROUPS,
+];
+
+function buildTestRunSummary(steps, testDefinitions, ctx = {}, group = '') {
   const testRunLog = ctx.testRunLog || [];
   const passedSteps = steps.filter((step) => step.passed).length;
   const failedAssertions = steps.filter((step) => !step.passed).length;
@@ -3432,22 +3567,37 @@ function buildTestRunSummary(steps, testDefinitions, ctx = {}) {
     .map((entry) => entry.name);
 
   const runtimeErrors = (ctx.errors || []).filter((item) => item.type !== 'rate_limit');
+  const testsRan = testRunLog.filter((entry) => entry.status === 'ran').map((entry) => entry.name);
+  const notCompleted = isDeletionTestGroup(group)
+    ? buildDeletionNotCompleted(testDefinitions, testsRan)
+    : testDefinitions
+      .filter((test) => !testsRan.includes(test.name) && !skippedDueToRateLimit.includes(test.name))
+      .map((test) => test.name);
 
-  return {
+  const summary = {
     totalSteps: steps.length,
     passedSteps,
     failedSteps: failedAssertions,
     failedAssertions,
+    businessFailures: failedAssertions,
     runtimeErrors: runtimeErrors.length,
     skippedDueToRateLimit,
     abortedBecauseRateLimit: Boolean(ctx.rateLimited),
     rateLimitedAt: ctx.rateLimitedAt || null,
     testNames: testDefinitions.map((test) => test.name),
     testsWithSteps: Object.keys(stepsByTest),
-    testsRan: testRunLog.filter((entry) => entry.status === 'ran').map((entry) => entry.name),
+    testsRan,
     testsSkipped: skippedDueToRateLimit,
     testsErrored: testRunLog.filter((entry) => entry.status === 'error').map((entry) => entry.name),
+    notCompleted,
+    recommendation: '',
   };
+
+  if (isDeletionTestGroup(group)) {
+    summary.recommendation = buildDeletionRateLimitRecommendation(group, summary);
+  }
+
+  return summary;
 }
 
 function buildTestRunResult({
@@ -3463,7 +3613,7 @@ function buildTestRunResult({
   message = '',
 }) {
   const finishedAtMs = Date.now();
-  const summary = buildTestRunSummary(steps, testDefinitions, ctx);
+  const summary = buildTestRunSummary(steps, testDefinitions, ctx, group);
   const hasFailedAssertions = summary.failedAssertions > 0;
   const abortedBecauseRateLimit = Boolean(ctx.rateLimited);
 
@@ -3473,6 +3623,13 @@ function buildTestRunResult({
   else if (hasFailedAssertions || summary.runtimeErrors > 0) status = 'failed';
 
   const passed = status === 'passed';
+  const resolvedMessage = message || (
+    abortedBecauseRateLimit && isDeletionTestGroup(group)
+      ? summary.recommendation
+      : abortedBecauseRateLimit
+        ? 'Rate limit reached. Wait 2 minutes and rerun only the failed group.'
+        : ''
+  );
 
   console.info('[ReminderTestRunner] summary', { group, status, ...summary });
 
@@ -3481,7 +3638,7 @@ function buildTestRunResult({
     status,
     group,
     skipped,
-    message,
+    message: resolvedMessage,
     startedAt: new Date(startedAtMs).toISOString(),
     finishedAt: new Date(finishedAtMs).toISOString(),
     durationMs: finishedAtMs - startedAtMs,
@@ -3548,9 +3705,12 @@ async function executeReminderTestGroup(group, options = {}) {
   };
 
   const tests = groupDefinition.tests;
+  const lightweightDeletionGroup = isLightweightDeletionTestGroup(group);
 
   try {
-    await safeRequest(ctx, 'initial_cache_load', () => loadReminderEngineCache(cache));
+    if (!lightweightDeletionGroup) {
+      await safeRequest(ctx, 'initial_cache_load', () => loadReminderEngineCache(cache));
+    }
     initializeTestRunnerCache(cache);
 
     if (group === TEST_GROUP.INVOICE || group === TEST_GROUP.COLLECTION) {
@@ -3614,10 +3774,14 @@ async function executeReminderTestGroup(group, options = {}) {
           skippedDueToRateLimit: true,
           cleanupStatus: 'pending',
           pendingEntityIds: [...collectEntityIds(createdEntities)],
-          message: 'Rate limit reached. Cleanup paused. Wait 2 minutes and press Clean Pending Test Data.',
+          message: isDeletionTestGroup(group)
+            ? 'Rate limit reached. Wait 2 minutes and rerun only the failed deletion subgroup.'
+            : 'Rate limit reached. Cleanup paused. Wait 2 minutes and press Clean Pending Test Data.',
         };
       } else {
-        await refreshReminderSnapshot(ctx, 'pre_cleanup');
+        if (!lightweightDeletionGroup) {
+          await refreshReminderSnapshot(ctx, 'pre_cleanup');
+        }
 
         const cleanupResult = await cleanupPendingReminderTestData({
           sessionEntities: createdEntities,
@@ -3679,6 +3843,18 @@ export async function runCollectionReminderIntegrationTests(options = {}) {
 
 export async function runDeletionReminderIntegrationTests(options = {}) {
   return runReminderIntegrationTestGroup(TEST_GROUP.DELETION, options);
+}
+
+export async function runDeletionBasicIntegrationTests(options = {}) {
+  return runReminderIntegrationTestGroup(TEST_GROUP.DELETION_BASIC, options);
+}
+
+export async function runDeletionReminderOnlyIntegrationTests(options = {}) {
+  return runReminderIntegrationTestGroup(TEST_GROUP.DELETION_REMINDER, options);
+}
+
+export async function runDeletionSafetyIntegrationTests(options = {}) {
+  return runReminderIntegrationTestGroup(TEST_GROUP.DELETION_SAFETY, options);
 }
 
 export async function runReminderIntegrationTestsSlowly() {
