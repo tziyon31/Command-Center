@@ -1,0 +1,97 @@
+{
+  "name": "CollectionDue",
+  "type": "object",
+  "properties": {
+    "invoice_process_id": {
+      "type": "string",
+      "description": "\u05e7\u05d9\u05e9\u05d5\u05e8 \u05dc\u05ea\u05d4\u05dc\u05d9\u05da \u05d4\u05d7\u05e9\u05d1\u05d5\u05e0\u05d9\u05ea \u05e9\u05de\u05de\u05e0\u05d5 \u05e0\u05e4\u05ea\u05d7\u05d4 \u05d4\u05d2\u05d1\u05d9\u05d9\u05d4"
+    },
+    "invoice_reference": {
+      "type": "string",
+      "description": "\u05de\u05e1\u05e4\u05e8 \u05d7\u05e9\u05d1\u05d5\u05e0\u05d9\u05ea / \u05d0\u05e1\u05de\u05db\u05ea\u05d0 \u05de-Paperless"
+    },
+    "project_id": {
+      "type": "string",
+      "description": "\u05de\u05d6\u05d4\u05d4 \u05e4\u05e8\u05d5\u05d9\u05e7\u05d8"
+    },
+    "project_name": {
+      "type": "string",
+      "description": "\u05e9\u05dd \u05d4\u05e4\u05e8\u05d5\u05d9\u05e7\u05d8"
+    },
+    "client_id": {
+      "type": "string",
+      "description": "\u05de\u05d6\u05d4\u05d4 \u05dc\u05e7\u05d5\u05d7"
+    },
+    "client_name": {
+      "type": "string",
+      "description": "\u05e9\u05dd \u05d4\u05dc\u05e7\u05d5\u05d7"
+    },
+    "amount_due": {
+      "type": "number",
+      "default": 0,
+      "description": "\u05e1\u05db\u05d5\u05dd \u05dc\u05d2\u05d1\u05d9\u05d9\u05d4"
+    },
+    "amount_paid": {
+      "type": "number",
+      "default": 0,
+      "description": "\u05e1\u05db\u05d5\u05dd \u05e9\u05e9\u05d5\u05dc\u05dd"
+    },
+    "remaining_amount": {
+      "type": "number",
+      "default": 0,
+      "description": "\u05d9\u05ea\u05e8\u05d4 \u05dc\u05ea\u05e9\u05dc\u05d5\u05dd"
+    },
+    "due_date": {
+      "type": "string",
+      "description": "\u05ea\u05d0\u05e8\u05d9\u05da \u05d9\u05e2\u05d3 \u05dc\u05ea\u05e9\u05dc\u05d5\u05dd (ISO date string)"
+    },
+    "opened_at": {
+      "type": "string",
+      "description": "\u05de\u05ea\u05d9 \u05e0\u05e4\u05ea\u05d7\u05d4 \u05d4\u05d2\u05d1\u05d9\u05d9\u05d4 (ISO datetime string)"
+    },
+    "paid_at": {
+      "type": "string",
+      "description": "\u05de\u05ea\u05d9 \u05e9\u05d5\u05dc\u05de\u05d4 \u05d4\u05d2\u05d1\u05d9\u05d9\u05d4 \u05d1\u05de\u05dc\u05d5\u05d0\u05d4 (ISO datetime string)"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "open",
+        "partially_paid",
+        "paid",
+        "cancelled"
+      ],
+      "default": "open",
+      "description": "\u05e1\u05d8\u05d8\u05d5\u05e1 \u05d4\u05d2\u05d1\u05d9\u05d9\u05d4"
+    },
+    "source_type": {
+      "type": "string",
+      "description": "\u05de\u05e7\u05d5\u05e8 \u05d4\u05d2\u05d1\u05d9\u05d9\u05d4: invoice_process / manual / legacy"
+    },
+    "work_stage_ids": {
+      "type": "string",
+      "description": "JSON string or comma-separated ids of related WorkStages, optional"
+    },
+    "work_stage_titles": {
+      "type": "string",
+      "description": "\u05db\u05d5\u05ea\u05e8\u05d5\u05ea \u05e9\u05dc\u05d1\u05d9 \u05d4\u05e2\u05d1\u05d5\u05d3\u05d4 \u05d4\u05e7\u05e9\u05d5\u05e8\u05d9\u05dd"
+    },
+    "notes": {
+      "type": "string",
+      "description": "\u05d4\u05e2\u05e8\u05d5\u05ea"
+    },
+    "form_status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "submitted",
+        "cancelled"
+      ],
+      "default": "submitted",
+      "description": "\u05de\u05e6\u05d1 \u05de\u05d9\u05dc\u05d5\u05d9 \u05d8\u05d5\u05e4\u05e1"
+    }
+  },
+  "required": [
+    "project_id"
+  ]
+}
