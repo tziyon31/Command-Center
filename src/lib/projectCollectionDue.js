@@ -15,6 +15,58 @@ export function getProjectOutstandingAmount(project) {
   return Math.max(totalAmount - collectedAmount, 0);
 }
 
+export function getProjectFeeAmount(project) {
+  return toNumber(project?.total_amount);
+}
+
+export function getInvoiceAmountCollectionValidation({ project, amountValue }) {
+  const amount = toNumber(amountValue);
+  const outstandingAmount = getProjectOutstandingAmount(project);
+  const projectFee = getProjectFeeAmount(project);
+
+  if (amount <= 0) {
+    return {
+      hasIssue: false,
+      missingProjectFee: false,
+      exceedsOutstanding: false,
+      message: '',
+      outstandingAmount,
+      projectFee,
+    };
+  }
+
+  if (!project?.id || projectFee <= 0) {
+    return {
+      hasIssue: true,
+      missingProjectFee: true,
+      exceedsOutstanding: false,
+      message: 'לא הוגדר שכ״ט לפרויקט. יש לעדכן שכ״ט פרויקט לפני פתיחת גבייה.',
+      outstandingAmount,
+      projectFee,
+    };
+  }
+
+  if (amount > outstandingAmount) {
+    return {
+      hasIssue: true,
+      missingProjectFee: false,
+      exceedsOutstanding: true,
+      message: 'סכום החשבונית גבוה מיתרת הגבייה / שכ״ט הפרויקט. יש לעדכן את שכ״ט הפרויקט או להקטין את הסכום.',
+      outstandingAmount,
+      projectFee,
+    };
+  }
+
+  return {
+    hasIssue: false,
+    missingProjectFee: false,
+    exceedsOutstanding: false,
+    message: '',
+    outstandingAmount,
+    projectFee,
+  };
+}
+
 export function buildInvoiceCollectionNote({
   invoiceReference = '',
   workStageTitles = '',

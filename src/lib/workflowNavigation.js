@@ -89,6 +89,13 @@ export const buildClientFormPageUrl = ({ name, sourceInquiryId }) => {
   return createPageUrl(queryString ? `ClientForm?${queryString}` : 'ClientForm');
 };
 
+export const buildProjectFeeEditPageUrl = (projectId) => {
+  const query = new URLSearchParams();
+  if (projectId) query.set('id', projectId);
+  query.set('edit', 'fee');
+  return createPageUrl(`ProjectDetails?${query.toString()}`);
+};
+
 export const buildInvoiceProcessFormPageUrl = ({
   invoiceProcessId,
   projectId,

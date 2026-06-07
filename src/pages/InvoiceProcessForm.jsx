@@ -3,10 +3,11 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
 import { createPageUrl } from '@/utils';
-import { buildInvoiceProcessFormPageUrl } from '@/lib/workflowNavigation';
+import { buildInvoiceProcessFormPageUrl, buildProjectFeeEditPageUrl } from '@/lib/workflowNavigation';
 import { getGmailUrl, getPaperlessUrl } from '@/lib/invoiceExternalLinks';
 import {
   buildInvoiceCollectionNote,
+  getInvoiceAmountCollectionValidation,
   openProjectCollectionDue,
 } from '@/lib/projectCollectionDue';
 import {
@@ -162,7 +163,12 @@ export default function InvoiceProcessForm() {
   const isEditMode = Boolean(recordId);
   const isSubmitted = formStatus === 'submitted';
   const isBusy = isSaving || isSubmitting || isSubmittingCollection || isDeleting;
-  const canOpenCollection = formData.invoice_sent_to_client === true;
+
+  const parsedInvoiceAmount = useMemo(() => {
+    const amountValue = String(formData.amount || '').trim();
+    const parsed = amountValue === '' ? 0 : Number(amountValue);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }, [formData.amount]);
 
   const { data: record, isLoading: isLoadingRecord } = useQuery({
     queryKey: ['invoice-process', recordId],
@@ -203,10 +209,20 @@ export default function InvoiceProcessForm() {
     enabled: !isEditMode && Boolean(prefill.project_id) && !prefillApplied,
   });
 
-  const selectedProject = useMemo(
-    () => projects.find((item) => item.id === formData.project_id) || null,
-    [projects, formData.project_id],
-  );
+  const { data: selectedProjectRecord } = useQuery({
+    queryKey: ['project', formData.project_id],
+    queryFn: async () => {
+      const results = await base44.entities.Project.filter({ id: formData.project_id });
+      return results?.[0] || null;
+    },
+    enabled: Boolean(formData.project_id),
+    refetchOnWindowFocus: true,
+  });
+
+  const selectedProject = useMemo(() => {
+    if (selectedProjectRecord) return selectedProjectRecord;
+    return projects.find((item) => item.id === formData.project_id) || null;
+  }, [selectedProjectRecord, projects, formData.project_id]);
 
   const eligibleStages = useMemo(
     () => workStages.filter((stage) => isWorkStageEligibleForInvoice(stage)),
@@ -226,10 +242,22 @@ export default function InvoiceProcessForm() {
   }, [projects, formData.client_id]);
 
   const projectFeeAmount = getProjectFeeAmount(selectedProject);
-  const showMissingProjectFeeWarning = (
-    Boolean(String(formData.project_percent || '').trim())
-    && Boolean(formData.project_id)
-    && projectFeeAmount <= 0
+  const amountCollectionValidation = useMemo(
+    () => getInvoiceAmountCollectionValidation({
+      project: selectedProject,
+      amountValue: parsedInvoiceAmount,
+    }),
+    [selectedProject, parsedInvoiceAmount],
+  );
+  const showEditProjectFeeButton = Boolean(
+    formData.project_id
+    && parsedInvoiceAmount > 0
+    && amountCollectionValidation.hasIssue,
+  );
+  const canOpenCollection = (
+    formData.invoice_sent_to_client === true
+    && parsedInvoiceAmount > 0
+    && !amountCollectionValidation.hasIssue
   );
 
   const applyCalculatedAmount = (project, percentValue) => {
@@ -454,16 +482,7 @@ export default function InvoiceProcessForm() {
   const handleSubmitAndOpenCollection = async () => {
     if (!canOpenCollection) return;
 
-    const amount = Number(String(formData.amount || '').trim());
-    if (!Number.isFinite(amount) || amount <= 0) {
-      alert('יש למלא סכום לפני פתיחת גבייה.');
-      return;
-    }
-
-    if (!formData.project_id) {
-      alert('יש לבחור פרויקט לפני פתיחת גבייה.');
-      return;
-    }
+    if (!formData.project_id) return;
 
     setIsSubmittingCollection(true);
 
@@ -472,12 +491,14 @@ export default function InvoiceProcessForm() {
       if (!saved) return;
 
       const projectResults = await base44.entities.Project.filter({ id: formData.project_id });
-      const project = projectResults?.[0];
+      const project = projectResults?.[0] || selectedProject;
 
       if (!project) {
-        alert('לא נמצאה זרימת גבייה קיימת לפתיחה אוטומטית.');
+        console.error('[InvoiceProcessForm] project not found for collection');
         return;
       }
+
+      const amount = parsedInvoiceAmount;
 
       const stageFields = buildWorkStagePersistenceFields(
         formData.invoice_scope,
@@ -499,13 +520,7 @@ export default function InvoiceProcessForm() {
           updateProject: (id, payload) => base44.entities.Project.update(id, payload),
         });
       } catch (error) {
-        if (error?.message === 'AMOUNT_EXCEEDS_OUTSTANDING') {
-          alert('הסכום לגבייה לא יכול להיות גדול מיתרת הגבייה הכוללת של הפרויקט');
-          return;
-        }
-
         console.error('[InvoiceProcessForm] open collection failed', error);
-        alert('לא נמצאה זרימת גבייה קיימת לפתיחה אוטומטית.');
         return;
       }
 
@@ -662,9 +677,11 @@ export default function InvoiceProcessForm() {
                     placeholder="לדוגמה: 70"
                   />
                   <p className="text-xs text-muted-foreground">מחושב לפי שכ״ט הפרויקט</p>
-                  {showMissingProjectFeeWarning ? (
-                    <p className="text-xs text-amber-700">לא נמצא סכום פרויקט לחישוב אוטומטי.</p>
-                  ) : null}
+                  {Boolean(String(formData.project_percent || '').trim())
+                    && Boolean(formData.project_id)
+                    && projectFeeAmount <= 0 ? (
+                      <p className="text-xs text-amber-700">לא נמצא סכום פרויקט לחישוב אוטומטי.</p>
+                    ) : null}
                   {projectFeeAmount > 0 ? (
                     <p className="text-xs text-muted-foreground">
                       שכ״ט פרויקט:
@@ -753,7 +770,29 @@ export default function InvoiceProcessForm() {
                     value={formData.amount}
                     onChange={(event) => handleAmountChange(event.target.value)}
                     disabled={isBusy}
+                    aria-invalid={amountCollectionValidation.hasIssue || undefined}
                   />
+                  {amountCollectionValidation.hasIssue ? (
+                    <p className="text-xs text-amber-700">
+                      {amountCollectionValidation.message}
+                    </p>
+                  ) : null}
+                  {showEditProjectFeeButton ? (
+                    <Button asChild type="button" variant="outline" size="sm" className="h-7 text-xs">
+                      <Link to={buildProjectFeeEditPageUrl(formData.project_id)}>
+                        ערוך שכ״ט פרויקט
+                      </Link>
+                    </Button>
+                  ) : null}
+                  {formData.project_id && parsedInvoiceAmount > 0 && !amountCollectionValidation.hasIssue ? (
+                    <p className="text-xs text-muted-foreground">
+                      יתרת גבייה זמינה:
+                      {' '}
+                      {new Intl.NumberFormat('he-IL').format(amountCollectionValidation.outstandingAmount)}
+                      {' '}
+                      ₪
+                    </p>
+                  ) : null}
                   <div className="flex flex-wrap items-center gap-2 pt-1">
                     {paperlessUrl ? (
                       <Button asChild type="button" variant="outline" size="sm" className="h-7 text-xs gap-1">
@@ -871,7 +910,15 @@ export default function InvoiceProcessForm() {
                     הגש טופס ופתח גבייה
                   </Button>
                   {!canOpenCollection ? (
-                    <p className="text-xs text-muted-foreground">{COLLECTION_DISABLED_HINT}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {!formData.invoice_sent_to_client
+                        ? COLLECTION_DISABLED_HINT
+                        : parsedInvoiceAmount <= 0
+                          ? 'יש למלא סכום לפני פתיחת גבייה.'
+                          : amountCollectionValidation.hasIssue
+                            ? 'יש לתקן את הסכום או את שכ״ט הפרויקט לפני פתיחת גבייה.'
+                            : COLLECTION_DISABLED_HINT}
+                    </p>
                   ) : null}
                 </div>
               </div>

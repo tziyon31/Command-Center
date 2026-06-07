@@ -186,6 +186,8 @@ export default function ProjectDetails() {
   const location = useLocation();
   const params = new URLSearchParams(location.search);
   const projectId = params.get('id');
+  const editFocus = params.get('edit') || params.get('focus') || '';
+  const shouldOpenFeeEdit = editFocus === 'fee';
   const createFormStatus = params.get('form_status') || 'draft';
   const isCreateMode = !projectId && hasProjectCreatePrefill(params);
   const [clientNameHint] = useState(() => readSearchParam(params, 'client_name'));
@@ -252,6 +254,23 @@ export default function ProjectDetails() {
     if (!isEditDialogOpen || !project) return;
     setEditFormData(projectToFormData(project));
   }, [isEditDialogOpen, project]);
+
+  useEffect(() => {
+    if (!project || !shouldOpenFeeEdit) return;
+    setIsEditDialogOpen(true);
+  }, [project, shouldOpenFeeEdit]);
+
+  useEffect(() => {
+    if (!isEditDialogOpen || !shouldOpenFeeEdit || !editFormData) return;
+
+    const timer = window.setTimeout(() => {
+      const feeInput = document.getElementById('project-fee-amount');
+      feeInput?.focus();
+      feeInput?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 150);
+
+    return () => window.clearTimeout(timer);
+  }, [isEditDialogOpen, shouldOpenFeeEdit, editFormData]);
 
   useEffect(() => {
     if (!isCollectionDialogOpen || !project) return;
@@ -1123,8 +1142,9 @@ export default function ProjectDetails() {
                     </Select>
                   </div>
                   <div className="space-y-2">
-                    <Label>שכ&quot;ט ₪</Label>
+                    <Label htmlFor="project-fee-amount">שכ&quot;ט ₪</Label>
                     <Input
+                      id="project-fee-amount"
                       type="number"
                       value={editFormData.total_amount}
                       onChange={(e) => setEditFormData({
