@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
 import { createPageUrl } from '@/utils';
@@ -138,6 +138,7 @@ const buildPayload = ({
 
 export default function InvoiceProcessForm() {
   const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
   const [{ id: initialId, prefill }] = useState(readSearchParams);
   const paperlessUrl = getPaperlessUrl();
@@ -159,10 +160,11 @@ export default function InvoiceProcessForm() {
   const [isSubmittingCollection, setIsSubmittingCollection] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [prefillApplied, setPrefillApplied] = useState(false);
+  const [isNavigatingToFeeEdit, setIsNavigatingToFeeEdit] = useState(false);
 
   const isEditMode = Boolean(recordId);
   const isSubmitted = formStatus === 'submitted';
-  const isBusy = isSaving || isSubmitting || isSubmittingCollection || isDeleting;
+  const isBusy = isSaving || isSubmitting || isSubmittingCollection || isDeleting || isNavigatingToFeeEdit;
 
   const parsedInvoiceAmount = useMemo(() => {
     const amountValue = String(formData.amount || '').trim();
@@ -387,7 +389,7 @@ export default function InvoiceProcessForm() {
 
     if (validationError) {
       alert(validationError);
-      return false;
+      return { success: false, savedId: recordId || '' };
     }
 
     const nextStatus = asSubmit ? 'submitted' : (formStatus === 'submitted' ? 'submitted' : 'draft');
@@ -430,7 +432,36 @@ export default function InvoiceProcessForm() {
       await queryClient.invalidateQueries({ queryKey: ['invoice-process', savedId] });
     }
 
-    return true;
+    return { success: Boolean(savedId), savedId: savedId || '' };
+  };
+
+  const handleEditProjectFee = async () => {
+    if (!formData.project_id || isNavigatingToFeeEdit) return;
+
+    setIsNavigatingToFeeEdit(true);
+
+    try {
+      let returnPath = `${location.pathname}${location.search}`;
+
+      if (!recordId) {
+        const saved = await persistRecord({ asSubmit: false });
+        if (!saved.success) return;
+
+        if (saved.savedId) {
+          returnPath = buildInvoiceProcessFormPageUrl({ invoiceProcessId: saved.savedId });
+        }
+      }
+
+      navigate(buildProjectFeeEditPageUrl({
+        projectId: formData.project_id,
+        returnTo: returnPath,
+      }));
+    } catch (error) {
+      console.error('[InvoiceProcessForm] failed to open project fee edit', error);
+      alert('לא הצלחנו לפתוח עריכת שכ״ט פרויקט');
+    } finally {
+      setIsNavigatingToFeeEdit(false);
+    }
   };
 
   const handleSaveDraft = async () => {
@@ -442,7 +473,7 @@ export default function InvoiceProcessForm() {
     setIsSaving(true);
     try {
       const saved = await persistRecord({ asSubmit: false });
-      if (saved) alert('הטיוטה נשמרה');
+      if (saved.success) alert('הטיוטה נשמרה');
     } catch (error) {
       console.error('[InvoiceProcessForm] save draft failed', error);
       alert('לא הצלחנו לשמור את הטיוטה');
@@ -455,7 +486,7 @@ export default function InvoiceProcessForm() {
     setIsSaving(true);
     try {
       const saved = await persistRecord({ asSubmit: false });
-      if (saved) alert('השינויים נשמרו');
+      if (saved.success) alert('השינויים נשמרו');
     } catch (error) {
       console.error('[InvoiceProcessForm] save changes failed', error);
       alert('לא הצלחנו לשמור את השינויים');
@@ -470,7 +501,7 @@ export default function InvoiceProcessForm() {
     setIsSubmitting(true);
     try {
       const saved = await persistRecord({ asSubmit: true });
-      if (saved) alert('הטופס הוגש');
+      if (saved.success) alert('הטופס הוגש');
     } catch (error) {
       console.error('[InvoiceProcessForm] submit failed', error);
       alert('לא הצלחנו להגיש את הטופס');
@@ -488,7 +519,7 @@ export default function InvoiceProcessForm() {
 
     try {
       const saved = await persistRecord({ asSubmit: true });
-      if (!saved) return;
+      if (!saved.success) return;
 
       const projectResults = await base44.entities.Project.filter({ id: formData.project_id });
       const project = projectResults?.[0] || selectedProject;
@@ -778,10 +809,15 @@ export default function InvoiceProcessForm() {
                     </p>
                   ) : null}
                   {showEditProjectFeeButton ? (
-                    <Button asChild type="button" variant="outline" size="sm" className="h-7 text-xs">
-                      <Link to={buildProjectFeeEditPageUrl(formData.project_id)}>
-                        ערוך שכ״ט פרויקט
-                      </Link>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs"
+                      disabled={isBusy}
+                      onClick={handleEditProjectFee}
+                    >
+                      ערוך שכ״ט פרויקט
                     </Button>
                   ) : null}
                   {formData.project_id && parsedInvoiceAmount > 0 && !amountCollectionValidation.hasIssue ? (

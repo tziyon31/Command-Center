@@ -89,11 +89,23 @@ export const buildClientFormPageUrl = ({ name, sourceInquiryId }) => {
   return createPageUrl(queryString ? `ClientForm?${queryString}` : 'ClientForm');
 };
 
-export const buildProjectFeeEditPageUrl = (projectId) => {
+export const isSafeInternalReturnPath = (path) => {
+  const value = String(path || '').trim();
+  if (!value.startsWith('/')) return false;
+  if (value.startsWith('//')) return false;
+  if (value.includes('://')) return false;
+  return true;
+};
+
+export const buildProjectFeeEditPageUrl = ({ projectId, returnTo } = {}) => {
   const query = new URLSearchParams();
   if (projectId) query.set('id', projectId);
   query.set('edit', 'fee');
-  return createPageUrl(`ProjectDetails?${query.toString()}`);
+  if (returnTo && isSafeInternalReturnPath(returnTo)) {
+    query.set('return_to', returnTo);
+  }
+  const queryString = query.toString();
+  return createPageUrl(queryString ? `ProjectDetails?${queryString}` : 'ProjectDetails');
 };
 
 export const buildInvoiceProcessFormPageUrl = ({

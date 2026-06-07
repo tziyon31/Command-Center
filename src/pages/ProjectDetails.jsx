@@ -49,6 +49,7 @@ import {
   buildProposalFormPageUrl,
   buildSignedProposalFormPageUrl,
   buildWorkStagesPageUrl,
+  isSafeInternalReturnPath,
 } from '@/lib/workflowNavigation';
 
 const toNumber = (value) => {
@@ -188,6 +189,7 @@ export default function ProjectDetails() {
   const projectId = params.get('id');
   const editFocus = params.get('edit') || params.get('focus') || '';
   const shouldOpenFeeEdit = editFocus === 'fee';
+  const returnTo = params.get('return_to') || '';
   const createFormStatus = params.get('form_status') || 'draft';
   const isCreateMode = !projectId && hasProjectCreatePrefill(params);
   const [clientNameHint] = useState(() => readSearchParam(params, 'client_name'));
@@ -426,6 +428,12 @@ export default function ProjectDetails() {
 
       queryClient.invalidateQueries({ queryKey: ['project', project.id] });
       queryClient.invalidateQueries({ queryKey: ['projects'] });
+
+      if (isSafeInternalReturnPath(returnTo)) {
+        navigate(returnTo);
+        return;
+      }
+
       setIsEditDialogOpen(false);
     } catch (error) {
       console.error('[Project] failed to update project', error);
