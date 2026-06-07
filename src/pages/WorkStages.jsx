@@ -28,7 +28,6 @@ import { isValidSignedProposalForWorkStages } from '@/lib/signedProposalValidati
 import { buildInvoiceProcessFormPageUrl } from '@/lib/workflowNavigation';
 import {
   isWorkStageEligibleForInvoice,
-  resolveInvoiceScopeFromSelection,
 } from '@/lib/invoiceProcessUtils';
 
 const STATUS_LABELS = {
@@ -386,7 +385,7 @@ function WorkStagesProjectView({
       return;
     }
 
-    const scope = resolveInvoiceScopeFromSelection(ids);
+    const scope = ids.length === 1 ? 'stage' : 'multiple_stages';
     navigate(buildInvoiceProcessFormPageUrl({
       projectId: project.id,
       workStageIds: ids,
@@ -450,39 +449,45 @@ function WorkStagesProjectView({
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            {completedStagesForInvoice.length > 0 ? (
-              <div className="rounded-lg border border-dashed bg-muted/30 p-4 space-y-3">
-                <p className="text-sm text-muted-foreground">
-                  סמן שלבים שהושלמו ולחץ לפתיחת תהליך חשבונית (ניתן לאחד כמה שלבים לחשבונית אחת).
-                </p>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  disabled={selectedInvoiceStageIds.length === 0 || Boolean(busyStageId)}
-                  onClick={openInvoiceProcessForSelection}
-                >
-                  פתח תהליך חשבונית לשלבים שנבחרו
-                </Button>
-              </div>
-            ) : null}
-
             {sortedStages.length === 0 ? (
               <p className="text-sm text-muted-foreground">עדיין לא הוגדרו שלבי עבודה לפרויקט.</p>
             ) : (
-              <WorkStageSortableList
-                stages={sortedStages}
-                statusByStageId={statusByStageId}
-                statusLabels={STATUS_LABELS}
-                highlightedStageId={resolvedStageId}
-                busyStageId={busyStageId}
-                onDragEnd={handleDragEnd}
-                onEdit={openEditDialog}
-                onDelete={handleDeleteStage}
-                onCancel={handleCancelStage}
-                onApprovalToggle={handleApprovalToggle}
-                selectedInvoiceStageIds={selectedInvoiceStageIds}
-                onInvoiceIncludeToggle={handleInvoiceIncludeToggle}
-              />
+              <>
+                <WorkStageSortableList
+                  stages={sortedStages}
+                  statusByStageId={statusByStageId}
+                  statusLabels={STATUS_LABELS}
+                  highlightedStageId={resolvedStageId}
+                  busyStageId={busyStageId}
+                  onDragEnd={handleDragEnd}
+                  onEdit={openEditDialog}
+                  onDelete={handleDeleteStage}
+                  onCancel={handleCancelStage}
+                  onApprovalToggle={handleApprovalToggle}
+                  selectedInvoiceStageIds={selectedInvoiceStageIds}
+                  onInvoiceIncludeToggle={handleInvoiceIncludeToggle}
+                />
+
+                {completedStagesForInvoice.length > 0 ? (
+                  <div className="rounded-lg border border-dashed bg-muted/30 p-4 space-y-3">
+                    <p className="text-sm text-muted-foreground">
+                      סמן שלבים שהושלמו ב&quot;בחר לחשבונית&quot; ולחץ לפתיחת תהליך חשבונית (ניתן לאחד כמה שלבים לחשבונית אחת).
+                    </p>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      disabled={selectedInvoiceStageIds.length === 0 || Boolean(busyStageId)}
+                      onClick={openInvoiceProcessForSelection}
+                    >
+                      פתח תהליך חשבונית לשלבים שנבחרו
+                    </Button>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    אין עדיין שלבים שהושלמו לפתיחת תהליך חשבונית.
+                  </p>
+                )}
+              </>
             )}
 
             <Button

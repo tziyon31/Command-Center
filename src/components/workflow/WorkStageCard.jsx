@@ -112,7 +112,7 @@ export default function WorkStageCard({
           <p className="text-xs text-muted-foreground">
             {targetLabel ? `יעד: ${targetLabel}` : 'יעד: —'}
             {' | '}
-            {`חשבונית: ${invoiceLabel}`}
+            {`נדרשת חשבונית בסיום: ${invoiceLabel}`}
           </p>
 
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
@@ -151,7 +151,7 @@ export default function WorkStageCard({
                   onIncludeInInvoiceToggle?.(stage, checked === true);
                 }}
               />
-              <span>כלול בתהליך חשבונית</span>
+              <span>בחר לחשבונית</span>
             </label>
           ) : null}
         </div>
