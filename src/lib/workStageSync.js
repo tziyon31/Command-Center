@@ -3,6 +3,7 @@ import {
   normalizeWorkStageStatuses,
 } from '@/lib/workStageLogic';
 import { runWorkStageReminderRulesForProject } from '@/lib/workStageReminderRules';
+import { runWorkStageInvoiceReviewRulesForProject } from '@/lib/invoiceReminderRules';
 
 export async function loadWorkStagesForProject(projectId) {
   const normalizedProjectId = String(projectId || '').trim();
@@ -45,6 +46,11 @@ export async function recalculateProjectWorkStages(projectId, options = {}) {
   await runWorkStageReminderRulesForProject(projectId, {
     ...options,
     workStages: result.normalized,
+  });
+
+  await runWorkStageInvoiceReviewRulesForProject(projectId, {
+    ...options,
+    stages: result.normalized,
   });
 
   return result;

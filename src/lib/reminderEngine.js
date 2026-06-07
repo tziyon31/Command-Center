@@ -1,10 +1,18 @@
 import { base44 } from '@/api/base44Client';
+import {
+  hasCollectionOpenedForInvoice,
+  isInvoiceProcessSubmitted,
+  isWorkStageCompletedForInvoiceReview,
+  isWorkStageCoveredByInvoices,
+  projectCompletedStagesAreFullyCovered,
+} from '@/lib/invoiceReminderCoverage';
 import { evaluateP2ReminderValidity } from '@/lib/reminderEngineP2';
 import { isValidSignedProposal } from '@/lib/signedProposalValidation';
 import { hasNonCancelledWorkStageForProject } from '@/lib/workStageReminderRules';
 import {
   getActiveWorkStage,
   isWorkStageCompleted,
+  WORK_STAGE_STATUS,
 } from '@/lib/workStageLogic';
 
 export const REMINDER_STATUS = {
@@ -195,7 +203,10 @@ const REMINDER_CONDITION_PREFIX_BY_ENTITY_TYPE = {
     'inquiry_needs_proposal:',
   ],
   client: ['client_needs_project:'],
-  project: ['project_needs_proposal:'],
+  project: [
+    'project_needs_proposal:',
+    'project_completed_needs_invoice_review:',
+  ],
   proposal: [
     'proposal_incomplete:',
     'proposal_not_sent:',
@@ -206,6 +217,13 @@ const REMINDER_CONDITION_PREFIX_BY_ENTITY_TYPE = {
   work_stage: [
     'work_stage_needs_check:',
     'work_stage_target_date:',
+    'work_stage_needs_invoice_review:',
+  ],
+  invoice_process: [
+    'invoice_needs_paperless:',
+    'invoice_needs_send:',
+    'invoice_needs_receipt_confirmation:',
+    'invoice_needs_collection:',
   ],
 };
 
@@ -216,6 +234,7 @@ const ORPHAN_ENTITY_LOADERS = [
   { sourceType: 'proposal', entityName: 'Proposal' },
   { sourceType: 'signed_proposal', entityName: 'SignedProposal' },
   { sourceType: 'work_stage', entityName: 'WorkStage' },
+  { sourceType: 'invoice_process', entityName: 'InvoiceProcess' },
 ];
 
 const KNOWN_ORPHAN_SOURCE_TYPES = new Set(
@@ -235,6 +254,12 @@ const CONDITION_KEY_PREFIX_COUNTS = [
   { label: 'signed_proposal_needs_work_stages', prefix: 'signed_proposal_needs_work_stages:' },
   { label: 'work_stage_needs_check', prefix: 'work_stage_needs_check:' },
   { label: 'work_stage_target_date', prefix: 'work_stage_target_date:' },
+  { label: 'work_stage_needs_invoice_review', prefix: 'work_stage_needs_invoice_review:' },
+  { label: 'project_completed_needs_invoice_review', prefix: 'project_completed_needs_invoice_review:' },
+  { label: 'invoice_needs_paperless', prefix: 'invoice_needs_paperless:' },
+  { label: 'invoice_needs_send', prefix: 'invoice_needs_send:' },
+  { label: 'invoice_needs_receipt_confirmation', prefix: 'invoice_needs_receipt_confirmation:' },
+  { label: 'invoice_needs_collection', prefix: 'invoice_needs_collection:' },
 ];
 
 /** Default true: Dashboard must not mutate reminders until dry-run is verified. */
@@ -278,6 +303,12 @@ const REMINDER_PREFIXES = {
   R7: 'signed_proposal_needs_work_stages:',
   WS1: 'work_stage_needs_check:',
   WS2: 'work_stage_target_date:',
+  WSI1: 'work_stage_needs_invoice_review:',
+  WSI2: 'project_completed_needs_invoice_review:',
+  INV1: 'invoice_needs_paperless:',
+  INV2: 'invoice_needs_send:',
+  INV3: 'invoice_needs_receipt_confirmation:',
+  INV4: 'invoice_needs_collection:',
 };
 
 const DATE_LIKE_CONDITION_KEY_PATTERN =
@@ -1288,6 +1319,88 @@ const evaluateReminderBusinessValidity = async (reminder, cache) => {
     return { valid: !hasWorkStages, reason: hasWorkStages ? 'condition_cleared' : 'valid' };
   }
 
+  if (conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.WSI1)) {
+    const stageId = conditionKey.slice(REMINDER_PREFIXES.WSI1.length);
+    const workStagesById = await ensureEntityMap(cache, 'WorkStage');
+    if (!workStagesById) return { valid: true, reason: 'work_stage_loader_failed' };
+
+    const stage = workStagesById.get(stageId);
+    if (!stage) return { valid: false, reason: 'source_deleted' };
+
+    const invoicesById = await ensureEntityMap(cache, 'InvoiceProcess');
+    const invoices = invoicesById ? [...invoicesById.values()] : [];
+    const invalid = stage.status === WORK_STAGE_STATUS.CANCELLED
+      || !isWorkStageCompletedForInvoiceReview(stage)
+      || stage.invoice_required_on_completion !== true
+      || isWorkStageCoveredByInvoices(stage, invoices);
+
+    return { valid: !invalid, reason: invalid ? 'condition_cleared' : 'valid' };
+  }
+
+  if (conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.WSI2)) {
+    const projectId = conditionKey.slice(REMINDER_PREFIXES.WSI2.length);
+    const workStagesById = await ensureEntityMap(cache, 'WorkStage');
+    if (!workStagesById) return { valid: true, reason: 'work_stage_loader_failed' };
+
+    const stages = [...workStagesById.values()].filter(
+      (item) => toTrimmedValue(item.project_id) === toTrimmedValue(projectId),
+    );
+    const nonCancelledStages = stages.filter((stage) => stage.status !== WORK_STAGE_STATUS.CANCELLED);
+    if (nonCancelledStages.length === 0) return { valid: false, reason: 'condition_cleared' };
+
+    const allCompleted = nonCancelledStages.every((stage) => isWorkStageCompletedForInvoiceReview(stage));
+    const invoicesById = await ensureEntityMap(cache, 'InvoiceProcess');
+    const invoices = invoicesById ? [...invoicesById.values()] : [];
+    const fullyCovered = projectCompletedStagesAreFullyCovered(projectId, stages, invoices);
+    const invalid = !allCompleted || fullyCovered;
+
+    return { valid: !invalid, reason: invalid ? 'condition_cleared' : 'valid' };
+  }
+
+  if (conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.INV1)
+    || conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.INV2)
+    || conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.INV3)
+    || conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.INV4)) {
+    const isInv1 = conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.INV1);
+    const isInv2 = conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.INV2);
+    const isInv3 = conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.INV3);
+    const prefix = isInv1
+      ? REMINDER_PREFIXES.INV1
+      : isInv2
+        ? REMINDER_PREFIXES.INV2
+        : isInv3
+          ? REMINDER_PREFIXES.INV3
+          : REMINDER_PREFIXES.INV4;
+    const invoiceId = conditionKey.slice(prefix.length);
+
+    const invoicesById = await ensureEntityMap(cache, 'InvoiceProcess');
+    if (!invoicesById) return { valid: true, reason: 'invoice_process_loader_failed' };
+
+    const invoice = invoicesById.get(invoiceId);
+    if (!invoice) return { valid: false, reason: 'source_deleted' };
+    if (!isInvoiceProcessSubmitted(invoice)) return { valid: false, reason: 'condition_cleared' };
+
+    const projectsById = await ensureEntityMap(cache, 'Project');
+    const project = projectsById?.get(invoice.project_id) || null;
+    const amount = Number(invoice.amount);
+    const hasAmount = Number.isFinite(amount) && amount > 0;
+
+    let invalid = false;
+    if (isInv1) {
+      invalid = invoice.invoice_created_in_paperless === true;
+    } else if (isInv2) {
+      invalid = invoice.invoice_created_in_paperless !== true || invoice.invoice_sent_to_client === true;
+    } else if (isInv3) {
+      invalid = invoice.invoice_sent_to_client !== true || invoice.client_confirmed_received === true;
+    } else {
+      invalid = invoice.invoice_sent_to_client !== true
+        || !hasAmount
+        || hasCollectionOpenedForInvoice(invoice, project);
+    }
+
+    return { valid: !invalid, reason: invalid ? 'condition_cleared' : 'valid' };
+  }
+
   if (conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.WS1)
     || conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.WS2)) {
     const isWS1 = conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.WS1);
@@ -1459,6 +1572,7 @@ export async function runReminderReconciliationNow(reason = 'manual') {
       ensureEntityMap(cache, 'Proposal'),
       ensureEntityMap(cache, 'SignedProposal'),
       ensureEntityMap(cache, 'WorkStage'),
+      ensureEntityMap(cache, 'InvoiceProcess'),
     ]);
 
     const inquiriesById = cache.InquiryById;
@@ -1491,6 +1605,37 @@ export async function runReminderReconciliationNow(reason = 'manual') {
       if (r7Summary.hasMore || r7Summary.rateLimited || result.mutationCount >= RECONCILIATION_MAX_MUTATIONS_PER_RUN) {
         result.hasMore = true;
         if (result.mutationCount >= RECONCILIATION_MAX_MUTATIONS_PER_RUN) return result;
+      }
+    }
+
+    const remainingBeforeInvoice = Math.max(RECONCILIATION_MAX_MUTATIONS_PER_RUN - result.mutationCount, 0);
+    if (remainingBeforeInvoice > 0) {
+      const {
+        runInvoiceReminderRulesForAll,
+        runWorkStageInvoiceReviewRulesForAll,
+      } = await import('@/lib/invoiceReminderRules');
+
+      const invoiceLifecycleSummary = await runInvoiceReminderRulesForAll(cache, {
+        maxMutations: remainingBeforeInvoice,
+      });
+      result.mutationCount += Number(invoiceLifecycleSummary.mutationCount || 0);
+      if (invoiceLifecycleSummary.hasMore || invoiceLifecycleSummary.rateLimited
+        || result.mutationCount >= RECONCILIATION_MAX_MUTATIONS_PER_RUN) {
+        result.hasMore = true;
+        if (result.mutationCount >= RECONCILIATION_MAX_MUTATIONS_PER_RUN) return result;
+      }
+
+      const remainingBeforeWsi = Math.max(RECONCILIATION_MAX_MUTATIONS_PER_RUN - result.mutationCount, 0);
+      if (remainingBeforeWsi > 0) {
+        const wsiSummary = await runWorkStageInvoiceReviewRulesForAll(cache, {
+          maxMutations: remainingBeforeWsi,
+        });
+        result.mutationCount += Number(wsiSummary.mutationCount || 0);
+        if (wsiSummary.hasMore || wsiSummary.rateLimited
+          || result.mutationCount >= RECONCILIATION_MAX_MUTATIONS_PER_RUN) {
+          result.hasMore = true;
+          if (result.mutationCount >= RECONCILIATION_MAX_MUTATIONS_PER_RUN) return result;
+        }
       }
     }
 

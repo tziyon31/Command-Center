@@ -24,6 +24,12 @@ import {
   showsWorkStageSelection,
   validateInvoiceProcessSubmit,
 } from '@/lib/invoiceProcessUtils';
+import {
+  cancelRemindersForInvoiceProcess,
+  runInvoiceReminderRulesForInvoice,
+  runWorkStageInvoiceReviewRulesForProject,
+} from '@/lib/invoiceReminderRules';
+import { cancelRemindersForDeletedSource } from '@/lib/reminderEngine';
 import { formatProjectSelectLabel } from '@/lib/projectSelectLabel';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -376,6 +382,25 @@ export default function InvoiceProcessForm() {
     });
   };
 
+  const runInvoiceReminderRulesAfterSave = async (savedId, projectId) => {
+    if (!savedId) return;
+
+    try {
+      const results = await base44.entities.InvoiceProcess.filter({ id: savedId });
+      const saved = results?.[0];
+      if (saved) {
+        await runInvoiceReminderRulesForInvoice(saved);
+      }
+      if (projectId) {
+        await runWorkStageInvoiceReviewRulesForProject(projectId);
+      }
+      await queryClient.invalidateQueries({ queryKey: ['reminders'] });
+      await queryClient.invalidateQueries({ queryKey: ['reminders', 'visible'] });
+    } catch (error) {
+      console.warn('[InvoiceProcessForm] invoice reminder rules failed', error);
+    }
+  };
+
   const persistRecord = async ({ asSubmit }) => {
     const validationError = asSubmit
       ? validateInvoiceProcessSubmit({
@@ -430,6 +455,10 @@ export default function InvoiceProcessForm() {
     await queryClient.invalidateQueries({ queryKey: ['invoice-processes'] });
     if (savedId) {
       await queryClient.invalidateQueries({ queryKey: ['invoice-process', savedId] });
+    }
+
+    if (savedId) {
+      await runInvoiceReminderRulesAfterSave(savedId, formData.project_id);
     }
 
     return { success: Boolean(savedId), savedId: savedId || '' };
@@ -558,6 +587,10 @@ export default function InvoiceProcessForm() {
       await queryClient.invalidateQueries({ queryKey: ['project', formData.project_id] });
       await queryClient.invalidateQueries({ queryKey: ['projects'] });
 
+      if (saved.savedId) {
+        await runInvoiceReminderRulesAfterSave(saved.savedId, formData.project_id);
+      }
+
       alert('הטופס הוגש ונפתחה גבייה.');
       navigate(createPageUrl(`ProjectDetails?id=${formData.project_id}`));
     } catch (error) {
@@ -576,7 +609,15 @@ export default function InvoiceProcessForm() {
 
     setIsDeleting(true);
     try {
+      const projectId = formData.project_id || record?.project_id || '';
+      await cancelRemindersForInvoiceProcess(recordId);
+      await cancelRemindersForDeletedSource('invoice_process', recordId);
       await base44.entities.InvoiceProcess.delete(recordId);
+      if (projectId) {
+        await runWorkStageInvoiceReviewRulesForProject(projectId);
+      }
+      await queryClient.invalidateQueries({ queryKey: ['reminders'] });
+      await queryClient.invalidateQueries({ queryKey: ['reminders', 'visible'] });
       await queryClient.invalidateQueries({ queryKey: ['invoice-processes'] });
       navigate(createPageUrl('Invoices'));
     } catch (error) {

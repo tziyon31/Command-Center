@@ -27,6 +27,18 @@ import {
   runWorkStageReminderRulesForSignedProposal,
 } from '@/lib/workStageReminderRules';
 import {
+  getInvoiceNeedsCollectionConditionKey,
+  getInvoiceNeedsPaperlessConditionKey,
+  getInvoiceNeedsReceiptConfirmationConditionKey,
+  getInvoiceNeedsSendConditionKey,
+  getProjectCompletedNeedsInvoiceReviewConditionKey,
+  getWorkStageNeedsInvoiceReviewConditionKey,
+  runInvoiceReminderRulesForInvoice,
+  runWorkStageInvoiceReviewRulesForProject,
+} from '@/lib/invoiceReminderRules';
+import { buildInvoiceCollectionNote, openProjectCollectionDue } from '@/lib/projectCollectionDue';
+import { serializeWorkStageIds } from '@/lib/invoiceProcessUtils';
+import {
   countActiveWorkStages,
   getActiveWorkStage,
   normalizeWorkStageStatuses,
@@ -64,6 +76,7 @@ const TEST_ENTITY_SCAN_FIELDS = {
   Proposal: ['client_name', 'project_name', 'document_note', 'notes'],
   SignedProposal: ['client_name', 'project_name', 'notes'],
   WorkStage: ['title', 'project_name', 'client_name', 'notes'],
+  InvoiceProcess: ['project_name', 'client_name', 'notes', 'invoice_reference'],
 };
 
 const TEST_ENTITY_BUCKETS = [
@@ -73,9 +86,11 @@ const TEST_ENTITY_BUCKETS = [
   { bucket: 'proposals', entityName: 'Proposal', labelField: 'client_name' },
   { bucket: 'signedProposals', entityName: 'SignedProposal', labelField: 'client_name' },
   { bucket: 'workStages', entityName: 'WorkStage', labelField: 'title' },
+  { bucket: 'invoiceProcesses', entityName: 'InvoiceProcess', labelField: 'project_name' },
 ];
 
 const TEST_ENTITY_DELETE_ORDER = [
+  { bucket: 'invoiceProcesses', entityName: 'InvoiceProcess', labelField: 'project_name' },
   { bucket: 'workStages', entityName: 'WorkStage', labelField: 'title' },
   { bucket: 'signedProposals', entityName: 'SignedProposal', labelField: 'client_name' },
   { bucket: 'proposals', entityName: 'Proposal', labelField: 'client_name' },
@@ -135,6 +150,7 @@ function emptyEntityIdRegistry() {
     proposals: [],
     signedProposals: [],
     workStages: [],
+    invoiceProcesses: [],
     reminders: [],
   };
 }
@@ -988,6 +1004,7 @@ const emptyCreatedEntities = () => ({
   proposals: [],
   signedProposals: [],
   workStages: [],
+  invoiceProcesses: [],
 });
 
 const collectEntityIds = (createdEntities) => {
@@ -1007,6 +1024,7 @@ function applyTestEntitiesToCache(cache, createdEntities) {
   cache.proposals = [...createdEntities.proposals];
   cache.signedProposals = [...createdEntities.signedProposals];
   cache.workStages = [...createdEntities.workStages];
+  cache.invoiceProcesses = [...createdEntities.invoiceProcesses];
 }
 
 function initializeTestRunnerCache(cache) {
@@ -1016,6 +1034,7 @@ function initializeTestRunnerCache(cache) {
   cache.proposals = cache.proposals ?? [];
   cache.signedProposals = cache.signedProposals ?? [];
   cache.workStages = cache.workStages ?? [];
+  cache.invoiceProcesses = cache.invoiceProcesses ?? [];
 }
 
 async function refreshReminderSnapshot(ctx, reason = 'checkpoint') {
@@ -1312,7 +1331,52 @@ async function runWorkStageProjectRules(ctx, projectId, reason = 'work_stage_pro
   }, reason);
 }
 
-async function createTestProjectWithClient(ctx, label) {
+async function runWorkStageInvoiceReviewRules(ctx, projectId, reason = 'work_stage_invoice_review_rules') {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
+    await runWorkStageInvoiceReviewRulesForProject(projectId, ctx.cache);
+  }, reason);
+}
+
+async function runInvoiceRulesForRecord(ctx, invoice, reason = 'invoice_rules') {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
+    await runInvoiceReminderRulesForInvoice(invoice, ctx.cache);
+  }, reason);
+}
+
+async function createTestInvoiceProcess(ctx, createdEntities, overrides = {}) {
+  const invoice = await safeRequest(ctx, 'create_invoice_process', () => base44.entities.InvoiceProcess.create({
+    project_id: overrides.project_id || '',
+    project_name: overrides.project_name || '',
+    client_id: overrides.client_id || '',
+    client_name: overrides.client_name || `${TEST_REMINDER_FLOW_PREFIX} client`,
+    invoice_scope: 'general',
+    form_status: 'draft',
+    amount: 0,
+    invoice_created_in_paperless: false,
+    invoice_sent_to_client: false,
+    client_confirmed_received: false,
+    work_stage_ids: '',
+    work_stage_titles: '',
+    ...overrides,
+  }));
+  createdEntities.invoiceProcesses.push(invoice);
+  registerTestEntity('invoiceProcesses', invoice.id);
+  return invoice;
+}
+
+async function updateTestInvoiceProcess(ctx, createdEntities, invoice, patch) {
+  const updated = await safeRequest(
+    ctx,
+    'update_invoice_process',
+    () => base44.entities.InvoiceProcess.update(invoice.id, patch),
+  );
+  const merged = { ...invoice, ...updated, ...patch };
+  const index = createdEntities.invoiceProcesses.findIndex((item) => item.id === invoice.id);
+  if (index >= 0) createdEntities.invoiceProcesses[index] = merged;
+  return merged;
+}
+
+async function createTestProjectWithClient(ctx, label, projectOverrides = {}) {
   const client = await createTestClient(ctx, ctx.createdEntities, {
     name: `${TEST_REMINDER_FLOW_PREFIX} ${label} client`,
   });
@@ -1320,6 +1384,7 @@ async function createTestProjectWithClient(ctx, label) {
     name: `${TEST_REMINDER_FLOW_PREFIX} ${label} project`,
     client_id: client.id,
     client_name: client.name,
+    ...projectOverrides,
   });
 
   return { client, project };
@@ -2215,6 +2280,342 @@ async function runTest22(ctx) {
   ));
 }
 
+async function runTest23(ctx) {
+  const { client, project } = await createTestProjectWithClient(ctx, 'WSI1');
+  const stage = await createTestWorkStageForProject(ctx, project, client, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} invoice required stage`,
+    status: 'completed',
+    aaron_approved: true,
+    client_approved: true,
+    draftsman_approved: true,
+    invoice_required_on_completion: true,
+    completed_at: new Date().toISOString(),
+  });
+
+  await syncTestProjectStages(ctx, project.id);
+  await runWorkStageInvoiceReviewRules(ctx, project.id, 'test23_before_invoice');
+
+  const wsi1Key = getWorkStageNeedsInvoiceReviewConditionKey(stage.id);
+  ctx.steps.push(assertReminderExists(ctx, 'Test 23 – WSI1 created for completed stage', wsi1Key));
+
+  await createTestInvoiceProcess(ctx, ctx.createdEntities, {
+    project_id: project.id,
+    project_name: project.name,
+    client_id: client.id,
+    client_name: client.name,
+    invoice_scope: 'stage',
+    work_stage_ids: serializeWorkStageIds([stage.id]),
+    work_stage_titles: stage.title,
+    form_status: 'submitted',
+    submitted_at: new Date().toISOString(),
+  });
+
+  await runWorkStageInvoiceReviewRules(ctx, project.id, 'test23_after_stage_invoice');
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 23 – WSI1 closed after stage invoice', wsi1Key));
+}
+
+async function runTest24(ctx) {
+  const { client, project } = await createTestProjectWithClient(ctx, 'general coverage');
+  const invoiceSubmittedAt = new Date().toISOString();
+
+  const stageA = await createTestWorkStageForProject(ctx, project, client, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} stage A general`,
+    status: 'completed',
+    aaron_approved: true,
+    client_approved: true,
+    draftsman_approved: true,
+    invoice_required_on_completion: true,
+    completed_at: invoiceSubmittedAt,
+    order_index: 1,
+  });
+
+  await syncTestProjectStages(ctx, project.id);
+
+  await createTestInvoiceProcess(ctx, ctx.createdEntities, {
+    project_id: project.id,
+    project_name: project.name,
+    client_id: client.id,
+    client_name: client.name,
+    invoice_scope: 'general',
+    work_stage_titles: 'כללי',
+    form_status: 'submitted',
+    submitted_at: invoiceSubmittedAt,
+  });
+
+  await runWorkStageInvoiceReviewRules(ctx, project.id, 'test24_after_general_invoice');
+  ctx.steps.push(assertReminderClosed(
+    ctx,
+    'Test 24 – stage A covered by general invoice',
+    getWorkStageNeedsInvoiceReviewConditionKey(stageA.id),
+  ));
+
+  const laterCompletedAt = new Date(Date.now() + 120000).toISOString();
+  const stageB = await createTestWorkStageForProject(ctx, project, client, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} stage B after general`,
+    status: 'completed',
+    aaron_approved: true,
+    client_approved: true,
+    draftsman_approved: true,
+    invoice_required_on_completion: true,
+    completed_at: laterCompletedAt,
+    order_index: 2,
+  });
+
+  await syncTestProjectStages(ctx, project.id);
+  await runWorkStageInvoiceReviewRules(ctx, project.id, 'test24_stage_b_completed');
+
+  ctx.steps.push(assertReminderExists(
+    ctx,
+    'Test 24 – stage B needs review after general invoice',
+    getWorkStageNeedsInvoiceReviewConditionKey(stageB.id),
+  ));
+}
+
+async function runTest25(ctx) {
+  const { client, project } = await createTestProjectWithClient(ctx, 'WSI2 final');
+  const completedAt = new Date().toISOString();
+
+  await createTestWorkStageForProject(ctx, project, client, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} final stage 1`,
+    status: 'completed',
+    aaron_approved: true,
+    client_approved: true,
+    draftsman_approved: true,
+    completed_at: completedAt,
+    order_index: 1,
+  });
+
+  await createTestWorkStageForProject(ctx, project, client, {
+    title: `${TEST_REMINDER_FLOW_PREFIX} final stage 2`,
+    status: 'completed',
+    aaron_approved: true,
+    client_approved: true,
+    draftsman_approved: true,
+    completed_at: completedAt,
+    order_index: 2,
+  });
+
+  await syncTestProjectStages(ctx, project.id);
+  await runWorkStageInvoiceReviewRules(ctx, project.id, 'test25_all_completed');
+
+  const wsi2Key = getProjectCompletedNeedsInvoiceReviewConditionKey(project.id);
+  ctx.steps.push(assertReminderExists(ctx, 'Test 25 – WSI2 created when all stages completed', wsi2Key));
+
+  await createTestInvoiceProcess(ctx, ctx.createdEntities, {
+    project_id: project.id,
+    project_name: project.name,
+    client_id: client.id,
+    client_name: client.name,
+    invoice_scope: 'final_project',
+    work_stage_titles: 'חשבונית סופית',
+    form_status: 'submitted',
+    submitted_at: new Date(Date.now() + 60000).toISOString(),
+  });
+
+  await runWorkStageInvoiceReviewRules(ctx, project.id, 'test25_after_final_invoice');
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 25 – WSI2 closed after final invoice', wsi2Key));
+}
+
+async function runTest26(ctx) {
+  const { client, project } = await createTestProjectWithClient(ctx, 'INV1');
+  let invoice = await createTestInvoiceProcess(ctx, ctx.createdEntities, {
+    project_id: project.id,
+    project_name: project.name,
+    client_id: client.id,
+    client_name: client.name,
+    form_status: 'submitted',
+    submitted_at: new Date().toISOString(),
+    invoice_created_in_paperless: false,
+  });
+
+  const inv1Key = getInvoiceNeedsPaperlessConditionKey(invoice.id);
+  await runInvoiceRulesForRecord(ctx, invoice, 'test26_before_paperless');
+  ctx.steps.push(assertReminderExists(ctx, 'Test 26 – INV1 active before Paperless', inv1Key));
+
+  invoice = await updateTestInvoiceProcess(ctx, ctx.createdEntities, invoice, {
+    invoice_created_in_paperless: true,
+  });
+  await runInvoiceRulesForRecord(ctx, invoice, 'test26_after_paperless');
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 26 – INV1 closed after Paperless', inv1Key));
+}
+
+async function runTest27(ctx) {
+  const { client, project } = await createTestProjectWithClient(ctx, 'INV2');
+  let invoice = await createTestInvoiceProcess(ctx, ctx.createdEntities, {
+    project_id: project.id,
+    project_name: project.name,
+    client_id: client.id,
+    client_name: client.name,
+    form_status: 'submitted',
+    submitted_at: new Date().toISOString(),
+    invoice_created_in_paperless: true,
+    invoice_sent_to_client: false,
+  });
+
+  const inv2Key = getInvoiceNeedsSendConditionKey(invoice.id);
+  await runInvoiceRulesForRecord(ctx, invoice, 'test27_before_send');
+  ctx.steps.push(assertReminderExists(ctx, 'Test 27 – INV2 active before send', inv2Key));
+
+  invoice = await updateTestInvoiceProcess(ctx, ctx.createdEntities, invoice, {
+    invoice_sent_to_client: true,
+  });
+  await runInvoiceRulesForRecord(ctx, invoice, 'test27_after_send');
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 27 – INV2 closed after send', inv2Key));
+}
+
+async function runTest28(ctx) {
+  const { client, project } = await createTestProjectWithClient(ctx, 'INV3');
+  let invoice = await createTestInvoiceProcess(ctx, ctx.createdEntities, {
+    project_id: project.id,
+    project_name: project.name,
+    client_id: client.id,
+    client_name: client.name,
+    form_status: 'submitted',
+    submitted_at: new Date().toISOString(),
+    invoice_created_in_paperless: true,
+    invoice_sent_to_client: true,
+    client_confirmed_received: false,
+  });
+
+  const inv3Key = getInvoiceNeedsReceiptConfirmationConditionKey(invoice.id);
+  await runInvoiceRulesForRecord(ctx, invoice, 'test28_before_confirm');
+  ctx.steps.push(assertReminderExists(ctx, 'Test 28 – INV3 active before receipt confirmation', inv3Key));
+
+  invoice = await updateTestInvoiceProcess(ctx, ctx.createdEntities, invoice, {
+    client_confirmed_received: true,
+  });
+  await runInvoiceRulesForRecord(ctx, invoice, 'test28_after_confirm');
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 28 – INV3 closed after receipt confirmation', inv3Key));
+}
+
+async function runTest29(ctx) {
+  const { client, project } = await createTestProjectWithClient(ctx, 'INV4', {
+    total_amount: 10000,
+    collected_amount: 0,
+  });
+
+  let invoice = await createTestInvoiceProcess(ctx, ctx.createdEntities, {
+    project_id: project.id,
+    project_name: project.name,
+    client_id: client.id,
+    client_name: client.name,
+    form_status: 'submitted',
+    submitted_at: new Date().toISOString(),
+    invoice_created_in_paperless: true,
+    invoice_sent_to_client: true,
+    amount: 2500,
+    invoice_reference: `${TEST_REMINDER_FLOW_PREFIX}-INV4`,
+  });
+
+  const inv4Key = getInvoiceNeedsCollectionConditionKey(invoice.id);
+  await runInvoiceRulesForRecord(ctx, invoice, 'test29_before_collection');
+  ctx.steps.push(assertReminderExists(ctx, 'Test 29 – INV4 active before collection', inv4Key));
+
+  const collectionNote = buildInvoiceCollectionNote({
+    invoiceReference: invoice.invoice_reference,
+    workStageTitles: invoice.work_stage_titles,
+    invoiceScope: invoice.invoice_scope,
+  });
+
+  await safeRequest(ctx, 'open_collection', () => openProjectCollectionDue({
+    project,
+    amount: invoice.amount,
+    note: collectionNote,
+    updateProject: (id, payload) => base44.entities.Project.update(id, payload),
+  }));
+
+  const updatedProject = await fetchTestProject(ctx, project.id);
+  if (updatedProject) {
+    const projectIndex = ctx.createdEntities.projects.findIndex((item) => item.id === project.id);
+    if (projectIndex >= 0) ctx.createdEntities.projects[projectIndex] = updatedProject;
+    applyTestEntitiesToCache(ctx.cache, ctx.createdEntities);
+  }
+
+  await runInvoiceRulesForRecord(ctx, invoice, 'test29_after_collection');
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 29 – INV4 closed after collection opened', inv4Key));
+}
+
+async function runTest30(ctx) {
+  const { client, project } = await createTestProjectWithClient(ctx, 'invoice draft');
+
+  const draftInvoice = await createTestInvoiceProcess(ctx, ctx.createdEntities, {
+    project_id: project.id,
+    project_name: project.name,
+    client_id: client.id,
+    client_name: client.name,
+    form_status: 'draft',
+  });
+
+  await runInvoiceRulesForRecord(ctx, draftInvoice, 'test30_draft');
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 30 – no INV1 for draft', getInvoiceNeedsPaperlessConditionKey(draftInvoice.id)));
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 30 – no INV2 for draft', getInvoiceNeedsSendConditionKey(draftInvoice.id)));
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 30 – no INV3 for draft', getInvoiceNeedsReceiptConfirmationConditionKey(draftInvoice.id)));
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 30 – no INV4 for draft', getInvoiceNeedsCollectionConditionKey(draftInvoice.id)));
+
+  const cancelledInvoice = await createTestInvoiceProcess(ctx, ctx.createdEntities, {
+    project_id: project.id,
+    project_name: project.name,
+    client_id: client.id,
+    client_name: client.name,
+    form_status: 'cancelled',
+    submitted_at: new Date().toISOString(),
+    invoice_created_in_paperless: true,
+    invoice_sent_to_client: true,
+    amount: 1000,
+  });
+
+  await runInvoiceRulesForRecord(ctx, cancelledInvoice, 'test30_cancelled');
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 30 – no INV1 for cancelled', getInvoiceNeedsPaperlessConditionKey(cancelledInvoice.id)));
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 30 – no INV2 for cancelled', getInvoiceNeedsSendConditionKey(cancelledInvoice.id)));
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 30 – no INV3 for cancelled', getInvoiceNeedsReceiptConfirmationConditionKey(cancelledInvoice.id)));
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 30 – no INV4 for cancelled', getInvoiceNeedsCollectionConditionKey(cancelledInvoice.id)));
+}
+
+async function runTest31(ctx) {
+  const { client, project } = await createTestProjectWithClient(ctx, 'INV sequential', {
+    total_amount: 5000,
+    collected_amount: 0,
+  });
+
+  let invoice = await createTestInvoiceProcess(ctx, ctx.createdEntities, {
+    project_id: project.id,
+    project_name: project.name,
+    client_id: client.id,
+    client_name: client.name,
+    form_status: 'submitted',
+    submitted_at: new Date().toISOString(),
+    invoice_created_in_paperless: false,
+    amount: 1500,
+  });
+
+  const inv1Key = getInvoiceNeedsPaperlessConditionKey(invoice.id);
+  const inv2Key = getInvoiceNeedsSendConditionKey(invoice.id);
+  const inv3Key = getInvoiceNeedsReceiptConfirmationConditionKey(invoice.id);
+  const inv4Key = getInvoiceNeedsCollectionConditionKey(invoice.id);
+
+  await runInvoiceRulesForRecord(ctx, invoice, 'test31_step1');
+  ctx.steps.push(assertReminderExists(ctx, 'Test 31 – only INV1 open initially', inv1Key));
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 31 – INV2 closed initially', inv2Key));
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 31 – INV3 closed initially', inv3Key));
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 31 – INV4 closed before sent', inv4Key));
+
+  invoice = await updateTestInvoiceProcess(ctx, ctx.createdEntities, invoice, {
+    invoice_created_in_paperless: true,
+  });
+  await runInvoiceRulesForRecord(ctx, invoice, 'test31_step2');
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 31 – INV1 closed after created', inv1Key));
+  ctx.steps.push(assertReminderExists(ctx, 'Test 31 – only INV2 open after created', inv2Key));
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 31 – INV3 still closed after created', inv3Key));
+
+  invoice = await updateTestInvoiceProcess(ctx, ctx.createdEntities, invoice, {
+    invoice_sent_to_client: true,
+  });
+  await runInvoiceRulesForRecord(ctx, invoice, 'test31_step3');
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 31 – INV2 closed after sent', inv2Key));
+  ctx.steps.push(assertReminderExists(ctx, 'Test 31 – INV3 open after sent', inv3Key));
+  ctx.steps.push(assertReminderExists(ctx, 'Test 31 – INV4 open in parallel after sent', inv4Key));
+}
+
 const REMINDER_INTEGRATION_TEST_DEFINITIONS = [
   { name: 'Test 1', fn: runTest1 },
   { name: 'Test 2', fn: runTest2 },
@@ -2238,6 +2639,15 @@ const REMINDER_INTEGRATION_TEST_DEFINITIONS = [
   { name: 'Test 20', fn: runTest20 },
   { name: 'Test 21', fn: runTest21 },
   { name: 'Test 22', fn: runTest22 },
+  { name: 'Test 23', fn: runTest23 },
+  { name: 'Test 24', fn: runTest24 },
+  { name: 'Test 25', fn: runTest25 },
+  { name: 'Test 26', fn: runTest26 },
+  { name: 'Test 27', fn: runTest27 },
+  { name: 'Test 28', fn: runTest28 },
+  { name: 'Test 29', fn: runTest29 },
+  { name: 'Test 30', fn: runTest30 },
+  { name: 'Test 31', fn: runTest31 },
 ];
 
 function buildTestRunSummary(steps, testDefinitions, testRunLog = []) {
