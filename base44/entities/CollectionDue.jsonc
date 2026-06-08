@@ -53,16 +53,39 @@
       "type": "string",
       "description": "\u05de\u05ea\u05d9 \u05e9\u05d5\u05dc\u05de\u05d4 \u05d4\u05d2\u05d1\u05d9\u05d9\u05d4 \u05d1\u05de\u05dc\u05d5\u05d0\u05d4 (ISO datetime string)"
     },
+    "payment_received": {
+      "type": "boolean",
+      "default": false,
+      "description": "\u05d4\u05d0\u05dd \u05d4\u05ea\u05e7\u05d1\u05dc \u05ea\u05e9\u05dc\u05d5\u05dd \u05de\u05dc\u05d0"
+    },
+    "payment_received_at": {
+      "type": "string",
+      "description": "\u05de\u05ea\u05d9 \u05d4\u05ea\u05e7\u05d1\u05dc \u05d4\u05ea\u05e9\u05dc\u05d5\u05dd (ISO datetime string)"
+    },
+    "tax_invoice_sent_to_client": {
+      "type": "boolean",
+      "default": false,
+      "description": "\u05d4\u05d0\u05dd \u05e0\u05e9\u05dc\u05d7\u05d4 \u05d7\u05e9\u05d1\u05d5\u05e0\u05d9\u05ea \u05de\u05e1 \u05dc\u05dc\u05e7\u05d5\u05d7"
+    },
+    "tax_invoice_sent_at": {
+      "type": "string",
+      "description": "\u05de\u05ea\u05d9 \u05e0\u05e9\u05dc\u05d7\u05d4 \u05d7\u05e9\u05d1\u05d5\u05e0\u05d9\u05ea \u05d4\u05de\u05e1 (ISO datetime string)"
+    },
+    "tax_invoice_reference": {
+      "type": "string",
+      "description": "\u05de\u05e1\u05e4\u05e8 \u05d7\u05e9\u05d1\u05d5\u05e0\u05d9\u05ea \u05de\u05e1 / \u05d0\u05e1\u05de\u05db\u05ea\u05d0 \u05d0\u05dd \u05e7\u05d9\u05d9\u05de\u05ea"
+    },
     "status": {
       "type": "string",
       "enum": [
         "open",
         "partially_paid",
+        "awaiting_tax_invoice",
         "paid",
         "cancelled"
       ],
       "default": "open",
-      "description": "\u05e1\u05d8\u05d8\u05d5\u05e1 \u05d4\u05d2\u05d1\u05d9\u05d9\u05d4"
+      "description": "\u05e1\u05d8\u05d8\u05d5\u05e1 \u05d4\u05d2\u05d1\u05d9\u05d9\u05d4: open=\u05e4\u05ea\u05d5\u05d7\u05d4, partially_paid=\u05e9\u05d5\u05dc\u05dd \u05d7\u05dc\u05e7\u05d9\u05ea, awaiting_tax_invoice=\u05e9\u05d5\u05dc\u05dd \u05d0\u05da \u05de\u05de\u05ea\u05d9\u05df \u05dc\u05d7\u05e9\u05d1\u05d5\u05e0\u05d9\u05ea \u05de\u05e1, paid=\u05e9\u05d5\u05dc\u05dd \u05d5\u05e0\u05e9\u05dc\u05d7\u05d4 \u05d7\u05e9\u05d1\u05d5\u05e0\u05d9\u05ea \u05de\u05e1, cancelled=\u05d1\u05d5\u05d8\u05dc"
     },
     "source_type": {
       "type": "string",
