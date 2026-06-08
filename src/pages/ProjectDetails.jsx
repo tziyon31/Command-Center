@@ -131,7 +131,7 @@ const projectToFormData = (project) => ({
   area: project?.area || '',
   description: project?.description || '',
   status: project?.status || 'pricing',
-  total_amount: project?.total_amount ?? 0,
+  total_amount: project?.total_amount != null ? String(project.total_amount) : '',
   year: project?.year ?? new Date().getFullYear(),
   notes: project?.notes || '',
 });
@@ -1150,8 +1150,9 @@ export default function ProjectDetails() {
                       value={editFormData.total_amount}
                       onChange={(e) => setEditFormData({
                         ...editFormData,
-                        total_amount: parseFloat(e.target.value) || 0,
+                        total_amount: e.target.value,
                       })}
+                      placeholder="לדוגמה: 4000"
                     />
                   </div>
                   <div className="space-y-2">

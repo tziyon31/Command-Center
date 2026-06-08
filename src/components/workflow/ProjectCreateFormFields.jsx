@@ -135,8 +135,9 @@ export default function ProjectCreateFormFields({
             value={formData.total_amount}
             onChange={(e) => setFormData({
               ...formData,
-              total_amount: parseFloat(e.target.value) || 0,
+              total_amount: e.target.value,
             })}
+            placeholder="לדוגמה: 4000"
             disabled={disabled}
           />
         </div>

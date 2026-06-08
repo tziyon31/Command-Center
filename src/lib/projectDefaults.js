@@ -16,7 +16,7 @@ export const EMPTY_PROJECT_FORM = {
   area: '',
   description: '',
   status: 'pricing',
-  total_amount: 0,
+  total_amount: '',
   year: new Date().getFullYear(),
   notes: '',
   source_inquiry_id: '',
@@ -42,7 +42,7 @@ export const getNextProjectDefaults = (projects = []) => {
     work_number: String(nextWork),
     year: new Date().getFullYear(),
     status: 'pricing',
-    total_amount: 0,
+    total_amount: '',
   };
 };
 
