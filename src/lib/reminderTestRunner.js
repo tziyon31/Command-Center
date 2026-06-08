@@ -44,9 +44,16 @@ import {
   sumExistingProjectInvoiceAmounts,
 } from '@/lib/projectCollectionDue';
 import {
+  completeCollectionDue,
   markCollectionDuePaid,
   openCollectionDueFromInvoice,
 } from '@/lib/collectionDueUtils';
+import {
+  getCollectionNeedsTaxInvoiceConditionKey,
+  getCollectionPaymentDueConditionKey,
+  runCollectionReminderRulesForCollection,
+} from '@/lib/collectionReminderRules';
+import { getTodayDateString } from '@/lib/projectCollectionDue';
 import {
   buildProjectDeletionImpact,
   deleteProjectCascade,
@@ -2950,6 +2957,77 @@ function trackTestCollectionDue(ctx, collectionDue) {
   registerTestEntity('collectionDues', collectionDue.id);
 }
 
+function addDaysToDateString(dateString, days) {
+  const date = new Date(`${String(dateString).slice(0, 10)}T12:00:00`);
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+async function createTestCollectionDue(ctx, overrides = {}) {
+  const { client, project } = overrides.client && overrides.project
+    ? { client: overrides.client, project: overrides.project }
+    : await getInvoiceLifecycleProject(ctx);
+
+  const amountDue = overrides.amount_due ?? 1000;
+  const payload = {
+    project_id: project.id,
+    project_name: project.name,
+    client_id: client.id,
+    client_name: client.name,
+    amount_due: amountDue,
+    amount_paid: overrides.amount_paid ?? 0,
+    remaining_amount: overrides.remaining_amount ?? amountDue,
+    due_date: overrides.due_date ?? getTodayDateString(),
+    opened_at: overrides.opened_at || new Date().toISOString(),
+    status: overrides.status ?? 'open',
+    payment_received: overrides.payment_received ?? false,
+    payment_received_at: overrides.payment_received_at || '',
+    tax_invoice_sent_to_client: overrides.tax_invoice_sent_to_client ?? false,
+    tax_invoice_sent_at: overrides.tax_invoice_sent_at || '',
+    tax_invoice_reference: overrides.tax_invoice_reference || '',
+    paid_at: overrides.paid_at || '',
+    source_type: overrides.source_type || 'manual',
+    form_status: overrides.form_status || 'submitted',
+    invoice_reference: overrides.invoice_reference || `${TEST_REMINDER_FLOW_PREFIX}-COL`,
+    ...overrides,
+  };
+
+  const collection = await safeRequest(
+    ctx,
+    `create_test_collection_${ctx.createdEntities.collectionDues.length + 1}`,
+    () => base44.entities.CollectionDue.create(payload),
+  );
+  trackTestCollectionDue(ctx, collection);
+  return collection;
+}
+
+async function runCollectionRulesForRecord(ctx, collection, reason = 'collection_rules') {
+  await runRuleAndRefreshRemindersOnce(ctx, async () => {
+    await runCollectionReminderRulesForCollection(collection, ctx.cache);
+  }, reason);
+}
+
+function assertReminderNextRemindAtNear(ctx, name, conditionKey, expectedDate, toleranceDays = 1.5) {
+  trackConditionKey(ctx, conditionKey);
+  const reminder = findReminderByConditionKeyInCache(ctx.cache, conditionKey);
+  const open = hasOpenReminderForConditionKey(ctx.cache, conditionKey);
+  const expected = new Date(expectedDate);
+  const actual = reminder?.next_remind_at ? new Date(reminder.next_remind_at) : null;
+  const diffDays = actual
+    ? Math.abs(actual.getTime() - expected.getTime()) / (24 * 60 * 60 * 1000)
+    : Infinity;
+
+  return {
+    name,
+    passed: open && diffDays <= toleranceDays,
+    expected: `open reminder near ${expected.toISOString()}`,
+    actual: reminder
+      ? `${reminder.status} / ${reminder.next_remind_at || '(no next_remind_at)'}`
+      : 'not found',
+    details: { conditionKey, reminderId: reminder?.id || null, diffDays },
+  };
+}
+
 async function runTest35(ctx) {
   const { client, project } = await getInvoiceLifecycleProject(ctx);
   const invoice = await createTestInvoiceProcess(ctx, ctx.createdEntities, {
@@ -3147,25 +3225,196 @@ async function runTest39(ctx) {
   );
   if (openCollection) {
     trackTestCollectionDue(ctx, openCollection);
-    await safeRequest(ctx, 'mark_collection_paid_d39', () => markCollectionDuePaid(openCollection));
+    await safeRequest(
+      ctx,
+      'complete_collection_payment_d39',
+      () => completeCollectionDue(openCollection, { paymentReceived: true, taxInvoiceSent: false }),
+    );
   }
 
   linkedProject = await fetchTestProject(ctx, project.id);
-  const collectionsAfterPaid = await safeRequest(
-    ctx,
-    'list_collections_after_paid_d39',
-    () => base44.entities.CollectionDue.filter({ project_id: project.id }),
-  );
-  const remainingOpen = (collectionsAfterPaid || []).filter(
-    (item) => item.status === 'open' || item.status === 'partially_paid',
-  );
-
   ctx.steps.push({
-    name: 'Test 39 – Collection D5: project.collection_due_now false when no open collections',
-    passed: remainingOpen.length === 0 ? linkedProject?.collection_due_now === false : true,
-    expected: remainingOpen.length === 0 ? 'collection_due_now=false' : 'skipped due to other open collections',
+    name: 'Test 39 – Collection D5: project.collection_due_now true while awaiting tax invoice',
+    passed: linkedProject?.collection_due_now === true,
+    expected: 'collection_due_now=true after payment received',
     actual: String(linkedProject?.collection_due_now),
   });
+
+  const collectionsAfterPayment = await safeRequest(
+    ctx,
+    'list_collections_after_payment_d39',
+    () => base44.entities.CollectionDue.filter({ project_id: project.id }),
+  );
+  const awaitingCollection = (collectionsAfterPayment || []).find(
+    (item) => item.status === 'awaiting_tax_invoice',
+  );
+  if (awaitingCollection) {
+    await safeRequest(
+      ctx,
+      'complete_collection_tax_d39',
+      () => completeCollectionDue(awaitingCollection, { paymentReceived: true, taxInvoiceSent: true }),
+    );
+  }
+
+  linkedProject = await fetchTestProject(ctx, project.id);
+  ctx.steps.push({
+    name: 'Test 39 – Collection D5: project.collection_due_now false after full close',
+    passed: linkedProject?.collection_due_now === false,
+    expected: 'collection_due_now=false after tax invoice sent',
+    actual: String(linkedProject?.collection_due_now),
+  });
+}
+
+async function runTest45(ctx) {
+  const { client, project } = await getInvoiceLifecycleProject(ctx);
+  const dueDate = addDaysToDateString(getTodayDateString(), 10);
+  const collection = await createTestCollectionDue(ctx, {
+    client,
+    project,
+    amount_due: 2000,
+    due_date: dueDate,
+    invoice_reference: `${TEST_REMINDER_FLOW_PREFIX}-D6`,
+  });
+
+  await runCollectionRulesForRecord(ctx, collection, 'test45');
+  const col1Key = getCollectionPaymentDueConditionKey(collection.id);
+  ctx.steps.push(assertReminderExists(ctx, 'Test 45 – Collection D6: payment reminder active/scheduled', col1Key));
+
+  const expectedRemindAt = new Date(`${addDaysToDateString(dueDate, -5)}T12:00:00`);
+  ctx.steps.push(assertReminderNextRemindAtNear(
+    ctx,
+    'Test 45 – Collection D6: next_remind_at about due_date - 5 days',
+    col1Key,
+    expectedRemindAt,
+  ));
+}
+
+async function runTest46(ctx) {
+  const { client, project } = await getInvoiceLifecycleProject(ctx);
+  const dueDate = addDaysToDateString(getTodayDateString(), -3);
+  const collection = await createTestCollectionDue(ctx, {
+    client,
+    project,
+    amount_due: 1800,
+    due_date: dueDate,
+    invoice_reference: `${TEST_REMINDER_FLOW_PREFIX}-D7`,
+  });
+
+  await runCollectionRulesForRecord(ctx, collection, 'test46');
+  const col1Key = getCollectionPaymentDueConditionKey(collection.id);
+  ctx.steps.push(assertReminderExists(ctx, 'Test 46 – Collection D7: overdue payment reminder active', col1Key));
+  ctx.steps.push(assertOpenReminderFields(ctx, 'Test 46 – Collection D7: frequency daily', col1Key, {
+    frequency: 'daily',
+  }));
+}
+
+async function runTest47(ctx) {
+  const { client, project } = await getInvoiceLifecycleProject(ctx);
+  const dueDate = addDaysToDateString(getTodayDateString(), -1);
+  const collection = await createTestCollectionDue(ctx, {
+    client,
+    project,
+    amount_due: 2200,
+    due_date: dueDate,
+    invoice_reference: `${TEST_REMINDER_FLOW_PREFIX}-D8`,
+  });
+
+  const col1Key = getCollectionPaymentDueConditionKey(collection.id);
+  const col2Key = getCollectionNeedsTaxInvoiceConditionKey(collection.id);
+
+  await runCollectionRulesForRecord(ctx, collection, 'test47_before_payment');
+  ctx.steps.push(assertReminderExists(ctx, 'Test 47 – Collection D8: COL1 active before payment', col1Key));
+
+  const afterPayment = await safeRequest(
+    ctx,
+    'complete_collection_payment_d47',
+    () => completeCollectionDue(collection, { paymentReceived: true, taxInvoiceSent: false }),
+  );
+
+  await runCollectionRulesForRecord(ctx, afterPayment, 'test47_after_payment');
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 47 – Collection D8: COL1 closed after payment', col1Key));
+  ctx.steps.push(assertReminderExists(ctx, 'Test 47 – Collection D8: COL2 active after payment', col2Key));
+  ctx.steps.push({
+    name: 'Test 47 – Collection D8: status awaiting_tax_invoice',
+    passed: afterPayment?.status === 'awaiting_tax_invoice',
+    expected: 'awaiting_tax_invoice',
+    actual: afterPayment?.status || '',
+  });
+}
+
+async function runTest48(ctx) {
+  const { client, project } = await getInvoiceLifecycleProject(ctx);
+  const collection = await createTestCollectionDue(ctx, {
+    client,
+    project,
+    amount_due: 1500,
+    due_date: addDaysToDateString(getTodayDateString(), -2),
+    status: 'awaiting_tax_invoice',
+    amount_paid: 1500,
+    remaining_amount: 0,
+    payment_received: true,
+    payment_received_at: new Date().toISOString(),
+    tax_invoice_sent_to_client: false,
+    invoice_reference: `${TEST_REMINDER_FLOW_PREFIX}-D9`,
+  });
+
+  const col2Key = getCollectionNeedsTaxInvoiceConditionKey(collection.id);
+  await runCollectionRulesForRecord(ctx, collection, 'test48_before_tax');
+  ctx.steps.push(assertReminderExists(ctx, 'Test 48 – Collection D9: COL2 active before tax invoice', col2Key));
+
+  const afterTax = await safeRequest(
+    ctx,
+    'complete_collection_tax_d48',
+    () => completeCollectionDue(collection, { paymentReceived: true, taxInvoiceSent: true }),
+  );
+
+  await runCollectionRulesForRecord(ctx, afterTax, 'test48_after_tax');
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 48 – Collection D9: COL2 closed after tax invoice', col2Key));
+  ctx.steps.push({
+    name: 'Test 48 – Collection D9: status paid after tax invoice',
+    passed: afterTax?.status === 'paid' && Boolean(afterTax?.paid_at),
+    expected: 'status=paid with paid_at',
+    actual: JSON.stringify({ status: afterTax?.status, paid_at: afterTax?.paid_at }),
+  });
+}
+
+async function runTest49(ctx) {
+  const { client, project } = await getInvoiceLifecycleProject(ctx);
+  const paidCollection = await createTestCollectionDue(ctx, {
+    client,
+    project,
+    amount_due: 900,
+    amount_paid: 900,
+    remaining_amount: 0,
+    status: 'paid',
+    payment_received: true,
+    payment_received_at: new Date().toISOString(),
+    tax_invoice_sent_to_client: true,
+    tax_invoice_sent_at: new Date().toISOString(),
+    paid_at: new Date().toISOString(),
+    invoice_reference: `${TEST_REMINDER_FLOW_PREFIX}-D10-paid`,
+  });
+
+  const cancelledCollection = await createTestCollectionDue(ctx, {
+    client,
+    project,
+    amount_due: 700,
+    status: 'cancelled',
+    invoice_reference: `${TEST_REMINDER_FLOW_PREFIX}-D10-cancelled`,
+  });
+
+  await runCollectionRulesForRecord(ctx, paidCollection, 'test49_paid');
+  await runCollectionRulesForRecord(ctx, cancelledCollection, 'test49_cancelled');
+
+  const paidCol1 = getCollectionPaymentDueConditionKey(paidCollection.id);
+  const paidCol2 = getCollectionNeedsTaxInvoiceConditionKey(paidCollection.id);
+  const cancelledCol1 = getCollectionPaymentDueConditionKey(cancelledCollection.id);
+  const cancelledCol2 = getCollectionNeedsTaxInvoiceConditionKey(cancelledCollection.id);
+
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 49 – Collection D10: paid has no COL1', paidCol1));
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 49 – Collection D10: paid has no COL2', paidCol2));
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 49 – Collection D10: cancelled has no COL1', cancelledCol1));
+  ctx.steps.push(assertReminderClosed(ctx, 'Test 49 – Collection D10: cancelled has no COL2', cancelledCol2));
 }
 
 async function listTestWorkStagesForProject(projectId) {
@@ -3479,6 +3728,11 @@ const REMINDER_INTEGRATION_TEST_DEFINITIONS = [
   { name: 'Test 42', fn: runTest42 },
   { name: 'Test 43', fn: runTest43 },
   { name: 'Test 44', fn: runTest44 },
+  { name: 'Test 45', fn: runTest45 },
+  { name: 'Test 46', fn: runTest46 },
+  { name: 'Test 47', fn: runTest47 },
+  { name: 'Test 48', fn: runTest48 },
+  { name: 'Test 49', fn: runTest49 },
 ];
 
 export const REMINDER_TEST_GROUP_DEFINITIONS = {
@@ -3500,7 +3754,10 @@ export const REMINDER_TEST_GROUP_DEFINITIONS = {
   [TEST_GROUP.COLLECTION]: {
     key: TEST_GROUP.COLLECTION,
     label: TEST_GROUP_LABELS[TEST_GROUP.COLLECTION],
-    tests: REMINDER_INTEGRATION_TEST_DEFINITIONS.slice(34, 39),
+    tests: [
+      ...REMINDER_INTEGRATION_TEST_DEFINITIONS.slice(34, 39),
+      ...REMINDER_INTEGRATION_TEST_DEFINITIONS.slice(44, 49),
+    ],
   },
   [TEST_GROUP.DELETION]: {
     key: TEST_GROUP.DELETION,

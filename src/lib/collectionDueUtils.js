@@ -1,19 +1,27 @@
 import { base44 } from '@/api/base44Client';
 import { buildInvoiceCollectionNote, getTodayDateString } from '@/lib/projectCollectionDue';
 
+export const PAPERLESS_INVOICE_URL = 'https://www.paperless.tax/admin/invoice';
+
 const toNumber = (value) => {
   const num = Number(value);
   return Number.isFinite(num) ? num : 0;
 };
 
 export const COLLECTION_DUE_STATUS_LABELS = {
-  open: 'פתוח',
-  partially_paid: 'שולם חלקית',
-  paid: 'שולם',
-  cancelled: 'בוטל',
+  open: 'פתוחה',
+  partially_paid: 'שולמה חלקית',
+  awaiting_tax_invoice: 'התקבל תשלום - ממתין לחשבונית מס',
+  paid: 'נסגרה',
+  cancelled: 'בוטלה',
 };
 
-export const OPEN_COLLECTION_STATUSES = new Set(['open', 'partially_paid']);
+export const MONETARY_OPEN_COLLECTION_STATUSES = new Set(['open', 'partially_paid']);
+export const ACTIVE_COLLECTION_STATUSES = new Set(['open', 'partially_paid', 'awaiting_tax_invoice']);
+/** @deprecated use MONETARY_OPEN_COLLECTION_STATUSES or ACTIVE_COLLECTION_STATUSES */
+export const OPEN_COLLECTION_STATUSES = ACTIVE_COLLECTION_STATUSES;
+
+export const AWAITING_TAX_INVOICE_NOTE = 'נדרש לשלוח חשבונית מס ללקוח';
 
 export function buildSingleCollectionLegacyNote(invoiceReference = '') {
   const reference = String(invoiceReference || '').trim();
@@ -24,34 +32,109 @@ export function buildMultiCollectionLegacyNote() {
   return 'קיימות גביות פתוחות בפרויקט';
 }
 
-export function computeCollectionPaymentFields(amountDue, amountPaid, { paidAt = null } = {}) {
-  const due = toNumber(amountDue);
-  const paid = Math.max(toNumber(amountPaid), 0);
+export function computeCollectionDueStatus(collection, { now = new Date() } = {}) {
+  const nowIso = now.toISOString();
 
-  if (paid <= 0) {
+  if (collection?.status === 'cancelled') {
+    return {
+      amount_paid: toNumber(collection.amount_paid),
+      remaining_amount: toNumber(collection.remaining_amount),
+      status: 'cancelled',
+      payment_received: collection.payment_received === true,
+      payment_received_at: collection.payment_received_at || '',
+      tax_invoice_sent_to_client: collection.tax_invoice_sent_to_client === true,
+      tax_invoice_sent_at: collection.tax_invoice_sent_at || '',
+      paid_at: collection.paid_at || '',
+    };
+  }
+
+  const amountDue = toNumber(collection?.amount_due);
+  const amountPaid = toNumber(collection?.amount_paid);
+  const paymentReceivedFlag = collection?.payment_received === true;
+  const taxInvoiceSent = collection?.tax_invoice_sent_to_client === true;
+  let paymentReceivedAt = collection?.payment_received_at || '';
+  let taxInvoiceSentAt = collection?.tax_invoice_sent_at || '';
+  let paidAt = collection?.paid_at || '';
+
+  if (amountPaid <= 0 && !paymentReceivedFlag) {
     return {
       amount_paid: 0,
-      remaining_amount: due,
+      remaining_amount: amountDue,
       status: 'open',
+      payment_received: false,
+      payment_received_at: '',
+      tax_invoice_sent_to_client: false,
+      tax_invoice_sent_at: '',
       paid_at: '',
     };
   }
 
-  if (paid >= due) {
+  if (amountPaid > 0 && amountPaid < amountDue && !paymentReceivedFlag) {
     return {
-      amount_paid: due,
+      amount_paid: amountPaid,
+      remaining_amount: amountDue - amountPaid,
+      status: 'partially_paid',
+      payment_received: false,
+      payment_received_at: '',
+      tax_invoice_sent_to_client: false,
+      tax_invoice_sent_at: '',
+      paid_at: '',
+    };
+  }
+
+  const fullPayment = paymentReceivedFlag || amountPaid >= amountDue;
+  if (fullPayment) {
+    if (!paymentReceivedAt) paymentReceivedAt = nowIso;
+
+    if (!taxInvoiceSent) {
+      return {
+        amount_paid: amountDue,
+        remaining_amount: 0,
+        status: 'awaiting_tax_invoice',
+        payment_received: true,
+        payment_received_at: paymentReceivedAt,
+        tax_invoice_sent_to_client: false,
+        tax_invoice_sent_at: '',
+        paid_at: '',
+      };
+    }
+
+    if (!taxInvoiceSentAt) taxInvoiceSentAt = nowIso;
+    if (!paidAt) paidAt = nowIso;
+
+    return {
+      amount_paid: amountDue,
       remaining_amount: 0,
       status: 'paid',
-      paid_at: paidAt || new Date().toISOString(),
+      payment_received: true,
+      payment_received_at: paymentReceivedAt,
+      tax_invoice_sent_to_client: true,
+      tax_invoice_sent_at: taxInvoiceSentAt,
+      paid_at: paidAt,
     };
   }
 
   return {
-    amount_paid: paid,
-    remaining_amount: due - paid,
-    status: 'partially_paid',
+    amount_paid: amountPaid,
+    remaining_amount: Math.max(amountDue - amountPaid, 0),
+    status: 'open',
+    payment_received: false,
+    payment_received_at: '',
+    tax_invoice_sent_to_client: false,
+    tax_invoice_sent_at: '',
     paid_at: '',
   };
+}
+
+export function computeCollectionPaymentFields(amountDue, amountPaid, { paidAt = null } = {}) {
+  return computeCollectionDueStatus({
+    amount_due: amountDue,
+    amount_paid: amountPaid,
+    payment_received: false,
+    tax_invoice_sent_to_client: false,
+    paid_at: paidAt || '',
+    status: 'open',
+  });
 }
 
 export function pickNearestDueDate(dueDates = [], fallback = getTodayDateString()) {
@@ -79,10 +162,13 @@ export function pickNearestDueDate(dueDates = [], fallback = getTodayDateString(
   return nearest.toISOString().slice(0, 10);
 }
 
-export function buildProjectLegacyCollectionPayload(openCollections, { lastPaidAt = null } = {}) {
-  const open = (openCollections || []).filter((item) => OPEN_COLLECTION_STATUSES.has(item?.status));
+export function buildProjectLegacyCollectionPayload(collections, { lastPaidAt = null } = {}) {
+  const items = collections || [];
+  const monetaryOpen = items.filter((item) => MONETARY_OPEN_COLLECTION_STATUSES.has(item?.status));
+  const awaitingTax = items.filter((item) => item?.status === 'awaiting_tax_invoice');
+  const hasActiveWork = monetaryOpen.length > 0 || awaitingTax.length > 0;
 
-  if (!open.length) {
+  if (!hasActiveWork) {
     const payload = {
       collection_due_now: false,
       collection_due_amount: 0,
@@ -93,14 +179,24 @@ export function buildProjectLegacyCollectionPayload(openCollections, { lastPaidA
     return payload;
   }
 
-  const totalRemaining = open.reduce((sum, item) => sum + toNumber(item.remaining_amount), 0);
-  const note = open.length === 1
-    ? buildSingleCollectionLegacyNote(open[0].invoice_reference)
-    : buildMultiCollectionLegacyNote();
-  const dueDate = pickNearestDueDate(
-    open.map((item) => item.due_date).filter(Boolean),
-    getTodayDateString(),
-  );
+  const totalRemaining = monetaryOpen.reduce((sum, item) => sum + toNumber(item.remaining_amount), 0);
+
+  let note = '';
+  if (monetaryOpen.length > 0) {
+    note = monetaryOpen.length === 1
+      ? buildSingleCollectionLegacyNote(monetaryOpen[0].invoice_reference)
+      : buildMultiCollectionLegacyNote();
+  } else if (awaitingTax.length > 0) {
+    note = AWAITING_TAX_INVOICE_NOTE;
+  }
+
+  let dueDate = getTodayDateString();
+  if (monetaryOpen.length > 0) {
+    dueDate = pickNearestDueDate(
+      monetaryOpen.map((item) => item.due_date).filter(Boolean),
+      getTodayDateString(),
+    );
+  }
 
   return {
     collection_due_now: true,
@@ -121,6 +217,14 @@ export async function findNonCancelledCollectionDueForInvoice(invoiceProcessId, 
   const items = await entities.CollectionDue.filter({ invoice_process_id: invoiceProcessId });
   return (items || []).find((item) => item.status !== 'cancelled') || null;
 }
+
+const defaultCollectionPaymentFields = () => ({
+  payment_received: false,
+  payment_received_at: '',
+  tax_invoice_sent_to_client: false,
+  tax_invoice_sent_at: '',
+  tax_invoice_reference: '',
+});
 
 export function buildCollectionDuePayloadFromInvoice(invoice, { now = new Date() } = {}) {
   const amount = toNumber(invoice?.amount);
@@ -149,6 +253,7 @@ export function buildCollectionDuePayloadFromInvoice(invoice, { now = new Date()
       invoiceScope: invoice.invoice_scope,
     }),
     form_status: 'submitted',
+    ...defaultCollectionPaymentFields(),
   };
 }
 
@@ -163,7 +268,17 @@ export async function syncProjectLegacyCollectionFields(
   return entities.Project.update(projectId, payload);
 }
 
-export async function openCollectionDueFromInvoice({ invoice, entities = base44.entities }) {
+async function runCollectionRulesSafe(collection, options = {}) {
+  if (!collection?.id) return;
+  try {
+    const { runCollectionReminderRulesForCollection } = await import('@/lib/collectionReminderRules');
+    await runCollectionReminderRulesForCollection(collection, options);
+  } catch (error) {
+    console.error('[collectionDueUtils] collection reminder rules failed', error);
+  }
+}
+
+export async function openCollectionDueFromInvoice({ invoice, entities = base44.entities, cache = null } = {}) {
   if (!invoice?.id || !invoice?.project_id) {
     throw new Error('INVALID_INVOICE');
   }
@@ -174,6 +289,7 @@ export async function openCollectionDueFromInvoice({ invoice, entities = base44.
       await entities.InvoiceProcess.update(invoice.id, { collection_due_id: existing.id });
     }
     await syncProjectLegacyCollectionFields(invoice.project_id, { entities });
+    await runCollectionRulesSafe(existing, { entities, cache });
     return { collectionDue: existing, created: false, invoiceId: invoice.id };
   }
 
@@ -182,6 +298,7 @@ export async function openCollectionDueFromInvoice({ invoice, entities = base44.
 
   await entities.InvoiceProcess.update(invoice.id, { collection_due_id: collectionDue.id });
   await syncProjectLegacyCollectionFields(invoice.project_id, { entities });
+  await runCollectionRulesSafe(collectionDue, { entities, cache });
 
   return { collectionDue, created: true, invoiceId: invoice.id };
 }
@@ -203,40 +320,69 @@ export async function createCollectionEventForPayment(collectionDue, entities = 
   });
 }
 
-export async function markCollectionDuePaid(collectionDue, entities = base44.entities) {
+export async function completeCollectionDue(
+  collectionDue,
+  {
+    paymentReceived = false,
+    taxInvoiceSent = false,
+    taxInvoiceReference = '',
+    entities = base44.entities,
+    cache = null,
+  } = {},
+) {
   if (!collectionDue?.id) throw new Error('COLLECTION_NOT_FOUND');
 
-  const now = new Date().toISOString();
-  const amountDue = toNumber(collectionDue.amount_due);
-  const paymentFields = computeCollectionPaymentFields(amountDue, amountDue, { paidAt: now });
-
-  const updated = await entities.CollectionDue.update(collectionDue.id, paymentFields);
-
-  await syncProjectLegacyCollectionFields(collectionDue.project_id, {
-    lastPaidAt: now,
-    entities,
-  });
-
-  const eventPayload = {
+  const merged = {
     ...collectionDue,
-    ...paymentFields,
-    paid_at: paymentFields.paid_at,
+    amount_paid: paymentReceived
+      ? toNumber(collectionDue.amount_due)
+      : toNumber(collectionDue.amount_paid),
+    payment_received: paymentReceived || collectionDue.payment_received === true,
+    tax_invoice_sent_to_client: taxInvoiceSent,
+    tax_invoice_reference: taxInvoiceReference || collectionDue.tax_invoice_reference || '',
   };
 
-  await createCollectionEventForPayment(eventPayload, entities);
+  const computed = computeCollectionDueStatus(merged);
+  const updatePayload = {
+    ...computed,
+    tax_invoice_reference: merged.tax_invoice_reference,
+  };
 
-  return { ...collectionDue, ...updated, ...paymentFields };
+  const updated = await entities.CollectionDue.update(collectionDue.id, updatePayload);
+  const result = { ...collectionDue, ...updated, ...updatePayload };
+
+  if (computed.status === 'paid') {
+    await syncProjectLegacyCollectionFields(collectionDue.project_id, {
+      lastPaidAt: computed.paid_at,
+      entities,
+    });
+    await createCollectionEventForPayment(result, entities);
+  } else {
+    await syncProjectLegacyCollectionFields(collectionDue.project_id, { entities });
+  }
+
+  await runCollectionRulesSafe(result, { entities, cache });
+  return result;
 }
 
-export async function cancelCollectionDue(collectionDue, entities = base44.entities) {
+export async function markCollectionDuePaid(collectionDue, entities = base44.entities) {
+  return completeCollectionDue(collectionDue, {
+    paymentReceived: true,
+    taxInvoiceSent: true,
+    entities,
+  });
+}
+
+export async function cancelCollectionDue(collectionDue, entities = base44.entities, cache = null) {
   if (!collectionDue?.id) throw new Error('COLLECTION_NOT_FOUND');
 
-  await entities.CollectionDue.update(collectionDue.id, {
+  const updated = await entities.CollectionDue.update(collectionDue.id, {
     status: 'cancelled',
     form_status: 'cancelled',
   });
 
   await syncProjectLegacyCollectionFields(collectionDue.project_id, { entities });
+  await runCollectionRulesSafe({ ...collectionDue, ...updated, status: 'cancelled' }, { entities, cache });
 }
 
 export function buildCollectionDueFormPrefillFromInvoice(invoice) {
@@ -266,5 +412,6 @@ export function buildCollectionDueFormPrefillFromInvoice(invoice) {
       invoiceScope: invoice.invoice_scope,
     }),
     form_status: 'submitted',
+    ...defaultCollectionPaymentFields(),
   };
 }

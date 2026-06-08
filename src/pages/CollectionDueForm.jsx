@@ -1,18 +1,21 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { ExternalLink } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import { createPageUrl } from '@/utils';
 import { buildCollectionDueFormPageUrl, buildInvoiceProcessFormPageUrl } from '@/lib/workflowNavigation';
 import {
+  ACTIVE_COLLECTION_STATUSES,
   COLLECTION_DUE_STATUS_LABELS,
-  OPEN_COLLECTION_STATUSES,
+  PAPERLESS_INVOICE_URL,
   buildCollectionDueFormPrefillFromInvoice,
   cancelCollectionDue,
-  computeCollectionPaymentFields,
-  markCollectionDuePaid,
+  completeCollectionDue,
+  computeCollectionDueStatus,
   syncProjectLegacyCollectionFields,
 } from '@/lib/collectionDueUtils';
+import CompleteCollectionDueDialog from '@/components/collection/CompleteCollectionDueDialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -21,7 +24,6 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { ArrowRight } from 'lucide-react';
 
-const MARK_PAID_CONFIRM = 'לסמן את הגבייה כשולמה?';
 const CANCEL_CONFIRM = 'לבטל את הגבייה?';
 
 const EMPTY_FORM = {
@@ -37,6 +39,11 @@ const EMPTY_FORM = {
   due_date: '',
   opened_at: '',
   paid_at: '',
+  payment_received: false,
+  payment_received_at: '',
+  tax_invoice_sent_to_client: false,
+  tax_invoice_sent_at: '',
+  tax_invoice_reference: '',
   status: 'open',
   source_type: '',
   work_stage_ids: '',
@@ -66,6 +73,11 @@ const recordToForm = (record) => ({
   due_date: record?.due_date || '',
   opened_at: record?.opened_at || '',
   paid_at: record?.paid_at || '',
+  payment_received: record?.payment_received === true,
+  payment_received_at: record?.payment_received_at || '',
+  tax_invoice_sent_to_client: record?.tax_invoice_sent_to_client === true,
+  tax_invoice_sent_at: record?.tax_invoice_sent_at || '',
+  tax_invoice_reference: record?.tax_invoice_reference || '',
   status: record?.status || 'open',
   source_type: record?.source_type || '',
   work_stage_ids: record?.work_stage_ids || '',
@@ -77,8 +89,15 @@ const recordToForm = (record) => ({
 const buildPayload = (formData) => {
   const amountDue = Number(String(formData.amount_due || '').trim() || 0);
   const amountPaid = Number(String(formData.amount_paid || '').trim() || 0);
-  const paymentFields = computeCollectionPaymentFields(amountDue, amountPaid, {
-    paidAt: formData.paid_at || null,
+  const statusFields = computeCollectionDueStatus({
+    amount_due: amountDue,
+    amount_paid: amountPaid,
+    payment_received: formData.payment_received === true,
+    tax_invoice_sent_to_client: formData.tax_invoice_sent_to_client === true,
+    payment_received_at: formData.payment_received_at || '',
+    tax_invoice_sent_at: formData.tax_invoice_sent_at || '',
+    paid_at: formData.paid_at || '',
+    status: formData.status,
   });
 
   return {
@@ -89,7 +108,8 @@ const buildPayload = (formData) => {
     client_id: formData.client_id || '',
     client_name: formData.client_name || '',
     amount_due: amountDue,
-    ...paymentFields,
+    ...statusFields,
+    tax_invoice_reference: formData.tax_invoice_reference || '',
     due_date: formData.due_date || '',
     opened_at: formData.opened_at || new Date().toISOString(),
     source_type: formData.source_type || 'manual',
@@ -110,6 +130,7 @@ export default function CollectionDueForm() {
   const [isSaving, setIsSaving] = useState(false);
   const [isActionBusy, setIsActionBusy] = useState(false);
   const [prefillApplied, setPrefillApplied] = useState(false);
+  const [completeDialogOpen, setCompleteDialogOpen] = useState(false);
 
   const isEditMode = Boolean(recordId);
 
@@ -153,18 +174,31 @@ export default function CollectionDueForm() {
   );
 
   const previewPayment = useMemo(
-    () => computeCollectionPaymentFields(parsedAmountDue, parsedAmountPaid, {
-      paidAt: formData.paid_at || null,
+    () => computeCollectionDueStatus({
+      amount_due: parsedAmountDue,
+      amount_paid: parsedAmountPaid,
+      payment_received: formData.payment_received,
+      tax_invoice_sent_to_client: formData.tax_invoice_sent_to_client,
+      paid_at: formData.paid_at || null,
+      status: formData.status,
     }),
-    [parsedAmountDue, parsedAmountPaid, formData.paid_at],
+    [
+      parsedAmountDue,
+      parsedAmountPaid,
+      formData.payment_received,
+      formData.tax_invoice_sent_to_client,
+      formData.paid_at,
+      formData.status,
+    ],
   );
 
   const isClosed = formData.status === 'paid' || formData.status === 'cancelled';
-  const canMarkPaid = OPEN_COLLECTION_STATUSES.has(formData.status);
+  const canComplete = ACTIVE_COLLECTION_STATUSES.has(formData.status);
   const statusLabel = COLLECTION_DUE_STATUS_LABELS[formData.status] || formData.status || '-';
 
   const invalidateQueries = async (projectId) => {
     await queryClient.invalidateQueries({ queryKey: ['collection-dues'] });
+    await queryClient.invalidateQueries({ queryKey: ['reminders'] });
     if (recordId) {
       await queryClient.invalidateQueries({ queryKey: ['collection-due', recordId] });
     }
@@ -190,14 +224,17 @@ export default function CollectionDueForm() {
     try {
       const payload = buildPayload(formData);
       let savedId = recordId;
+      let savedRecord = null;
 
       if (recordId) {
         await base44.entities.CollectionDue.update(recordId, payload);
+        savedRecord = { ...(record || {}), ...payload, id: recordId };
       } else {
         const created = await base44.entities.CollectionDue.create(payload);
         if (created?.id) {
           savedId = created.id;
           setRecordId(created.id);
+          savedRecord = { ...created, ...payload };
           window.history.replaceState(
             {},
             '',
@@ -206,12 +243,14 @@ export default function CollectionDueForm() {
         }
       }
 
-      if (payload.project_id && OPEN_COLLECTION_STATUSES.has(payload.status)) {
-        await syncProjectLegacyCollectionFields(payload.project_id);
-      } else if (payload.project_id) {
-        await syncProjectLegacyCollectionFields(payload.project_id, {
-          lastPaidAt: payload.status === 'paid' ? (payload.paid_at || new Date().toISOString()) : null,
-        });
+      if (payload.project_id) {
+        const lastPaidAt = payload.status === 'paid' ? (payload.paid_at || new Date().toISOString()) : null;
+        await syncProjectLegacyCollectionFields(payload.project_id, { lastPaidAt });
+      }
+
+      if (savedRecord) {
+        const { runCollectionReminderRulesForCollection } = await import('@/lib/collectionReminderRules');
+        await runCollectionReminderRulesForCollection(savedRecord);
       }
 
       setFormData(recordToForm({ ...formData, ...payload }));
@@ -225,22 +264,24 @@ export default function CollectionDueForm() {
     }
   };
 
-  const handleMarkPaid = async () => {
-    if (!recordId || !canMarkPaid) return;
-
-    const confirmed = window.confirm(MARK_PAID_CONFIRM);
-    if (!confirmed) return;
+  const handleComplete = async ({ paymentReceived, taxInvoiceSent, taxInvoiceReference }) => {
+    if (!recordId || !canComplete) return;
 
     setIsActionBusy(true);
 
     try {
       const current = record || { ...formData, id: recordId, amount_due: parsedAmountDue };
-      const updated = await markCollectionDuePaid(current);
+      const updated = await completeCollectionDue(current, {
+        paymentReceived,
+        taxInvoiceSent,
+        taxInvoiceReference,
+      });
       setFormData(recordToForm(updated));
+      setCompleteDialogOpen(false);
       await invalidateQueries(formData.project_id);
     } catch (error) {
-      console.error('[CollectionDueForm] mark paid failed', error);
-      alert('לא הצלחנו לסמן את הגבייה כשולמה');
+      console.error('[CollectionDueForm] complete collection failed', error);
+      alert('לא הצלחנו לשמור את סיום הגבייה');
     } finally {
       setIsActionBusy(false);
     }
@@ -363,6 +404,13 @@ export default function CollectionDueForm() {
                     <Input value={String(previewPayment.remaining_amount)} disabled />
                   </div>
                   <div className="space-y-2">
+                    <Label>חשבונית מס נשלחה?</Label>
+                    <Input
+                      value={formData.tax_invoice_sent_to_client ? 'כן' : 'לא'}
+                      disabled
+                    />
+                  </div>
+                  <div className="space-y-2">
                     <Label>מקור</Label>
                     <Input value={formData.source_type || '-'} disabled />
                   </div>
@@ -387,6 +435,13 @@ export default function CollectionDueForm() {
                   />
                 </div>
 
+                <Button asChild variant="outline" size="sm" className="gap-1">
+                  <a href={PAPERLESS_INVOICE_URL} target="_blank" rel="noopener noreferrer">
+                    פתח Paperless
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                </Button>
+
                 {formData.invoice_process_id ? (
                   <Button asChild variant="link" className="px-0">
                     <Link to={buildInvoiceProcessFormPageUrl({ invoiceProcessId: formData.invoice_process_id })}>
@@ -401,14 +456,14 @@ export default function CollectionDueForm() {
               <Button type="button" disabled={isBusy || isClosed} onClick={() => { void handleSave(); }}>
                 {isEditMode ? 'שמור שינויים' : 'שמור גבייה'}
               </Button>
-              {isEditMode && canMarkPaid ? (
+              {isEditMode && canComplete ? (
                 <Button
                   type="button"
                   variant="secondary"
                   disabled={isBusy}
-                  onClick={() => { void handleMarkPaid(); }}
+                  onClick={() => setCompleteDialogOpen(true)}
                 >
-                  סמן שולם
+                  סיום גבייה
                 </Button>
               ) : null}
               {isEditMode && !isClosed ? (
@@ -428,6 +483,14 @@ export default function CollectionDueForm() {
           </>
         )}
       </div>
+
+      <CompleteCollectionDueDialog
+        open={completeDialogOpen}
+        onOpenChange={setCompleteDialogOpen}
+        collectionDue={record || { ...formData, id: recordId, amount_due: parsedAmountDue }}
+        onComplete={handleComplete}
+        isSaving={isActionBusy}
+      />
     </div>
   );
 }

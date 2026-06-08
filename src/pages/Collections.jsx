@@ -5,11 +5,12 @@ import { base44 } from '@/api/base44Client';
 import { createPageUrl } from '@/utils';
 import { buildCollectionDueFormPageUrl } from '@/lib/workflowNavigation';
 import {
+  ACTIVE_COLLECTION_STATUSES,
   COLLECTION_DUE_STATUS_LABELS,
-  OPEN_COLLECTION_STATUSES,
   cancelCollectionDue,
-  markCollectionDuePaid,
+  completeCollectionDue,
 } from '@/lib/collectionDueUtils';
+import CompleteCollectionDueDialog from '@/components/collection/CompleteCollectionDueDialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
@@ -25,7 +26,6 @@ import {
 } from '@/components/ui/table';
 
 const EMPTY_STATE_MESSAGE = 'אין גביות להצגה.';
-const MARK_PAID_CONFIRM = 'לסמן את הגבייה כשולמה?';
 const CANCEL_CONFIRM = 'לבטל את הגבייה?';
 
 const formatDateTime = (value) => {
@@ -70,10 +70,17 @@ const sortCollectionDues = (items) => (
   })
 );
 
+const formatTaxInvoiceSent = (record) => {
+  if (record.tax_invoice_sent_to_client === true) return 'כן';
+  if (record.status === 'awaiting_tax_invoice') return 'לא';
+  return '-';
+};
+
 export default function Collections() {
   const queryClient = useQueryClient();
   const [showClosed, setShowClosed] = useState(false);
   const [actionId, setActionId] = useState(null);
+  const [completeTarget, setCompleteTarget] = useState(null);
 
   const { data: collectionDues = [], isLoading } = useQuery({
     queryKey: ['collection-dues'],
@@ -86,12 +93,8 @@ export default function Collections() {
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['collection-dues'] });
     queryClient.invalidateQueries({ queryKey: ['projects'] });
+    queryClient.invalidateQueries({ queryKey: ['reminders'] });
   };
-
-  const markPaidMutation = useMutation({
-    mutationFn: (record) => markCollectionDuePaid(record),
-    onSuccess: invalidate,
-  });
 
   const cancelMutation = useMutation({
     mutationFn: (record) => cancelCollectionDue(record),
@@ -100,20 +103,24 @@ export default function Collections() {
 
   const rows = useMemo(() => {
     if (showClosed) return collectionDues;
-    return collectionDues.filter((item) => OPEN_COLLECTION_STATUSES.has(item.status));
+    return collectionDues.filter((item) => ACTIVE_COLLECTION_STATUSES.has(item.status));
   }, [collectionDues, showClosed]);
 
-  const handleMarkPaid = async (record) => {
-    if (!OPEN_COLLECTION_STATUSES.has(record.status)) return;
-    const confirmed = window.confirm(MARK_PAID_CONFIRM);
-    if (!confirmed) return;
+  const handleComplete = async ({ paymentReceived, taxInvoiceSent, taxInvoiceReference }) => {
+    if (!completeTarget) return;
 
-    setActionId(record.id);
+    setActionId(completeTarget.id);
     try {
-      await markPaidMutation.mutateAsync(record);
+      await completeCollectionDue(completeTarget, {
+        paymentReceived,
+        taxInvoiceSent,
+        taxInvoiceReference,
+      });
+      setCompleteTarget(null);
+      invalidate();
     } catch (error) {
-      console.error('[Collections] mark paid failed', error);
-      alert('לא הצלחנו לסמן את הגבייה כשולמה');
+      console.error('[Collections] complete collection failed', error);
+      alert('לא הצלחנו לשמור את סיום הגבייה');
     } finally {
       setActionId(null);
     }
@@ -173,6 +180,7 @@ export default function Collections() {
                       <TableHead className="text-right">סכום לגבייה</TableHead>
                       <TableHead className="text-right">שולם</TableHead>
                       <TableHead className="text-right">יתרה</TableHead>
+                      <TableHead className="text-right">נשלחה חשבונית מס?</TableHead>
                       <TableHead className="text-right">תאריך פתיחה</TableHead>
                       <TableHead className="text-right">תאריך יעד</TableHead>
                       <TableHead className="text-right">סטטוס</TableHead>
@@ -183,7 +191,7 @@ export default function Collections() {
                   <TableBody>
                     {rows.map((row) => {
                       const statusLabel = COLLECTION_DUE_STATUS_LABELS[row.status] || row.status || '-';
-                      const isOpen = OPEN_COLLECTION_STATUSES.has(row.status);
+                      const isActive = ACTIVE_COLLECTION_STATUSES.has(row.status);
                       const isBusy = actionId === row.id;
 
                       return (
@@ -194,6 +202,7 @@ export default function Collections() {
                           <TableCell>{formatAmount(row.amount_due)}</TableCell>
                           <TableCell>{formatAmount(row.amount_paid)}</TableCell>
                           <TableCell>{formatAmount(row.remaining_amount)}</TableCell>
+                          <TableCell>{formatTaxInvoiceSent(row)}</TableCell>
                           <TableCell>{formatDateTime(row.opened_at)}</TableCell>
                           <TableCell>{formatDate(row.due_date)}</TableCell>
                           <TableCell>
@@ -211,16 +220,16 @@ export default function Collections() {
                                   פתח
                                 </Link>
                               </Button>
-                              {isOpen ? (
+                              {isActive ? (
                                 <>
                                   <Button
                                     type="button"
                                     size="sm"
                                     variant="secondary"
                                     disabled={isBusy}
-                                    onClick={() => { void handleMarkPaid(row); }}
+                                    onClick={() => setCompleteTarget(row)}
                                   >
-                                    סמן שולם
+                                    סיום גבייה
                                   </Button>
                                   <Button
                                     type="button"
@@ -245,6 +254,16 @@ export default function Collections() {
           </CardContent>
         </Card>
       </div>
+
+      <CompleteCollectionDueDialog
+        open={Boolean(completeTarget)}
+        onOpenChange={(open) => {
+          if (!open) setCompleteTarget(null);
+        }}
+        collectionDue={completeTarget}
+        onComplete={handleComplete}
+        isSaving={Boolean(completeTarget && actionId === completeTarget.id)}
+      />
     </div>
   );
 }

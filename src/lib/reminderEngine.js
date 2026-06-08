@@ -225,6 +225,10 @@ const REMINDER_CONDITION_PREFIX_BY_ENTITY_TYPE = {
     'invoice_needs_receipt_confirmation:',
     'invoice_needs_collection:',
   ],
+  collection_due: [
+    'collection_payment_due:',
+    'collection_needs_tax_invoice:',
+  ],
 };
 
 const ORPHAN_ENTITY_LOADERS = [
@@ -235,6 +239,7 @@ const ORPHAN_ENTITY_LOADERS = [
   { sourceType: 'signed_proposal', entityName: 'SignedProposal' },
   { sourceType: 'work_stage', entityName: 'WorkStage' },
   { sourceType: 'invoice_process', entityName: 'InvoiceProcess' },
+  { sourceType: 'collection_due', entityName: 'CollectionDue' },
 ];
 
 const KNOWN_ORPHAN_SOURCE_TYPES = new Set(
@@ -260,6 +265,8 @@ const CONDITION_KEY_PREFIX_COUNTS = [
   { label: 'invoice_needs_send', prefix: 'invoice_needs_send:' },
   { label: 'invoice_needs_receipt_confirmation', prefix: 'invoice_needs_receipt_confirmation:' },
   { label: 'invoice_needs_collection', prefix: 'invoice_needs_collection:' },
+  { label: 'collection_payment_due', prefix: 'collection_payment_due:' },
+  { label: 'collection_needs_tax_invoice', prefix: 'collection_needs_tax_invoice:' },
 ];
 
 /** Default true: Dashboard must not mutate reminders until dry-run is verified. */
@@ -340,6 +347,8 @@ const REMINDER_PREFIXES = {
   INV2: 'invoice_needs_send:',
   INV3: 'invoice_needs_receipt_confirmation:',
   INV4: 'invoice_needs_collection:',
+  COL1: 'collection_payment_due:',
+  COL2: 'collection_needs_tax_invoice:',
 };
 
 const DATE_LIKE_CONDITION_KEY_PATTERN =
@@ -1515,6 +1524,26 @@ const evaluateReminderBusinessValidity = async (reminder, cache) => {
     return { valid: !hasProposal, reason: hasProposal ? 'condition_cleared' : 'valid' };
   }
 
+  if (conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.COL1)
+    || conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.COL2)) {
+    const isCol1 = conditionKeyStartsWith(conditionKey, REMINDER_PREFIXES.COL1);
+    const prefix = isCol1 ? REMINDER_PREFIXES.COL1 : REMINDER_PREFIXES.COL2;
+    const collectionId = conditionKey.slice(prefix.length);
+
+    const collectionsById = await ensureEntityMap(cache, 'CollectionDue');
+    if (!collectionsById) return { valid: true, reason: 'collection_due_loader_failed' };
+
+    const collection = collectionsById.get(collectionId);
+    if (!collection) return { valid: false, reason: 'source_deleted' };
+
+    const { needsCollectionPaymentReminder, needsCollectionTaxInvoiceReminder } = await import('@/lib/collectionReminderRules');
+    const stillValid = isCol1
+      ? needsCollectionPaymentReminder(collection)
+      : needsCollectionTaxInvoiceReminder(collection);
+
+    return { valid: stillValid, reason: stillValid ? 'valid' : 'condition_cleared' };
+  }
+
   return { valid: true, reason: 'unsupported_condition_key' };
 };
 
@@ -1610,6 +1639,7 @@ export async function runReminderReconciliationNow(reason = 'manual') {
       ensureEntityMap(cache, 'SignedProposal'),
       ensureEntityMap(cache, 'WorkStage'),
       ensureEntityMap(cache, 'InvoiceProcess'),
+      ensureEntityMap(cache, 'CollectionDue'),
     ]);
 
     const inquiriesById = cache.InquiryById;
@@ -1673,6 +1703,20 @@ export async function runReminderReconciliationNow(reason = 'manual') {
           result.hasMore = true;
           if (result.mutationCount >= RECONCILIATION_MAX_MUTATIONS_PER_RUN) return result;
         }
+      }
+    }
+
+    const remainingBeforeCollection = Math.max(RECONCILIATION_MAX_MUTATIONS_PER_RUN - result.mutationCount, 0);
+    if (remainingBeforeCollection > 0) {
+      const { runCollectionReminderRulesForAll } = await import('@/lib/collectionReminderRules');
+      const collectionSummary = await runCollectionReminderRulesForAll(cache, {
+        maxMutations: remainingBeforeCollection,
+      });
+      result.mutationCount += Number(collectionSummary.mutationCount || 0);
+      if (collectionSummary.hasMore || collectionSummary.rateLimited
+        || result.mutationCount >= RECONCILIATION_MAX_MUTATIONS_PER_RUN) {
+        result.hasMore = true;
+        if (result.mutationCount >= RECONCILIATION_MAX_MUTATIONS_PER_RUN) return result;
       }
     }
 
