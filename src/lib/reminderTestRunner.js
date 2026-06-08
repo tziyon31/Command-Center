@@ -54,6 +54,7 @@ import {
   runCollectionReminderRulesForCollection,
 } from '@/lib/collectionReminderRules';
 import { getTodayDateString } from '@/lib/projectCollectionDue';
+import { calculateProjectFinancialSummary } from '@/lib/projectFinancialUtils';
 import {
   buildProjectDeletionImpact,
   deleteProjectCascade,
@@ -3417,6 +3418,60 @@ async function runTest49(ctx) {
   ctx.steps.push(assertReminderClosed(ctx, 'Test 49 – Collection D10: cancelled has no COL2', cancelledCol2));
 }
 
+async function runTest50(ctx) {
+  const project = {
+    id: 'test-project-financial-d11',
+    total_amount: 4000,
+    collected_amount: 0,
+  };
+  const collectionDues = [
+    {
+      project_id: project.id,
+      status: 'paid',
+      amount_paid: 1600,
+      amount_due: 1600,
+      remaining_amount: 0,
+    },
+    {
+      project_id: project.id,
+      status: 'cancelled',
+      amount_paid: 999,
+      amount_due: 999,
+      remaining_amount: 0,
+    },
+  ];
+
+  const summary = calculateProjectFinancialSummary(project, collectionDues);
+
+  ctx.steps.push({
+    name: 'Test 50 – Collection D11: collected from CollectionDue',
+    passed: summary.collectedAmount === 1600 && summary.usesCollectionDue === true,
+    expected: 'collected=1600, usesCollectionDue=true',
+    actual: JSON.stringify({
+      collectedAmount: summary.collectedAmount,
+      usesCollectionDue: summary.usesCollectionDue,
+    }),
+  });
+  ctx.steps.push({
+    name: 'Test 50 – Collection D11: remaining balance',
+    passed: summary.outstandingAmount === 2400,
+    expected: 'outstanding=2400',
+    actual: String(summary.outstandingAmount),
+  });
+  ctx.steps.push({
+    name: 'Test 50 – Collection D11: legacy fallback when no CollectionDue',
+    passed: calculateProjectFinancialSummary(
+      { total_amount: 4000, collected_amount: 500 },
+      [],
+    ).collectedAmount === 500,
+    expected: 'legacy collected_amount=500',
+    actual: String(calculateProjectFinancialSummary(
+      { total_amount: 4000, collected_amount: 500 },
+      [],
+    ).collectedAmount),
+  });
+}
+
 async function listTestWorkStagesForProject(projectId) {
   const items = await base44.entities.WorkStage.list();
   return (items || []).filter((item) => matchesExactProjectId(item, projectId));
@@ -3733,6 +3788,7 @@ const REMINDER_INTEGRATION_TEST_DEFINITIONS = [
   { name: 'Test 47', fn: runTest47 },
   { name: 'Test 48', fn: runTest48 },
   { name: 'Test 49', fn: runTest49 },
+  { name: 'Test 50', fn: runTest50 },
 ];
 
 export const REMINDER_TEST_GROUP_DEFINITIONS = {
@@ -3756,7 +3812,7 @@ export const REMINDER_TEST_GROUP_DEFINITIONS = {
     label: TEST_GROUP_LABELS[TEST_GROUP.COLLECTION],
     tests: [
       ...REMINDER_INTEGRATION_TEST_DEFINITIONS.slice(34, 39),
-      ...REMINDER_INTEGRATION_TEST_DEFINITIONS.slice(44, 49),
+      ...REMINDER_INTEGRATION_TEST_DEFINITIONS.slice(44, 50),
     ],
   },
   [TEST_GROUP.DELETION]: {

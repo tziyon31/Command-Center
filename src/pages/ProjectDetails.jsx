@@ -44,6 +44,7 @@ import { runInquiryReminderRulesForInquiry } from '@/lib/inquiryReminderRules';
 import { syncProposalReminderRulesAfterProjectSave } from '@/lib/proposalReminderRules';
 import { buildProjectCreateFormFromSearchParams } from '@/lib/projectDefaults';
 import { buildProjectCreatePayloadFromForm } from '@/lib/projectCreatePayload';
+import { calculateProjectFinancialSummary } from '@/lib/projectFinancialUtils';
 import {
   buildInvoiceProcessFormPageUrl,
   buildProposalFormPageUrl,
@@ -242,6 +243,15 @@ export default function ProjectDetails() {
     queryKey: ['projects'],
     queryFn: () => base44.entities.Project.list('-year'),
     enabled: isCreateMode,
+  });
+
+  const { data: projectCollectionDues = [] } = useQuery({
+    queryKey: ['collection-dues', 'project', projectId],
+    queryFn: async () => {
+      const items = await base44.entities.CollectionDue.filter({ project_id: projectId });
+      return items || [];
+    },
+    enabled: Boolean(projectId),
   });
 
   useEffect(() => {
@@ -601,9 +611,10 @@ export default function ProjectDetails() {
     );
   }
 
-  const totalAmount = toNumber(project.total_amount);
-  const collectedAmount = toNumber(project.collected_amount);
-  const outstandingAmount = Math.max(totalAmount - collectedAmount, 0);
+  const financialSummary = calculateProjectFinancialSummary(project, projectCollectionDues);
+  const totalAmount = financialSummary.projectTotalFee;
+  const collectedAmount = financialSummary.collectedAmount;
+  const outstandingAmount = financialSummary.outstandingAmount;
   const hasCollectionDueNow =
     project.collection_due_now === true &&
     toNumber(project.collection_due_amount) > 0;
@@ -642,6 +653,7 @@ export default function ProjectDetails() {
       queryClient.invalidateQueries({ queryKey: ['project', projectId] }),
       queryClient.invalidateQueries({ queryKey: ['projects'] }),
       queryClient.invalidateQueries({ queryKey: ['client-details'] }),
+      queryClient.invalidateQueries({ queryKey: ['collection-dues', 'project', projectId] }),
     ]);
   };
 
@@ -893,6 +905,21 @@ export default function ProjectDetails() {
               <span className="text-2xl font-semibold">{formatCurrency(outstandingAmount)}</span>
             </DetailField>
           </CardContent>
+          {financialSummary.usesCollectionDue ? (
+            <CardContent className="pt-0 text-xs text-muted-foreground space-y-1">
+              <p>מבוסס על גביות CollectionDue</p>
+              {financialSummary.breakdown ? (
+                <p>
+                  שולמו: {financialSummary.breakdown.paidCollectionsCount}
+                  {' · '}
+                  יתרה פתוחה: {formatCurrency(financialSummary.breakdown.openRemainingAmount)}
+                  {financialSummary.breakdown.awaitingTaxInvoiceCount > 0
+                    ? ` · ממתין לחשבונית מס: ${financialSummary.breakdown.awaitingTaxInvoiceCount}`
+                    : ''}
+                </p>
+              ) : null}
+            </CardContent>
+          ) : null}
         </Card>
 
         <Card className="border-0 shadow-sm">
