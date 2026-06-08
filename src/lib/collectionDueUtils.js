@@ -2,6 +2,18 @@ import { base44 } from '@/api/base44Client';
 import { buildInvoiceCollectionNote, getTodayDateString } from '@/lib/projectCollectionDue';
 
 export const PAPERLESS_INVOICE_URL = 'https://www.paperless.tax/admin/invoice';
+export const GMAIL_URL = 'https://mail.google.com';
+
+export function buildGmailSearchUrl({ clientName = '', invoiceReference = '' } = {}) {
+  const query = [clientName, invoiceReference]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join(' ');
+
+  if (!query) return GMAIL_URL;
+
+  return `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(query)}`;
+}
 
 const toNumber = (value) => {
   const num = Number(value);

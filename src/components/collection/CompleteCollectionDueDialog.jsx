@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { PAPERLESS_INVOICE_URL } from '@/lib/collectionDueUtils';
+import { PAPERLESS_INVOICE_URL, buildGmailSearchUrl } from '@/lib/collectionDueUtils';
 
 const toNumber = (value) => {
   const num = Number(value);
@@ -49,6 +49,13 @@ export default function CompleteCollectionDueDialog({
   const remaining = useMemo(
     () => Math.max(amountDue - amountPaid, 0),
     [amountDue, amountPaid],
+  );
+  const gmailUrl = useMemo(
+    () => buildGmailSearchUrl({
+      clientName: collectionDue?.client_name,
+      invoiceReference: collectionDue?.invoice_reference,
+    }),
+    [collectionDue?.client_name, collectionDue?.invoice_reference],
   );
 
   const canSave = awaitingTaxOnly
@@ -117,15 +124,17 @@ export default function CompleteCollectionDueDialog({
               <Label htmlFor="collection-tax-invoice-sent" className="cursor-pointer">
                 חשבונית מס נשלחה ללקוח
               </Label>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="mr-auto gap-1"
-                asChild
-              >
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" size="sm" className="gap-1" asChild>
                 <a href={PAPERLESS_INVOICE_URL} target="_blank" rel="noopener noreferrer">
                   פתח Paperless
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              </Button>
+              <Button type="button" variant="outline" size="sm" className="gap-1" asChild>
+                <a href={gmailUrl} target="_blank" rel="noopener noreferrer">
+                  פתח Gmail
                   <ExternalLink className="w-3.5 h-3.5" />
                 </a>
               </Button>

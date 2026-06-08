@@ -4,11 +4,12 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ExternalLink } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import { createPageUrl } from '@/utils';
-import { buildCollectionDueFormPageUrl, buildInvoiceProcessFormPageUrl } from '@/lib/workflowNavigation';
+import { buildCollectionDueFormPageUrl } from '@/lib/workflowNavigation';
 import {
   ACTIVE_COLLECTION_STATUSES,
   COLLECTION_DUE_STATUS_LABELS,
   PAPERLESS_INVOICE_URL,
+  buildGmailSearchUrl,
   buildCollectionDueFormPrefillFromInvoice,
   cancelCollectionDue,
   completeCollectionDue,
@@ -195,6 +196,13 @@ export default function CollectionDueForm() {
   const isClosed = formData.status === 'paid' || formData.status === 'cancelled';
   const canComplete = ACTIVE_COLLECTION_STATUSES.has(formData.status);
   const statusLabel = COLLECTION_DUE_STATUS_LABELS[formData.status] || formData.status || '-';
+  const gmailUrl = useMemo(
+    () => buildGmailSearchUrl({
+      clientName: formData.client_name,
+      invoiceReference: formData.invoice_reference,
+    }),
+    [formData.client_name, formData.invoice_reference],
+  );
 
   const invalidateQueries = async (projectId) => {
     await queryClient.invalidateQueries({ queryKey: ['collection-dues'] });
@@ -410,10 +418,6 @@ export default function CollectionDueForm() {
                       disabled
                     />
                   </div>
-                  <div className="space-y-2">
-                    <Label>מקור</Label>
-                    <Input value={formData.source_type || '-'} disabled />
-                  </div>
                 </div>
 
                 {formData.work_stage_titles ? (
@@ -435,20 +439,20 @@ export default function CollectionDueForm() {
                   />
                 </div>
 
-                <Button asChild variant="outline" size="sm" className="gap-1">
-                  <a href={PAPERLESS_INVOICE_URL} target="_blank" rel="noopener noreferrer">
-                    פתח Paperless
-                    <ExternalLink className="w-3.5 h-3.5" />
-                  </a>
-                </Button>
-
-                {formData.invoice_process_id ? (
-                  <Button asChild variant="link" className="px-0">
-                    <Link to={buildInvoiceProcessFormPageUrl({ invoiceProcessId: formData.invoice_process_id })}>
-                      פתח תהליך חשבונית
-                    </Link>
+                <div className="flex flex-wrap gap-2">
+                  <Button asChild variant="outline" size="sm" className="gap-1">
+                    <a href={PAPERLESS_INVOICE_URL} target="_blank" rel="noopener noreferrer">
+                      פתח Paperless
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
                   </Button>
-                ) : null}
+                  <Button asChild variant="outline" size="sm" className="gap-1">
+                    <a href={gmailUrl} target="_blank" rel="noopener noreferrer">
+                      פתח Gmail
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
+                  </Button>
+                </div>
               </CardContent>
             </Card>
 
