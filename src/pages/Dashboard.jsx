@@ -34,8 +34,10 @@ import {
 import { cn } from '@/lib/utils';
 import {
   cleanupPendingReminderTestData,
+  CLEANUP_PENDING_TEST_MESSAGE,
   deepCleanReminderTestData,
   findReminderTestLeftovers,
+  getDeepCleanReminderTestPreview,
   getPendingReminderTestCleanupStatus,
   isReminderTestCleanupRequired,
   reconcileStaleReminderTestRunState,
@@ -45,6 +47,7 @@ import {
   REMINDER_TEST_DASHBOARD_RUN_GROUPS,
   TEST_GROUP_LABELS,
 } from '@/lib/reminderTestRunner';
+import { filterRealBusinessCollectionEvents } from '@/lib/testDataUtils';
 import { toast } from '@/components/ui/use-toast';
 
 const getActiveReminderTestRunningLabel = (groupKey) => {
@@ -236,11 +239,16 @@ export default function Dashboard() {
     enabled: currentUser?.role === 'admin' || currentUser?.role === 'office_manager' || currentUser?.role === 'project_worker',
   });
 
-  const { data: collectionEvents = [] } = useQuery({
+  const { data: collectionEvents = [], refetch: refetchCollectionEvents } = useQuery({
     queryKey: ['collection-events'],
     queryFn: () => base44.entities.CollectionEvent.list(),
     enabled: currentUser?.role === 'admin' || currentUser?.role === 'office_manager' || currentUser?.role === 'project_worker',
   });
+
+  const realCollectionEvents = useMemo(
+    () => filterRealBusinessCollectionEvents(collectionEvents),
+    [collectionEvents],
+  );
 
   const isTaskWorker = currentUser?.role === 'task_worker';
   const canSeeFullDashboard = !isTaskWorker;
@@ -290,7 +298,7 @@ export default function Dashboard() {
   const refreshCleanupPendingState = () => {
     const pending = reconcileStaleReminderTestRunState() || getPendingReminderTestCleanupStatus();
     if (pending?.pending || pending?.message) {
-      setReminderCleanupPendingMessage('Cleanup pending. Run Clean Pending Test Data first.');
+      setReminderCleanupPendingMessage(CLEANUP_PENDING_TEST_MESSAGE);
       return true;
     }
     setReminderCleanupPendingMessage('');
@@ -314,7 +322,7 @@ export default function Dashboard() {
       setReminderCleanupPendingMessage(
         result.group?.startsWith('deletion')
           ? 'Cleanup pending. Wait 2 minutes, then Clean Pending Test Data before rerunning deletion subgroups.'
-          : 'Cleanup pending. Run Clean Pending Test Data first.',
+          : CLEANUP_PENDING_TEST_MESSAGE,
       );
       return;
     }
@@ -343,7 +351,7 @@ export default function Dashboard() {
     }
 
     if (result.cleanup?.cleanupStatus === 'pending' || !result.cleanup?.passed) {
-      setReminderCleanupPendingMessage('Cleanup pending. Run Clean Pending Test Data first.');
+      setReminderCleanupPendingMessage(CLEANUP_PENDING_TEST_MESSAGE);
     }
   };
 
@@ -373,7 +381,7 @@ export default function Dashboard() {
           title: 'Cleanup incomplete - check console',
           variant: 'destructive',
         });
-        setReminderCleanupPendingMessage('Cleanup pending. Run Clean Pending Test Data first.');
+        setReminderCleanupPendingMessage(CLEANUP_PENDING_TEST_MESSAGE);
         console.warn('[Dashboard] pending cleanup incomplete', result);
       }
     } catch (error) {
@@ -386,14 +394,30 @@ export default function Dashboard() {
       setReminderCleanupRunning(false);
       setReminderTestStatus('');
       refetchReminders();
+      refetchCollectionEvents();
     }
   };
 
   const handleDeepCleanTestData = async () => {
     if (reminderCleanupRunning || reminderTestRunning) return;
 
+    let preview = null;
+    try {
+      preview = await getDeepCleanReminderTestPreview();
+    } catch (previewError) {
+      console.warn('[Dashboard] deep clean preview failed', previewError);
+    }
+
+    const previewLines = preview
+      ? [
+        `CollectionEvent: ${preview.collectionEvents}`,
+        `סה"כ ישויות TEST: ${preview.entityTotal}`,
+        `תזכורות TEST: ${preview.totalReminderLeftovers}`,
+      ].join('\n')
+      : 'לא ניתן לטעון תצוגה מקדימה.';
+
     const confirmed = window.confirm(
-      'פעולה זו תסרוק ותנקה נתוני בדיקה לפי prefix. להמשיך?',
+      `פעולה זו תסרוק ותנקה נתוני בדיקה עם TEST_REMINDER_FLOW בלבד.\n\n${previewLines}\n\nלהמשיך?`,
     );
     if (!confirmed) return;
 
@@ -422,7 +446,7 @@ export default function Dashboard() {
           title: 'Deep clean incomplete - check console',
           variant: 'destructive',
         });
-        setReminderCleanupPendingMessage('Cleanup pending. Run Clean Pending Test Data first.');
+        setReminderCleanupPendingMessage(CLEANUP_PENDING_TEST_MESSAGE);
         console.warn('[Dashboard] deep clean incomplete', { result, leftovers });
       }
     } catch (error) {
@@ -435,6 +459,7 @@ export default function Dashboard() {
       setReminderCleanupRunning(false);
       setReminderTestStatus('');
       refetchReminders();
+      refetchCollectionEvents();
     }
   };
 
@@ -462,6 +487,7 @@ export default function Dashboard() {
       setActiveReminderTestGroup('');
       setReminderTestStatus('');
       refetchReminders();
+      refetchCollectionEvents();
     }
   };
 
@@ -563,7 +589,7 @@ export default function Dashboard() {
   // חישובי בריאות עסקית
   const businessHealth = useMemo(() => {
     const now = new Date();
-    const events = Array.isArray(collectionEvents) ? collectionEvents : [];
+    const events = Array.isArray(realCollectionEvents) ? realCollectionEvents : [];
 
     const recordedCollection = events
       .filter((event) => isEventInCollectionPeriod(event, collectionPeriod, now))
@@ -602,7 +628,7 @@ export default function Dashboard() {
       collectionDueNowAmount: collectionDueMetrics.collectionDueNowAmount,
       collectionDueNowProjectsCount: collectionDueMetrics.collectionDueNowProjects.length,
     };
-  }, [projects, collectionEvents, collectionPeriod, proposalMetrics, collectionDueMetrics]);
+  }, [projects, realCollectionEvents, collectionPeriod, proposalMetrics, collectionDueMetrics]);
 
   // דורש טיפול
   const needsAttention = useMemo(() => {
@@ -747,7 +773,7 @@ export default function Dashboard() {
 
   // תנועה עסקית — רק גביות אמיתיות שנרשמו במערכת (לא legacy)
   const recentActivity = useMemo(() => {
-    const events = Array.isArray(collectionEvents) ? collectionEvents : [];
+    const events = Array.isArray(realCollectionEvents) ? realCollectionEvents : [];
 
     return events
       .filter((event) => event.type === 'collection_paid' && hasValidPaidAt(event.paid_at))
@@ -760,7 +786,7 @@ export default function Dashboard() {
         date: event.paid_at,
         projectId: event.project_id,
       }));
-  }, [collectionEvents]);
+  }, [realCollectionEvents]);
 
   // תצוגה למבצע משימות
   if (isTaskWorker) {

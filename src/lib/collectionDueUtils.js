@@ -362,6 +362,7 @@ export async function completeCollectionDue(
     taxInvoiceReference = '',
     entities = base44.entities,
     cache = null,
+    suppressBusinessActivity = false,
   } = {},
 ) {
   if (!collectionDue?.id) throw new Error('COLLECTION_NOT_FOUND');
@@ -393,7 +394,7 @@ export async function completeCollectionDue(
 
   await syncProjectLegacyCollectionFields(collectionDue.project_id, syncOptions);
 
-  if (computed.status === 'paid') {
+  if (computed.status === 'paid' && !suppressBusinessActivity) {
     await createCollectionEventForPayment(result, entities);
   }
 
@@ -401,11 +402,13 @@ export async function completeCollectionDue(
   return result;
 }
 
-export async function markCollectionDuePaid(collectionDue, entities = base44.entities) {
+export async function markCollectionDuePaid(collectionDue, entities = base44.entities, options = {}) {
   return completeCollectionDue(collectionDue, {
     paymentReceived: true,
     taxInvoiceSent: true,
     entities,
+    cache: options.cache ?? null,
+    suppressBusinessActivity: options.suppressBusinessActivity === true,
   });
 }
 

@@ -88,8 +88,15 @@ import {
   REMINDER_TEST_RATE_LIMIT_COOLDOWN_MS,
   upsertReminderInCache,
 } from '@/lib/reminderEngine';
+import {
+  filterRealBusinessCollectionEvents,
+  isTestCollectionEvent,
+  isTestReminderFlowLabel,
+  TEST_REMINDER_FLOW_PREFIX,
+} from '@/lib/testDataUtils';
 
-export const TEST_REMINDER_FLOW_PREFIX = 'TEST_REMINDER_FLOW';
+export { TEST_REMINDER_FLOW_PREFIX };
+export const CLEANUP_PENDING_TEST_MESSAGE = 'Cleanup pending. Clean test data before running tests.';
 export const REMINDER_TEST_RUN_STATE_KEY = 'reminderTestRunState';
 export const REMINDER_TEST_CLEANUP_RATE_LIMIT_KEY = 'reminderTestCleanupRateLimitedAt';
 
@@ -187,6 +194,7 @@ const TEST_ENTITY_SCAN_FIELDS = {
   WorkStage: ['title', 'project_name', 'client_name', 'notes'],
   InvoiceProcess: ['project_name', 'client_name', 'notes', 'invoice_reference'],
   CollectionDue: ['project_name', 'client_name', 'notes', 'invoice_reference'],
+  CollectionEvent: ['project_name', 'client_name', 'note'],
 };
 
 const TEST_ENTITY_BUCKETS = [
@@ -198,9 +206,11 @@ const TEST_ENTITY_BUCKETS = [
   { bucket: 'workStages', entityName: 'WorkStage', labelField: 'title' },
   { bucket: 'invoiceProcesses', entityName: 'InvoiceProcess', labelField: 'project_name' },
   { bucket: 'collectionDues', entityName: 'CollectionDue', labelField: 'project_name' },
+  { bucket: 'collectionEvents', entityName: 'CollectionEvent', labelField: 'project_name' },
 ];
 
 const TEST_ENTITY_DELETE_ORDER = [
+  { bucket: 'collectionEvents', entityName: 'CollectionEvent', labelField: 'project_name' },
   { bucket: 'collectionDues', entityName: 'CollectionDue', labelField: 'project_name' },
   { bucket: 'invoiceProcesses', entityName: 'InvoiceProcess', labelField: 'project_name' },
   { bucket: 'workStages', entityName: 'WorkStage', labelField: 'title' },
@@ -274,7 +284,7 @@ export function isReminderTestCleanupRunningLocal() {
 }
 
 function isTestLabel(value) {
-  return String(value || '').startsWith(TEST_REMINDER_FLOW_PREFIX);
+  return isTestReminderFlowLabel(value);
 }
 
 function entityMatchesTestPrefix(item, fields = []) {
@@ -291,6 +301,7 @@ function emptyEntityIdRegistry() {
     workStages: [],
     invoiceProcesses: [],
     collectionDues: [],
+    collectionEvents: [],
     reminders: [],
   };
 }
@@ -629,6 +640,7 @@ export async function findReminderTestLeftovers() {
     proposals: [],
     signedProposals: [],
     workStages: [],
+    collectionEvents: [],
     reminders: [],
     remindersByStatus: {
       active: [],
@@ -644,6 +656,7 @@ export async function findReminderTestLeftovers() {
       proposals: 0,
       signedProposals: 0,
       workStages: 0,
+      collectionEvents: 0,
     },
     remindersSummary: {
       total: 0,
@@ -713,6 +726,7 @@ export async function findReminderTestLeftovers() {
   report.entities.proposals = report.proposals.length;
   report.entities.signedProposals = report.signedProposals.length;
   report.entities.workStages = report.workStages.length;
+  report.entities.collectionEvents = report.collectionEvents.length;
 
   report.entityTotal = (
     report.entities.inquiries
@@ -721,6 +735,7 @@ export async function findReminderTestLeftovers() {
     + report.entities.proposals
     + report.entities.signedProposals
     + report.entities.workStages
+    + report.entities.collectionEvents
   );
 
   report.remindersSummary.total = report.reminders.length;
@@ -755,6 +770,24 @@ export function isReminderTestCleanupRequired(report) {
   return Boolean(report.cleanupRequired);
 }
 
+export async function getDeepCleanReminderTestPreview() {
+  const leftovers = await findReminderTestLeftovers();
+  return {
+    inquiries: leftovers.entities.inquiries,
+    clients: leftovers.entities.clients,
+    projects: leftovers.entities.projects,
+    proposals: leftovers.entities.proposals,
+    signedProposals: leftovers.entities.signedProposals,
+    workStages: leftovers.entities.workStages,
+    collectionEvents: leftovers.entities.collectionEvents,
+    entityTotal: leftovers.entityTotal,
+    openReminderLeftovers: leftovers.openReminderLeftovers,
+    totalReminderLeftovers: leftovers.totalReminderLeftovers,
+    total: leftovers.total,
+    cleanupRequired: leftovers.cleanupRequired,
+  };
+}
+
 async function scanTestEntitiesByPrefix(ctx) {
   const scanned = {
     inquiries: [],
@@ -765,6 +798,7 @@ async function scanTestEntitiesByPrefix(ctx) {
     workStages: [],
     invoiceProcesses: [],
     collectionDues: [],
+    collectionEvents: [],
   };
 
   for (const { entityName, bucket } of TEST_ENTITY_BUCKETS) {
@@ -855,6 +889,11 @@ function buildCleanupEntityPlan({
       sessionLists.collectionDues,
       prefixScan?.collectionDues,
     ),
+    collectionEvents: mergeEntityRecordsById(
+      registryIdsToEntityRecords(registryIds.collectionEvents, prefixScan?.collectionEvents),
+      sessionLists.collectionEvents,
+      prefixScan?.collectionEvents,
+    ),
   };
 }
 
@@ -862,6 +901,15 @@ async function cleanupDeleteEntity(ctx, entityName, item, labelField) {
   const id = item?.id;
   if (!id) {
     return { ok: true, status: 'skipped', id: null, entityName };
+  }
+
+  if (
+    entityName === 'CollectionEvent'
+    && (item?.project_name || item?.note || item?.client_name)
+    && !isTestCollectionEvent(item)
+  ) {
+    console.warn('[ReminderTestRunner] refusing to delete non-test CollectionEvent', id, item?.project_name);
+    return { ok: false, status: 'failed', id, entityName };
   }
 
   const label = item[labelField] || item.client_name || item.name || item.title || '';
@@ -978,6 +1026,7 @@ async function cancelTestRemindersForCleanup(ctx, {
 
 async function deleteTestEntitiesForCleanup(ctx, entityPlan) {
   const emptyBucketSummary = () => ({
+    collectionEvents: [],
     collectionDues: [],
     workStages: [],
     signedProposals: [],
@@ -1203,6 +1252,7 @@ const emptyCreatedEntities = () => ({
   workStages: [],
   invoiceProcesses: [],
   collectionDues: [],
+  collectionEvents: [],
 });
 
 const collectEntityIds = (createdEntities) => {
@@ -2958,6 +3008,23 @@ function trackTestCollectionDue(ctx, collectionDue) {
   registerTestEntity('collectionDues', collectionDue.id);
 }
 
+function trackTestCollectionEvent(ctx, collectionEvent) {
+  if (!collectionEvent?.id) return;
+  ctx.createdEntities.collectionEvents.push(collectionEvent);
+  registerTestEntity('collectionEvents', collectionEvent.id);
+}
+
+function completeCollectionDueForTest(collectionDue, options = {}) {
+  return completeCollectionDue(collectionDue, {
+    ...options,
+    suppressBusinessActivity: true,
+  });
+}
+
+function markCollectionDuePaidForTest(collectionDue) {
+  return markCollectionDuePaid(collectionDue, base44.entities, { suppressBusinessActivity: true });
+}
+
 function addDaysToDateString(dateString, days) {
   const date = new Date(`${String(dateString).slice(0, 10)}T12:00:00`);
   date.setDate(date.getDate() + days);
@@ -3173,7 +3240,7 @@ async function runTest38(ctx) {
   );
   trackTestCollectionDue(ctx, collectionDue);
 
-  const paid = await safeRequest(ctx, 'mark_collection_paid_d38', () => markCollectionDuePaid(collectionDue));
+  const paid = await safeRequest(ctx, 'mark_collection_paid_d38', () => markCollectionDuePaidForTest(collectionDue));
 
   ctx.steps.push({
     name: 'Test 38 – Collection D4: mark collection paid',
@@ -3230,7 +3297,7 @@ async function runTest39(ctx) {
     await safeRequest(
       ctx,
       'complete_collection_payment_d39',
-      () => completeCollectionDue(openCollection, { paymentReceived: true, taxInvoiceSent: false }),
+      () => completeCollectionDueForTest(openCollection, { paymentReceived: true, taxInvoiceSent: false }),
     );
   }
 
@@ -3254,7 +3321,7 @@ async function runTest39(ctx) {
     await safeRequest(
       ctx,
       'complete_collection_tax_d39',
-      () => completeCollectionDue(awaitingCollection, { paymentReceived: true, taxInvoiceSent: true }),
+      () => completeCollectionDueForTest(awaitingCollection, { paymentReceived: true, taxInvoiceSent: true }),
     );
   }
 
@@ -3330,7 +3397,7 @@ async function runTest47(ctx) {
   const afterPayment = await safeRequest(
     ctx,
     'complete_collection_payment_d47',
-    () => completeCollectionDue(collection, { paymentReceived: true, taxInvoiceSent: false }),
+    () => completeCollectionDueForTest(collection, { paymentReceived: true, taxInvoiceSent: false }),
   );
 
   await runCollectionRulesForRecord(ctx, afterPayment, 'test47_after_payment');
@@ -3367,7 +3434,7 @@ async function runTest48(ctx) {
   const afterTax = await safeRequest(
     ctx,
     'complete_collection_tax_d48',
-    () => completeCollectionDue(collection, { paymentReceived: true, taxInvoiceSent: true }),
+    () => completeCollectionDueForTest(collection, { paymentReceived: true, taxInvoiceSent: true }),
   );
 
   await runCollectionRulesForRecord(ctx, afterTax, 'test48_after_tax');
@@ -3470,6 +3537,126 @@ async function runTest50(ctx) {
       { total_amount: 4000, collected_amount: 500 },
       [],
     ).collectedAmount),
+  });
+}
+
+async function runTest51(ctx) {
+  const { client } = await prepareInvoiceGroupFixture(ctx);
+  const project = await createInvoiceGroupProject(ctx, 'business-activity-guard');
+  const invoice = await createTestInvoiceProcess(ctx, ctx.createdEntities, {
+    project_id: project.id,
+    project_name: project.name,
+    client_id: client.id,
+    client_name: client.name,
+    form_status: 'submitted',
+    submitted_at: new Date().toISOString(),
+    invoice_created_in_paperless: true,
+    invoice_sent_to_client: true,
+    amount: 1100,
+    invoice_reference: `${TEST_REMINDER_FLOW_PREFIX}-BA1`,
+  });
+
+  const { collectionDue } = await safeRequest(
+    ctx,
+    'open_collection_ba51',
+    () => openCollectionDueFromInvoice({ invoice }),
+  );
+  trackTestCollectionDue(ctx, collectionDue);
+
+  const beforeEvents = await safeRequest(
+    ctx,
+    'list_collection_events_before_ba51',
+    () => base44.entities.CollectionEvent.filter({ project_id: project.id }),
+  );
+  const beforeCount = (beforeEvents || []).filter((item) => item.type === 'collection_paid').length;
+
+  await safeRequest(ctx, 'mark_paid_ba51', () => markCollectionDuePaidForTest(collectionDue));
+
+  const afterEvents = await safeRequest(
+    ctx,
+    'list_collection_events_after_ba51',
+    () => base44.entities.CollectionEvent.filter({ project_id: project.id }),
+  );
+  const afterCount = (afterEvents || []).filter((item) => item.type === 'collection_paid').length;
+
+  ctx.steps.push({
+    name: 'Test 51 – Collection test does not leave business activity',
+    passed: afterCount === beforeCount,
+    expected: 'no new CollectionEvent after test payment close',
+    actual: JSON.stringify({ beforeCount, afterCount }),
+  });
+}
+
+async function runTest52(ctx) {
+  const created = await safeRequest(
+    ctx,
+    'create_test_collection_event_ba52',
+    () => base44.entities.CollectionEvent.create({
+      project_id: 'test-project-event-52',
+      project_name: `${TEST_REMINDER_FLOW_PREFIX} business-activity cleanup`,
+      amount: 1234,
+      note: 'test collection event cleanup',
+      paid_at: new Date().toISOString(),
+      type: 'collection_paid',
+    }),
+  );
+  trackTestCollectionEvent(ctx, created);
+
+  const cleanupCtx = createCleanupContext();
+  const deleteResult = await cleanupDeleteEntity(cleanupCtx, 'CollectionEvent', created, 'project_name');
+
+  const remaining = await safeRequest(
+    ctx,
+    'fetch_collection_event_after_ba52',
+    () => base44.entities.CollectionEvent.filter({ id: created.id }),
+  );
+
+  ctx.steps.push({
+    name: 'Test 52 – Deep clean removes TEST CollectionEvents',
+    passed: deleteResult.status === 'deleted' || deleteResult.status === 'already_deleted',
+    expected: 'test CollectionEvent deleted by cleanup guard',
+    actual: deleteResult.status,
+  });
+  ctx.steps.push({
+    name: 'Test 52 – TEST CollectionEvent no longer exists',
+    passed: !(remaining || []).some((item) => item.id === created.id),
+    expected: 'deleted event not found',
+    actual: JSON.stringify((remaining || []).map((item) => item.id)),
+  });
+}
+
+async function runTest53(ctx) {
+  const testEvent = {
+    project_name: `${TEST_REMINDER_FLOW_PREFIX} invoice-lifecycle project`,
+    note: 'test',
+    type: 'collection_paid',
+    amount: 1000,
+    paid_at: new Date().toISOString(),
+  };
+  const realEvent = {
+    project_name: 'פרויקט אמיתי',
+    note: 'תשלום',
+    type: 'collection_paid',
+    amount: 5000,
+    paid_at: new Date().toISOString(),
+  };
+
+  const filtered = filterRealBusinessCollectionEvents([testEvent, realEvent]);
+
+  ctx.steps.push({
+    name: 'Test 53 – BusinessActivity filters test records',
+    passed: filtered.length === 1 && filtered[0].project_name === realEvent.project_name,
+    expected: 'only real event remains after filter',
+    actual: JSON.stringify(filtered.map((item) => item.project_name)),
+  });
+  ctx.steps.push({
+    name: 'Test 53 – BusinessActivity keeps real records',
+    passed: isTestCollectionEvent(testEvent) && !isTestCollectionEvent(realEvent),
+    expected: 'test flagged, real not flagged',
+    actual: JSON.stringify({
+      test: isTestCollectionEvent(testEvent),
+      real: isTestCollectionEvent(realEvent),
+    }),
   });
 }
 
@@ -3790,6 +3977,9 @@ const REMINDER_INTEGRATION_TEST_DEFINITIONS = [
   { name: 'Test 48', fn: runTest48 },
   { name: 'Test 49', fn: runTest49 },
   { name: 'Test 50', fn: runTest50 },
+  { name: 'Test 51', fn: runTest51 },
+  { name: 'Test 52', fn: runTest52 },
+  { name: 'Test 53', fn: runTest53 },
 ];
 
 export const REMINDER_TEST_GROUP_DEFINITIONS = {
@@ -3813,7 +4003,7 @@ export const REMINDER_TEST_GROUP_DEFINITIONS = {
     label: TEST_GROUP_LABELS[TEST_GROUP.COLLECTION],
     tests: [
       ...REMINDER_INTEGRATION_TEST_DEFINITIONS.slice(34, 39),
-      ...REMINDER_INTEGRATION_TEST_DEFINITIONS.slice(44, 50),
+      ...REMINDER_INTEGRATION_TEST_DEFINITIONS.slice(44, 53),
     ],
   },
   [TEST_GROUP.DELETION]: {
@@ -3971,6 +4161,23 @@ async function executeReminderTestGroup(group, options = {}) {
   const groupDefinition = REMINDER_TEST_GROUP_DEFINITIONS[group];
   if (!groupDefinition) {
     throw new Error(`Unknown reminder test group: ${group}`);
+  }
+
+  reconcileStaleReminderTestRunState();
+  const pendingCleanup = getPendingReminderTestCleanupStatus();
+  if (pendingCleanup?.pending) {
+    return buildTestRunResult({
+      group,
+      startedAtMs: Date.now(),
+      steps: [],
+      errors: [{ stage: 'cleanup_pending', message: CLEANUP_PENDING_TEST_MESSAGE }],
+      createdEntities: emptyCreatedEntities(),
+      cleanup: { passed: false, skipped: true, cleanupStatus: 'pending' },
+      ctx: { testRunLog: [], errors: [], rateLimited: false },
+      testDefinitions: groupDefinition.tests,
+      skipped: true,
+      message: CLEANUP_PENDING_TEST_MESSAGE,
+    });
   }
 
   const acquireLock = options.acquireLock !== false;
