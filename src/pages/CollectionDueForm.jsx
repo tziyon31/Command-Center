@@ -253,7 +253,10 @@ export default function CollectionDueForm() {
 
       if (payload.project_id) {
         const lastPaidAt = payload.status === 'paid' ? (payload.paid_at || new Date().toISOString()) : null;
-        await syncProjectLegacyCollectionFields(payload.project_id, { lastPaidAt });
+        await syncProjectLegacyCollectionFields(payload.project_id, {
+          lastPaidAt,
+          freshCollections: savedRecord ? [savedRecord] : [],
+        });
       }
 
       if (savedRecord) {

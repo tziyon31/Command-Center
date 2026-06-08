@@ -174,11 +174,24 @@ export function pickNearestDueDate(dueDates = [], fallback = getTodayDateString(
   return nearest.toISOString().slice(0, 10);
 }
 
+function mergeCollectionDueRecords(collections = [], freshRecords = []) {
+  if (!freshRecords.length) return collections || [];
+
+  const byId = new Map((collections || []).map((item) => [item.id, item]));
+  for (const fresh of freshRecords) {
+    if (!fresh?.id) continue;
+    byId.set(fresh.id, { ...byId.get(fresh.id), ...fresh });
+  }
+
+  return [...byId.values()];
+}
+
 export function buildProjectLegacyCollectionPayload(collections, { lastPaidAt = null } = {}) {
   const items = collections || [];
-  const monetaryOpen = items.filter((item) => MONETARY_OPEN_COLLECTION_STATUSES.has(item?.status));
-  const awaitingTax = items.filter((item) => item?.status === 'awaiting_tax_invoice');
-  const hasActiveWork = monetaryOpen.length > 0 || awaitingTax.length > 0;
+  const openTreatment = items.filter((item) => ACTIVE_COLLECTION_STATUSES.has(item?.status));
+  const monetaryOpen = openTreatment.filter((item) => MONETARY_OPEN_COLLECTION_STATUSES.has(item?.status));
+  const awaitingTax = openTreatment.filter((item) => item?.status === 'awaiting_tax_invoice');
+  const hasActiveWork = openTreatment.length > 0;
 
   if (!hasActiveWork) {
     const payload = {
@@ -271,11 +284,14 @@ export function buildCollectionDuePayloadFromInvoice(invoice, { now = new Date()
 
 export async function syncProjectLegacyCollectionFields(
   projectId,
-  { lastPaidAt = null, entities = base44.entities } = {},
+  { lastPaidAt = null, entities = base44.entities, freshCollections = [] } = {},
 ) {
   if (!projectId) return null;
 
-  const collections = await fetchCollectionDuesForProject(projectId, entities);
+  const collections = mergeCollectionDueRecords(
+    await fetchCollectionDuesForProject(projectId, entities),
+    freshCollections,
+  );
   const payload = buildProjectLegacyCollectionPayload(collections, { lastPaidAt });
   return entities.Project.update(projectId, payload);
 }
@@ -300,7 +316,10 @@ export async function openCollectionDueFromInvoice({ invoice, entities = base44.
     if (String(invoice.collection_due_id || '') !== String(existing.id)) {
       await entities.InvoiceProcess.update(invoice.id, { collection_due_id: existing.id });
     }
-    await syncProjectLegacyCollectionFields(invoice.project_id, { entities });
+    await syncProjectLegacyCollectionFields(invoice.project_id, {
+      entities,
+      freshCollections: [existing],
+    });
     await runCollectionRulesSafe(existing, { entities, cache });
     return { collectionDue: existing, created: false, invoiceId: invoice.id };
   }
@@ -309,7 +328,10 @@ export async function openCollectionDueFromInvoice({ invoice, entities = base44.
   const collectionDue = await entities.CollectionDue.create(payload);
 
   await entities.InvoiceProcess.update(invoice.id, { collection_due_id: collectionDue.id });
-  await syncProjectLegacyCollectionFields(invoice.project_id, { entities });
+  await syncProjectLegacyCollectionFields(invoice.project_id, {
+    entities,
+    freshCollections: [collectionDue],
+  });
   await runCollectionRulesSafe(collectionDue, { entities, cache });
 
   return { collectionDue, created: true, invoiceId: invoice.id };
@@ -363,14 +385,16 @@ export async function completeCollectionDue(
   const updated = await entities.CollectionDue.update(collectionDue.id, updatePayload);
   const result = { ...collectionDue, ...updated, ...updatePayload };
 
+  const syncOptions = {
+    entities,
+    freshCollections: [result],
+    lastPaidAt: computed.status === 'paid' ? computed.paid_at : null,
+  };
+
+  await syncProjectLegacyCollectionFields(collectionDue.project_id, syncOptions);
+
   if (computed.status === 'paid') {
-    await syncProjectLegacyCollectionFields(collectionDue.project_id, {
-      lastPaidAt: computed.paid_at,
-      entities,
-    });
     await createCollectionEventForPayment(result, entities);
-  } else {
-    await syncProjectLegacyCollectionFields(collectionDue.project_id, { entities });
   }
 
   await runCollectionRulesSafe(result, { entities, cache });
@@ -393,8 +417,12 @@ export async function cancelCollectionDue(collectionDue, entities = base44.entit
     form_status: 'cancelled',
   });
 
-  await syncProjectLegacyCollectionFields(collectionDue.project_id, { entities });
-  await runCollectionRulesSafe({ ...collectionDue, ...updated, status: 'cancelled' }, { entities, cache });
+  const cancelledRecord = { ...collectionDue, ...updated, status: 'cancelled' };
+  await syncProjectLegacyCollectionFields(collectionDue.project_id, {
+    entities,
+    freshCollections: [cancelledRecord],
+  });
+  await runCollectionRulesSafe(cancelledRecord, { entities, cache });
 }
 
 export function buildCollectionDueFormPrefillFromInvoice(invoice) {

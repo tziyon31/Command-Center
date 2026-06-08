@@ -3192,7 +3192,8 @@ async function runTest38(ctx) {
 }
 
 async function runTest39(ctx) {
-  const { client, project } = await getInvoiceLifecycleProject(ctx);
+  const { client } = await prepareInvoiceGroupFixture(ctx);
+  const project = await createInvoiceGroupProject(ctx, 'collection-d5');
   const invoice = await createTestInvoiceProcess(ctx, ctx.createdEntities, {
     project_id: project.id,
     project_name: project.name,
