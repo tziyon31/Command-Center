@@ -9,6 +9,19 @@ import {
 
 const RECORDED_COLLECTION_TYPES = ['collection_paid', 'collection_paid_legacy'];
 
+/** Same eligibility filter used by Dashboard before H2 for total outstanding. */
+export const COLLECTION_RELEVANT_STATUSES = [
+  'signed',
+  'planning',
+  'submission',
+  'execution',
+  'completed',
+];
+
+export function isOutstandingEligibleProject(project) {
+  return COLLECTION_RELEVANT_STATUSES.includes(String(project?.status || '').trim());
+}
+
 const toNumber = (value) => {
   const num = Number(value);
   return Number.isFinite(num) ? num : 0;
@@ -176,6 +189,110 @@ function buildLegacyOverdueCollectionItems(projects, collectionDuesByProjectId, 
     });
 }
 
+export function buildOutstandingBreakdown(projects = [], collectionDuesByProjectId = new Map()) {
+  const includedProjects = [];
+  const excludedProjectsWithAmount = [];
+
+  for (const project of projects) {
+    const projectCollections = collectionDuesByProjectId.get(String(project.id)) || [];
+    const hasCollectionDue = projectCollections.length > 0;
+    const summary = calculateProjectFinancialSummary(project, projectCollections);
+    const totalAmount = toNumber(project.total_amount);
+
+    if (!isOutstandingEligibleProject(project)) {
+      if (totalAmount > 0 || summary.outstandingAmount > 0) {
+        excludedProjectsWithAmount.push({
+          project_id: project.id,
+          project_name: project.name,
+          status: project.status,
+          total_amount: totalAmount,
+          potential_outstanding: summary.outstandingAmount,
+          reasonExcluded: `status "${project.status}" not in collection-relevant statuses`,
+        });
+      }
+      continue;
+    }
+
+    if (summary.outstandingAmount <= 0) {
+      continue;
+    }
+
+    includedProjects.push({
+      project_id: project.id,
+      project_name: project.name,
+      status: project.status,
+      total_amount: summary.projectTotalFee,
+      collected_source: summary.usesCollectionDue ? 'collection_due' : 'legacy_collected_amount',
+      collected_amount: summary.collectedAmount,
+      outstanding: summary.outstandingAmount,
+      hasCollectionDue,
+      reasonIncluded: 'collection-relevant status and total_amount > collected',
+    });
+  }
+
+  return {
+    includedProjects,
+    excludedProjectsWithAmount,
+    totalOutstandingAmount: includedProjects.reduce((sum, item) => sum + item.outstanding, 0),
+    outstandingProjectCount: includedProjects.length,
+  };
+}
+
+export function buildRecordedCollectionComparison({
+  paidCollectionAmount,
+  collectionEventRawPaidTotal,
+  realCollectionEvents = [],
+  realCollectionDues = [],
+  approvedSkippedEventIds = [],
+} = {}) {
+  const collectionDueSourceEventIds = new Set(
+    realCollectionDues
+      .filter((record) => String(record?.source_entity_type || '') === 'collection_event')
+      .map((record) => String(record.source_entity_id)),
+  );
+
+  const approvedSkipIds = new Set(approvedSkippedEventIds.map(String));
+
+  const missingLegacyEvents = realCollectionEvents
+    .filter((event) => RECORDED_COLLECTION_TYPES.includes(event.type) && hasValidPaidAt(event.paid_at))
+    .filter((event) => !collectionDueSourceEventIds.has(String(event.id)))
+    .map((event) => ({
+      id: event.id,
+      project_id: event.project_id,
+      project_name: event.project_name,
+      amount: toNumber(event.amount),
+      paid_at: event.paid_at,
+      type: event.type,
+      approvedSkip: approvedSkipIds.has(String(event.id)),
+    }));
+
+  const unapprovedMissingEvents = missingLegacyEvents.filter((event) => !event.approvedSkip);
+  const difference = toNumber(collectionEventRawPaidTotal) - toNumber(paidCollectionAmount);
+  const expectedDifferenceFromMerlogDuplicate = 6000;
+
+  const notes = [];
+  if (amountsEqual(difference, expectedDifferenceFromMerlogDuplicate) && unapprovedMissingEvents.length === 0) {
+    notes.push('Difference is fully explained by the approved Merlog duplicate CollectionEvent skip.');
+  }
+  if (unapprovedMissingEvents.length > 0) {
+    notes.push(`${unapprovedMissingEvents.length} CollectionEvent(s) have no matching CollectionDue and are not approved skips.`);
+  }
+
+  return {
+    collectionDuePaidTotal: toNumber(paidCollectionAmount),
+    collectionEventRawPaidTotal: toNumber(collectionEventRawPaidTotal),
+    difference,
+    expectedDifferenceFromMerlogDuplicate,
+    missingLegacyEvents,
+    unapprovedMissingEvents,
+    notes,
+  };
+}
+
+function amountsEqual(left, right, epsilon = 0.01) {
+  return Math.abs(toNumber(left) - toNumber(right)) <= epsilon;
+}
+
 function buildCollectionDueActionItem(record, { overdue = false, now = new Date() } = {}) {
   const amount = toNumber(record.remaining_amount);
   const notePart = record.notes ? ` - ${record.notes}` : '';
@@ -270,13 +387,21 @@ export function buildDashboardCollectionMetrics({
       collected_amount: toNumber(projectsById.get(summary.project_id)?.collected_amount),
     }));
 
-  const openCollectionProjects = projectFinancialSummaries.filter(
-    (summary) => summary.outstandingAmount > 0,
-  );
-  const totalOutstandingAmount = openCollectionProjects.reduce(
-    (sum, summary) => sum + summary.outstandingAmount,
-    0,
-  );
+  const collectionEventRawPaidTotal = realCollectionEvents
+    .filter((event) => RECORDED_COLLECTION_TYPES.includes(event.type) && hasValidPaidAt(event.paid_at))
+    .reduce((sum, event) => sum + toNumber(event.amount), 0);
+
+  const outstandingBreakdown = buildOutstandingBreakdown(projects, collectionDuesByProjectId);
+  const totalOutstandingAmount = outstandingBreakdown.totalOutstandingAmount;
+  const openCollectionProjectsCount = outstandingBreakdown.outstandingProjectCount;
+
+  const recordedCollectionComparison = buildRecordedCollectionComparison({
+    paidCollectionAmount,
+    collectionEventRawPaidTotal,
+    realCollectionEvents,
+    realCollectionDues,
+    approvedSkippedEventIds: ['6a06d69264bf214f0935064f'],
+  });
 
   const legacyOpenItems = buildLegacyOpenCollectionItems(projects, collectionDuesByProjectId);
   const legacyOverdueItems = buildLegacyOverdueCollectionItems(projects, collectionDuesByProjectId, now);
@@ -289,10 +414,6 @@ export function buildDashboardCollectionMetrics({
     ...overdueCollectionDues.map((record) => buildCollectionDueActionItem(record, { overdue: true, now })),
     ...legacyOverdueItems,
   ];
-
-  const collectionEventRawPaidTotal = realCollectionEvents
-    .filter((event) => RECORDED_COLLECTION_TYPES.includes(event.type) && hasValidPaidAt(event.paid_at))
-    .reduce((sum, event) => sum + toNumber(event.amount), 0);
 
   // Activity feed still uses CollectionEvent; financial KPIs use CollectionDue to avoid double counting.
   const businessCollectionActivityItems = realCollectionEvents
@@ -331,8 +452,10 @@ export function buildDashboardCollectionMetrics({
     collectionEventRawPaidTotal,
 
     projectFinancialSummaries,
+    outstandingBreakdown,
+    recordedCollectionComparison,
     totalOutstandingAmount,
-    openCollectionProjectsCount: openCollectionProjects.length,
+    openCollectionProjectsCount,
 
     openCollectionActionItems,
     overdueCollectionActionItems,

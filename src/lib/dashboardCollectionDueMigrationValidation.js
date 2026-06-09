@@ -1,12 +1,19 @@
 import { base44 } from '@/api/base44Client';
-import { buildDashboardCollectionMetrics } from '@/lib/dashboardCollectionMetrics';
+import {
+  buildDashboardCollectionMetrics,
+  COLLECTION_RELEVANT_STATUSES,
+  isOutstandingEligibleProject,
+} from '@/lib/dashboardCollectionMetrics';
 
 const MERLOG_PROJECT_ID = '69eb6b5f9ae59e23cdf769ad';
 const EXPECTED_OPEN_COUNT = 9;
 const EXPECTED_OPEN_AMOUNT = 42432;
 const EXPECTED_PAID_AMOUNT = 109643;
+const EXPECTED_EVENT_RAW_PAID_TOTAL = 115643;
+const EXPECTED_PAID_DIFFERENCE = 6000;
 const EXPECTED_AWAITING_TAX_INVOICE = 0;
 const EXPECTED_MERLOG_COLLECTED = 6000;
+const SUSPICIOUS_OUTSTANDING_PROJECT_COUNT = 40;
 
 const toNumber = (value) => {
   const num = Number(value);
@@ -23,6 +30,9 @@ function addIssue(issues, check, message, details = null) {
 
 function printValidationReport(report) {
   console.group('H2 Dashboard CollectionDue migration validation');
+  if (report.outstandingBreakdown?.includedProjects?.length) {
+    console.table(report.outstandingBreakdown.includedProjects);
+  }
   if (report.issues.length > 0) {
     console.table(report.issues);
   } else {
@@ -50,6 +60,11 @@ export async function runDashboardCollectionDueMigrationValidation({
     collectionEvents,
     collectionPeriod,
   });
+
+  const {
+    outstandingBreakdown,
+    recordedCollectionComparison,
+  } = metrics;
 
   const openCountFromCollectionDue = metrics.openCollectionDues.length;
   const openAmountFromCollectionDue = metrics.openCollectionDues.reduce(
@@ -87,6 +102,33 @@ export async function runDashboardCollectionDueMigrationValidation({
     );
   }
 
+  if (!amountsEqual(metrics.collectionEventRawPaidTotal, EXPECTED_EVENT_RAW_PAID_TOTAL)) {
+    addIssue(
+      issues,
+      'collection_event_raw',
+      `Expected CollectionEvent raw paid total ${EXPECTED_EVENT_RAW_PAID_TOTAL}, got ${metrics.collectionEventRawPaidTotal}`,
+      { collectionEventRawPaidTotal: metrics.collectionEventRawPaidTotal },
+    );
+  }
+
+  if (!amountsEqual(recordedCollectionComparison.difference, EXPECTED_PAID_DIFFERENCE)) {
+    addIssue(
+      issues,
+      'paid_difference',
+      `Expected paid difference ${EXPECTED_PAID_DIFFERENCE}, got ${recordedCollectionComparison.difference}`,
+      recordedCollectionComparison,
+    );
+  }
+
+  if (recordedCollectionComparison.unapprovedMissingEvents.length > 0) {
+    addIssue(
+      issues,
+      'missing_collection_due',
+      'CollectionEvent records exist without matching CollectionDue and without approved skip',
+      recordedCollectionComparison.unapprovedMissingEvents,
+    );
+  }
+
   if (metrics.awaitingTaxInvoiceCount !== EXPECTED_AWAITING_TAX_INVOICE) {
     addIssue(
       issues,
@@ -120,20 +162,33 @@ export async function runDashboardCollectionDueMigrationValidation({
     );
   }
 
-  if (
-    metrics.usesCollectionDuePrimary
-    && amountsEqual(metrics.recordedCollection, metrics.collectionEventRawPaidTotal)
-    && !amountsEqual(metrics.recordedCollection, metrics.paidCollectionAmount)
-    && metrics.collectionEventRawPaidTotal > metrics.paidCollectionAmount
-  ) {
+  const ineligibleIncluded = outstandingBreakdown.includedProjects.filter(
+    (project) => !isOutstandingEligibleProject({ status: project.status }),
+  );
+  if (ineligibleIncluded.length > 0) {
     addIssue(
       issues,
-      'kpi_source',
-      'Recorded collection KPI still follows CollectionEvent raw total instead of CollectionDue',
+      'outstanding_status_filter',
+      'Outstanding breakdown includes projects outside collection-relevant statuses',
+      ineligibleIncluded,
+    );
+  }
+
+  const wronglyEligibleStatuses = ['pricing', 'waiting', 'rejected', 'cancelled'];
+  const excludedWrongStatusesStillOutstanding = outstandingBreakdown.excludedProjectsWithAmount.filter(
+    (project) => wronglyEligibleStatuses.includes(project.status) && toNumber(project.potential_outstanding) > 0,
+  );
+
+  if (outstandingBreakdown.outstandingProjectCount >= SUSPICIOUS_OUTSTANDING_PROJECT_COUNT) {
+    addIssue(
+      issues,
+      'outstanding_count',
+      `Outstanding project count looks too high (${outstandingBreakdown.outstandingProjectCount}); likely missing status filter`,
       {
-        recordedCollection: metrics.recordedCollection,
-        collectionEventRawPaidTotal: metrics.collectionEventRawPaidTotal,
-        paidCollectionAmount: metrics.paidCollectionAmount,
+        outstandingProjectCount: outstandingBreakdown.outstandingProjectCount,
+        totalOutstandingAmount: outstandingBreakdown.totalOutstandingAmount,
+        excludedProjectsWithAmountCount: outstandingBreakdown.excludedProjectsWithAmount.length,
+        excludedWrongStatusesStillOutstanding,
       },
     );
   }
@@ -156,11 +211,17 @@ export async function runDashboardCollectionDueMigrationValidation({
     openAmountFromCollectionDue,
     paidCollectionAmount: metrics.paidCollectionAmount,
     collectionEventRawPaidTotal: metrics.collectionEventRawPaidTotal,
+    paidDifference: recordedCollectionComparison.difference,
     awaitingTaxInvoiceCount: metrics.awaitingTaxInvoiceCount,
     merlogCollected: merlogSummary?.collectedAmount ?? null,
     recordedCollectionSource: metrics.recordedCollectionSource,
     legacyFallbackProjectsCount: metrics.legacyFallbackUsedProjects.length,
     usesCollectionDuePrimary: metrics.usesCollectionDuePrimary,
+    totalOutstandingAmount: outstandingBreakdown.totalOutstandingAmount,
+    outstandingProjectCount: outstandingBreakdown.outstandingProjectCount,
+    excludedProjectsWithAmountCount: outstandingBreakdown.excludedProjectsWithAmount.length,
+    collectionRelevantStatuses: COLLECTION_RELEVANT_STATUSES,
+    recordedCollectionComparison,
     dashboardChanged: true,
     issuesCount: issues.length,
     readOnly: true,
@@ -169,6 +230,8 @@ export async function runDashboardCollectionDueMigrationValidation({
   const report = {
     status: summary.status,
     metrics,
+    outstandingBreakdown,
+    recordedCollectionComparison,
     issues,
     summary,
     generatedAt: new Date().toISOString(),
