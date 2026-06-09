@@ -560,11 +560,18 @@ export default function ProjectPipeline() {
               תמונת מצב לפי סטטוס עבודה, שלבי עבודה, סטטוס בנייה וגבייה.
             </p>
           </div>
-          <Button asChild variant="outline" size="sm" className="shrink-0 self-start">
-            <Link to={createPageUrl('ProjectReminderCoverageAudit')}>
-              בדוק כיסוי תזכורות
-            </Link>
-          </Button>
+          <div className="flex flex-wrap gap-2 shrink-0 self-start">
+            <Button asChild variant="outline" size="sm">
+              <Link to={createPageUrl('ProjectReminderCoverageAudit')}>
+                בדוק כיסוי תזכורות
+              </Link>
+            </Button>
+            <Button asChild variant="outline" size="sm">
+              <Link to={createPageUrl('ProjectReminderIntegrityAudit')}>
+                בדוק תקינות תזכורות
+              </Link>
+            </Button>
+          </div>
         </div>
 
         {isLoading ? (

@@ -67,6 +67,7 @@ import Users from './pages/Users';
 import ProjectLifecycleAudit from './pages/ProjectLifecycleAudit';
 import ProjectPipeline from './pages/ProjectPipeline';
 import ProjectReminderCoverageAudit from './pages/ProjectReminderCoverageAudit';
+import ProjectReminderIntegrityAudit from './pages/ProjectReminderIntegrityAudit';
 import __Layout from './Layout.jsx';
 
 
@@ -91,6 +92,7 @@ export const PAGES = {
     "ProjectLifecycleAudit": ProjectLifecycleAudit,
     "ProjectPipeline": ProjectPipeline,
     "ProjectReminderCoverageAudit": ProjectReminderCoverageAudit,
+    "ProjectReminderIntegrityAudit": ProjectReminderIntegrityAudit,
 }
 
 export const pagesConfig = {

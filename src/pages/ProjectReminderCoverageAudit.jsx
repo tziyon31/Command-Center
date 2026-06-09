@@ -168,6 +168,9 @@ export default function ProjectReminderCoverageAudit() {
           <Button type="button" variant="outline" asChild>
             <Link to={createPageUrl('ProjectPipeline')}>חזרה ל-Pipeline</Link>
           </Button>
+          <Button type="button" variant="outline" asChild>
+            <Link to={createPageUrl('ProjectReminderIntegrityAudit')}>בדוק תקינות תזכורות</Link>
+          </Button>
           <Button type="button" onClick={handleRunAudit} disabled={running}>
             {running ? 'מריץ אבחון...' : 'הרץ אבחון'}
           </Button>
