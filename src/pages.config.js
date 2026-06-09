@@ -64,6 +64,7 @@ import InvoiceProcessForm from './pages/InvoiceProcessForm';
 import Collections from './pages/Collections';
 import CollectionDueForm from './pages/CollectionDueForm';
 import Users from './pages/Users';
+import ProjectLifecycleAudit from './pages/ProjectLifecycleAudit';
 import __Layout from './Layout.jsx';
 
 
@@ -85,6 +86,7 @@ export const PAGES = {
     "Collections": Collections,
     "CollectionDueForm": CollectionDueForm,
     "Users": Users,
+    "ProjectLifecycleAudit": ProjectLifecycleAudit,
 }
 
 export const pagesConfig = {
