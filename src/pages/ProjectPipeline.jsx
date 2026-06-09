@@ -1,13 +1,16 @@
 import React, { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
 import { createPageUrl } from '@/utils';
 import {
   buildPipelineSummary,
   buildProjectPipelineRows,
+  buildProjectReminderMap,
+  enrichPipelineRowsWithReminders,
   getWorkStagesCompactDisplay,
   groupProjectPipelineRows,
+  loadReadOnlyVisibleReminders,
   matchesQuickFilter,
   PIPELINE_GROUP_ORDER,
   PIPELINE_QUICK_FILTER_KEYS,
@@ -50,6 +53,7 @@ const QUICK_FILTER_BUTTONS = [
   { key: PIPELINE_QUICK_FILTER_KEYS.OPEN_COLLECTION, label: 'גבייה פתוחה' },
   { key: PIPELINE_QUICK_FILTER_KEYS.CONSTRUCTION_NOT_UPDATED, label: 'סטטוס בנייה לא עודכן' },
   { key: PIPELINE_QUICK_FILTER_KEYS.COMPLETED, label: 'בוצע' },
+  { key: PIPELINE_QUICK_FILTER_KEYS.ACTIVE_REMINDERS, label: 'עם תזכורות פעילות' },
 ];
 
 const SUMMARY_CARDS = [
@@ -95,6 +99,12 @@ const SUMMARY_CARDS = [
     quickFilter: PIPELINE_QUICK_FILTER_KEYS.COMPLETED,
     groupKey: 'planning_completed',
   },
+  {
+    label: 'תזכורות פעילות',
+    countKey: 'activeRemindersCount',
+    quickFilter: PIPELINE_QUICK_FILTER_KEYS.ACTIVE_REMINDERS,
+    groupKey: null,
+  },
 ];
 
 const formatCurrency = (value) => (
@@ -104,6 +114,90 @@ const formatCurrency = (value) => (
     maximumFractionDigits: 0,
   }).format(Number(value) || 0)
 );
+
+const formatReminderDateTime = (value) => {
+  if (!value) return '';
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+
+  return new Intl.DateTimeFormat('he-IL', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  }).format(date);
+};
+
+const formatReminderCountLabel = (count) => (
+  count === 1 ? 'תזכורת אחת' : `${count} תזכורות`
+);
+
+function navigateToReminderTarget(navigate, reminder) {
+  const targetUrl = String(reminder?.target_url || '').trim();
+  if (!targetUrl) return;
+
+  if (/^https?:\/\//i.test(targetUrl)) {
+    window.location.href = targetUrl;
+    return;
+  }
+
+  navigate(targetUrl.startsWith('/') ? targetUrl : `/${targetUrl}`);
+}
+
+function PipelineRemindersCell({ reminders = [] }) {
+  const navigate = useNavigate();
+
+  if (!reminders.length) {
+    return <span className="text-muted-foreground">-</span>;
+  }
+
+  const visibleReminders = reminders.slice(0, 2);
+  const remainingCount = reminders.length - visibleReminders.length;
+
+  return (
+    <div className="space-y-1 min-w-[150px]">
+      <NeutralBadge>{formatReminderCountLabel(reminders.length)}</NeutralBadge>
+      <div className="space-y-1">
+        {visibleReminders.map((reminder) => {
+          const nextLabel = formatReminderDateTime(reminder.next_remind_at);
+          const title = reminder.title || 'תזכורת';
+
+          if (!reminder.has_navigation_target) {
+            return (
+              <div
+                key={reminder.id}
+                className="text-xs text-muted-foreground"
+                title="אין יעד פתיחה ברור"
+              >
+                {title}
+                {nextLabel ? ` · ${nextLabel}` : ''}
+              </div>
+            );
+          }
+
+          return (
+            <button
+              key={reminder.id}
+              type="button"
+              className="block text-right text-xs text-primary hover:underline"
+              title="לחץ לפתיחת היעד של התזכורת"
+              onClick={() => navigateToReminderTarget(navigate, reminder)}
+            >
+              {title}
+              {nextLabel ? ` · ${nextLabel}` : ''}
+            </button>
+          );
+        })}
+        {remainingCount > 0 ? (
+          <div className="text-xs text-muted-foreground">
+            ועוד
+            {' '}
+            {remainingCount}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 function scrollToGroup(groupKey) {
   if (!groupKey) return;
@@ -199,6 +293,9 @@ function PipelineProjectRow({ row }) {
       </TableCell>
       <TableCell>{row.construction_status_label}</TableCell>
       <TableCell>
+        <PipelineRemindersCell reminders={row.reminders} />
+      </TableCell>
+      <TableCell>
         {row.has_open_collection_due ? (
           <NeutralBadge>
             גבייה פתוחה
@@ -283,6 +380,7 @@ function PipelineGroupCard({
                 <TableHead>סטטוס עבודה</TableHead>
                 <TableHead>שלבי עבודה</TableHead>
                 <TableHead>סטטוס בנייה</TableHead>
+                <TableHead>תזכורות</TableHead>
                 <TableHead>גבייה</TableHead>
                 <TableHead>פעולות</TableHead>
               </TableRow>
@@ -332,14 +430,27 @@ export default function ProjectPipeline() {
     queryFn: () => base44.entities.Client.list(),
   });
 
+  const { data: visibleReminders = [], isLoading: isLoadingReminders } = useQuery({
+    queryKey: ['reminders', 'pipeline-visible'],
+    queryFn: () => loadReadOnlyVisibleReminders(),
+  });
+
   const clientsById = useMemo(
     () => new Map(clients.map((client) => [client.id, client])),
     [clients],
   );
 
+  const reminderMapResult = useMemo(
+    () => buildProjectReminderMap(visibleReminders, projects, collectionDues),
+    [visibleReminders, projects, collectionDues],
+  );
+
   const pipelineRows = useMemo(
-    () => buildProjectPipelineRows(projects, workStages, collectionDues),
-    [projects, workStages, collectionDues],
+    () => enrichPipelineRowsWithReminders(
+      buildProjectPipelineRows(projects, workStages, collectionDues),
+      reminderMapResult,
+    ),
+    [projects, workStages, collectionDues, reminderMapResult],
   );
 
   const normalizedSearch = filters.searchTerm.trim().toLowerCase();
@@ -434,7 +545,10 @@ export default function ProjectPipeline() {
     }
   };
 
-  const isLoading = isLoadingProjects || isLoadingWorkStages || isLoadingCollectionDues;
+  const isLoading = isLoadingProjects
+    || isLoadingWorkStages
+    || isLoadingCollectionDues
+    || isLoadingReminders;
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6" dir="rtl">
@@ -452,7 +566,7 @@ export default function ProjectPipeline() {
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
               {SUMMARY_CARDS.map((card) => (
                 <SummaryCard
                   key={card.label}

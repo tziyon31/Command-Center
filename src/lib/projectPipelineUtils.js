@@ -1,4 +1,9 @@
+import { base44 } from '@/api/base44Client';
 import { MONETARY_OPEN_COLLECTION_STATUSES } from '@/lib/collectionDueUtils';
+import {
+  COLLECTION_NEEDS_TAX_INVOICE_PREFIX,
+  COLLECTION_PAYMENT_DUE_PREFIX,
+} from '@/lib/collectionReminderRules';
 import {
   CONSTRUCTION_STATUS_NOT_UPDATED,
   getConstructionStatusLabel,
@@ -9,6 +14,11 @@ import {
   getNonCancelledWorkStages,
   isWorkStageCompleted,
 } from '@/lib/workStageLogic';
+import {
+  getVisibleReminders,
+  sortVisibleReminders,
+} from '@/lib/reminderEngine';
+import { createPageUrl } from '@/utils';
 
 const toNumber = (value) => {
   const num = Number(value);
@@ -116,7 +126,13 @@ export const PIPELINE_QUICK_FILTER_KEYS = {
   WAITING: 'waiting',
   ACCEPTED_NO_STAGES: 'accepted_no_stages',
   IN_WORK_NO_STAGES: 'in_work_no_stages',
+  ACTIVE_REMINDERS: 'active_reminders',
 };
+
+const COLLECTION_REMINDER_CONDITION_PREFIXES = [
+  COLLECTION_PAYMENT_DUE_PREFIX,
+  COLLECTION_NEEDS_TAX_INVOICE_PREFIX,
+];
 
 export function isPipelineGroupExpandedByDefault(groupKey) {
   return PIPELINE_GROUP_EXPANDED_BY_DEFAULT.has(groupKey);
@@ -347,9 +363,178 @@ export function matchesQuickFilter(row, quickFilter) {
       return row.group_key === 'accepted_without_workflow';
     case PIPELINE_QUICK_FILTER_KEYS.IN_WORK_NO_STAGES:
       return row.group_key === 'in_work_without_workflow';
+    case PIPELINE_QUICK_FILTER_KEYS.ACTIVE_REMINDERS:
+      return toNumber(row.active_reminder_count) > 0;
     default:
       return true;
   }
+}
+
+export async function loadReadOnlyVisibleReminders({ now = new Date() } = {}) {
+  const reminders = await base44.entities.Reminder.list();
+  const visible = getVisibleReminders(reminders, now);
+  return sortVisibleReminders(visible, now);
+}
+
+export function parseProjectIdFromReminderUrl(url) {
+  const value = String(url || '').trim();
+  if (!value) return '';
+
+  const queryPart = value.includes('?') ? value.split('?')[1].split('#')[0] : '';
+  if (queryPart) {
+    const params = new URLSearchParams(queryPart);
+    const projectId = params.get('id') || params.get('project_id');
+    if (projectId) return String(projectId).trim();
+  }
+
+  const match = value.match(/(?:^|[?&])(?:id|project_id)=([^&#]+)/);
+  return match ? decodeURIComponent(match[1]).trim() : '';
+}
+
+function buildCollectionDuesById(collectionDues = []) {
+  const byId = new Map();
+  for (const due of collectionDues) {
+    const dueId = String(due?.id || '').trim();
+    if (!dueId) continue;
+    byId.set(dueId, due);
+  }
+  return byId;
+}
+
+function buildProjectIdsSet(projects = []) {
+  return new Set(
+    (projects || [])
+      .map((project) => String(project?.id || '').trim())
+      .filter(Boolean),
+  );
+}
+
+function resolveCollectionDueProjectId(conditionKey, collectionDuesById) {
+  const normalizedKey = String(conditionKey || '').trim();
+  if (!normalizedKey) return '';
+
+  for (const prefix of COLLECTION_REMINDER_CONDITION_PREFIXES) {
+    if (!normalizedKey.startsWith(prefix)) continue;
+
+    const collectionDueId = normalizedKey.slice(prefix.length).trim();
+    const collectionDue = collectionDuesById.get(collectionDueId);
+    return String(collectionDue?.project_id || '').trim();
+  }
+
+  return '';
+}
+
+export function resolveReminderProjectId(reminder, {
+  collectionDuesById = new Map(),
+  projectIds = new Set(),
+} = {}) {
+  const directProjectId = String(reminder?.project_id || '').trim();
+  if (directProjectId && projectIds.has(directProjectId)) {
+    return directProjectId;
+  }
+
+  const collectionProjectId = resolveCollectionDueProjectId(
+    reminder?.condition_key,
+    collectionDuesById,
+  );
+  if (collectionProjectId && projectIds.has(collectionProjectId)) {
+    return collectionProjectId;
+  }
+
+  const urlProjectId = parseProjectIdFromReminderUrl(reminder?.action_url);
+  if (urlProjectId && projectIds.has(urlProjectId)) {
+    return urlProjectId;
+  }
+
+  return '';
+}
+
+export function toReminderSummary(reminder, projectId) {
+  const mappedProjectId = String(projectId || reminder?.project_id || '').trim();
+  const actionUrl = String(reminder?.action_url || '').trim();
+  const fallbackProjectUrl = mappedProjectId
+    ? createPageUrl(`ProjectDetails?id=${mappedProjectId}`)
+    : '';
+
+  return {
+    id: reminder.id,
+    title: reminder.title || '',
+    status: reminder.status,
+    condition_key: reminder.condition_key || '',
+    frequency: reminder.frequency || '',
+    next_remind_at: reminder.next_remind_at || '',
+    project_id: mappedProjectId,
+    target_url: actionUrl || fallbackProjectUrl,
+    target_label: reminder.action_label || '',
+    source_type: reminder.source_type || '',
+    has_navigation_target: Boolean(actionUrl || mappedProjectId),
+  };
+}
+
+export function buildProjectReminderMap(reminders = [], projects = [], collectionDues = []) {
+  const byProjectId = {};
+  const unmappedReminders = [];
+  const projectIds = buildProjectIdsSet(projects);
+  const collectionDuesById = buildCollectionDuesById(collectionDues);
+
+  let mappedProjectRemindersCount = 0;
+  let collectionReminderMappedCount = 0;
+
+  for (const reminder of reminders) {
+    const projectId = resolveReminderProjectId(reminder, {
+      collectionDuesById,
+      projectIds,
+    });
+
+    if (!projectId) {
+      unmappedReminders.push(reminder);
+      continue;
+    }
+
+    const summary = toReminderSummary(reminder, projectId);
+    if (!byProjectId[projectId]) byProjectId[projectId] = [];
+    byProjectId[projectId].push(summary);
+    mappedProjectRemindersCount += 1;
+
+    const conditionKey = String(reminder?.condition_key || '');
+    if (COLLECTION_REMINDER_CONDITION_PREFIXES.some((prefix) => conditionKey.startsWith(prefix))) {
+      collectionReminderMappedCount += 1;
+    }
+  }
+
+  for (const projectId of Object.keys(byProjectId)) {
+    byProjectId[projectId].sort((left, right) => {
+      const leftTime = Date.parse(left.next_remind_at || '') || Number.MAX_SAFE_INTEGER;
+      const rightTime = Date.parse(right.next_remind_at || '') || Number.MAX_SAFE_INTEGER;
+      return leftTime - rightTime;
+    });
+  }
+
+  return {
+    byProjectId,
+    unmappedReminders,
+    stats: {
+      totalActiveReminders: reminders.length,
+      mappedProjectRemindersCount,
+      projectsWithActiveRemindersCount: Object.keys(byProjectId).length,
+      unmappedRemindersCount: unmappedReminders.length,
+      collectionReminderMappedCount,
+    },
+  };
+}
+
+export function enrichPipelineRowsWithReminders(rows = [], reminderMapResult = {}) {
+  const byProjectId = reminderMapResult.byProjectId || {};
+
+  return rows.map((row) => {
+    const reminders = byProjectId[row.project_id] || [];
+
+    return {
+      ...row,
+      reminders,
+      active_reminder_count: reminders.length,
+    };
+  });
 }
 
 export function buildProjectPipelineRow(project, {
@@ -478,6 +663,13 @@ export function buildPipelineSummary(rows = []) {
     constructionNotUpdatedCount: rows.filter(
       (row) => row.construction_status === CONSTRUCTION_STATUS_NOT_UPDATED
         && ['signed', 'execution', 'completed'].includes(row.status),
+    ).length,
+    activeRemindersCount: rows.reduce(
+      (sum, row) => sum + toNumber(row.active_reminder_count),
+      0,
+    ),
+    projectsWithActiveRemindersCount: rows.filter(
+      (row) => toNumber(row.active_reminder_count) > 0,
     ).length,
   };
 }
