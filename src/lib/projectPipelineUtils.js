@@ -55,7 +55,72 @@ export const PIPELINE_GROUP_LABELS = {
   other: 'אחר',
 };
 
-export const PIPELINE_GROUP_COLLAPSED_BY_DEFAULT = new Set(['rejected_cancelled']);
+export const PIPELINE_GROUP_EXPANDED_BY_DEFAULT = new Set([
+  'proposal_pricing',
+  'proposal_waiting',
+  'accepted_without_workflow',
+  'in_work_without_workflow',
+]);
+
+export const PIPELINE_GROUP_COLLAPSED_BY_DEFAULT = new Set([
+  'planning_completed',
+  'rejected_cancelled',
+]);
+
+export const PIPELINE_GROUP_EMPTY_MESSAGES = {
+  proposal_pricing: 'אין פרויקטים בקבוצה זו',
+  proposal_waiting: 'אין פרויקטים בקבוצה זו',
+  accepted_without_workflow: 'אין פרויקטים בקבוצה זו',
+  accepted_with_workflow: 'אין פרויקטים עם שלבי עבודה מוגדרים עדיין',
+  in_work_without_workflow: 'אין פרויקטים בקבוצה זו',
+  in_work_with_active_stage: 'אין פרויקטים עם שלב פעיל כרגע',
+  in_work_without_active_stage: 'אין פרויקטים עם שלבים ללא שלב פעיל',
+  planning_completed: 'אין פרויקטים בקבוצה זו',
+  rejected_cancelled: 'אין פרויקטים בקבוצה זו',
+  other: 'אין פרויקטים בקבוצה זו',
+};
+
+export const PIPELINE_STATUS_DISPLAY_LABELS = {
+  lead: 'ליד',
+  pricing: 'בתמחור',
+  waiting: 'ממתין לתגובה',
+  signed: 'התקבלה',
+  planning: 'בתכנון',
+  submission: 'בהגשה',
+  execution: 'בעבודה',
+  completed: 'בוצע - תכנון הושלם',
+  collection_completed: 'גבייה הושלמה',
+  cancelled: 'בוטל',
+  rejected: 'לא התקבל',
+};
+
+export const PIPELINE_BADGE_LABELS = {
+  no_work_stages: 'ללא שלבי עבודה',
+  open_collection_due: 'גבייה פתוחה',
+  construction_not_updated: 'סטטוס בנייה לא עודכן',
+  proposal_waiting: 'ממתין לתגובה',
+  completed_planning: 'תכנון הושלם',
+  cancelled: 'בוטל',
+  rejected: 'לא התקבל',
+};
+
+export const PIPELINE_QUICK_FILTER_KEYS = {
+  PROPOSALS: 'proposals',
+  ACCEPTED: 'accepted',
+  IN_WORK: 'in_work',
+  NO_WORK_STAGES: 'no_work_stages',
+  OPEN_COLLECTION: 'open_collection',
+  CONSTRUCTION_NOT_UPDATED: 'construction_not_updated',
+  COMPLETED: 'completed',
+  PRICING: 'pricing',
+  WAITING: 'waiting',
+  ACCEPTED_NO_STAGES: 'accepted_no_stages',
+  IN_WORK_NO_STAGES: 'in_work_no_stages',
+};
+
+export function isPipelineGroupExpandedByDefault(groupKey) {
+  return PIPELINE_GROUP_EXPANDED_BY_DEFAULT.has(groupKey);
+}
 
 export const BUSINESS_ACTIVE_STATUSES = new Set([
   'pricing',
@@ -196,44 +261,95 @@ export function resolvePipelineGroupKey(project, workStageInfo) {
   return 'other';
 }
 
-function resolveAttention(project, workStageInfo, collectionSummary, constructionSummary) {
+function buildRowBadges(project, workStageInfo, collectionSummary, constructionSummary) {
   const status = String(project?.status || '').trim();
+  const badges = [];
 
-  if (status === 'signed' && !workStageInfo.has_work_stages) {
-    return {
-      attention_level: 'high',
-      attention_reason: 'התקבלה ללא שלבי עבודה',
-    };
+  if (status === 'waiting') {
+    badges.push({ code: 'proposal_waiting', label: PIPELINE_BADGE_LABELS.proposal_waiting });
   }
-
-  if (status === 'execution' && !workStageInfo.has_work_stages) {
-    return {
-      attention_level: 'high',
-      attention_reason: 'בעבודה ללא שלבי עבודה',
-    };
+  if (status === 'completed') {
+    badges.push({ code: 'completed_planning', label: PIPELINE_BADGE_LABELS.completed_planning });
   }
-
+  if (status === 'cancelled') {
+    badges.push({ code: 'cancelled', label: PIPELINE_BADGE_LABELS.cancelled });
+  }
+  if (status === 'rejected') {
+    badges.push({ code: 'rejected', label: PIPELINE_BADGE_LABELS.rejected });
+  }
+  if ((status === 'signed' || status === 'execution') && !workStageInfo.has_work_stages) {
+    badges.push({ code: 'no_work_stages', label: PIPELINE_BADGE_LABELS.no_work_stages });
+  }
   if (collectionSummary.has_open_collection_due) {
-    return {
-      attention_level: 'medium',
-      attention_reason: 'גבייה פתוחה',
-    };
+    badges.push({ code: 'open_collection_due', label: PIPELINE_BADGE_LABELS.open_collection_due });
   }
-
   if (
     constructionSummary.is_not_updated
     && ['signed', 'execution', 'completed'].includes(status)
   ) {
+    badges.push({
+      code: 'construction_not_updated',
+      label: PIPELINE_BADGE_LABELS.construction_not_updated,
+    });
+  }
+
+  return badges;
+}
+
+export function getWorkStagesCompactDisplay(row) {
+  if (!row?.work_stage_count) {
     return {
-      attention_level: 'medium',
-      attention_reason: 'סטטוס בנייה לא עודכן',
+      primary: 'לא הוגדרו שלבים',
+      secondary: '',
     };
   }
 
-  return {
-    attention_level: 'low',
-    attention_reason: '',
-  };
+  const primary = `בוצעו ${row.completed_work_stage_count}/${row.work_stage_count}`;
+  const secondary = row.active_work_stage_title
+    ? `פעיל: ${row.active_work_stage_title}`
+    : '';
+
+  return { primary, secondary };
+}
+
+export function getPipelineStatusDisplayLabel(status) {
+  const normalized = String(status || '').trim();
+  return PIPELINE_STATUS_DISPLAY_LABELS[normalized]
+    || PROJECT_WORK_STATUS_LABELS[normalized]
+    || normalized
+    || '-';
+}
+
+export function matchesQuickFilter(row, quickFilter) {
+  if (!quickFilter) return true;
+
+  switch (quickFilter) {
+    case PIPELINE_QUICK_FILTER_KEYS.PROPOSALS:
+      return ['pricing', 'waiting'].includes(row.status);
+    case PIPELINE_QUICK_FILTER_KEYS.ACCEPTED:
+      return row.status === 'signed';
+    case PIPELINE_QUICK_FILTER_KEYS.IN_WORK:
+      return row.status === 'execution';
+    case PIPELINE_QUICK_FILTER_KEYS.NO_WORK_STAGES:
+      return row.work_stage_count === 0;
+    case PIPELINE_QUICK_FILTER_KEYS.OPEN_COLLECTION:
+      return row.has_open_collection_due;
+    case PIPELINE_QUICK_FILTER_KEYS.CONSTRUCTION_NOT_UPDATED:
+      return row.construction_status === CONSTRUCTION_STATUS_NOT_UPDATED
+        && ['signed', 'execution', 'completed'].includes(row.status);
+    case PIPELINE_QUICK_FILTER_KEYS.COMPLETED:
+      return row.group_key === 'planning_completed';
+    case PIPELINE_QUICK_FILTER_KEYS.PRICING:
+      return row.group_key === 'proposal_pricing';
+    case PIPELINE_QUICK_FILTER_KEYS.WAITING:
+      return row.group_key === 'proposal_waiting';
+    case PIPELINE_QUICK_FILTER_KEYS.ACCEPTED_NO_STAGES:
+      return row.group_key === 'accepted_without_workflow';
+    case PIPELINE_QUICK_FILTER_KEYS.IN_WORK_NO_STAGES:
+      return row.group_key === 'in_work_without_workflow';
+    default:
+      return true;
+  }
 }
 
 export function buildProjectPipelineRow(project, {
@@ -244,7 +360,8 @@ export function buildProjectPipelineRow(project, {
   const collectionSummary = getProjectCollectionSummary(project, collectionDues);
   const constructionSummary = getProjectConstructionStatusSummary(project);
   const groupKey = resolvePipelineGroupKey(project, workStageInfo);
-  const attention = resolveAttention(
+  const status = String(project?.status || '').trim();
+  const statusBadges = buildRowBadges(
     project,
     workStageInfo,
     collectionSummary,
@@ -262,8 +379,9 @@ export function buildProjectPipelineRow(project, {
     project_type: project.project_type || '',
     year: toNumber(project.year),
     total_amount: toNumber(project.total_amount),
-    status: String(project?.status || '').trim(),
+    status,
     status_label: getProjectWorkStatusLabel(project),
+    status_display_label: getPipelineStatusDisplayLabel(status),
 
     work_stage_count: workStageInfo.work_stage_count,
     completed_work_stage_count: workStageInfo.completed_work_stage_count,
@@ -281,8 +399,7 @@ export function buildProjectPipelineRow(project, {
 
     group_key: groupKey,
     group_label: PIPELINE_GROUP_LABELS[groupKey] || PIPELINE_GROUP_LABELS.other,
-    attention_level: attention.attention_level,
-    attention_reason: attention.attention_reason,
+    status_badges: statusBadges,
   };
 }
 
@@ -322,7 +439,9 @@ export function groupProjectPipelineRows(rows = []) {
       rows: [],
       count: 0,
       total_amount: 0,
-      collapsed_by_default: PIPELINE_GROUP_COLLAPSED_BY_DEFAULT.has(groupKey),
+      expanded_by_default: isPipelineGroupExpandedByDefault(groupKey),
+      collapsed_by_default: !isPipelineGroupExpandedByDefault(groupKey),
+      empty_message: PIPELINE_GROUP_EMPTY_MESSAGES[groupKey] || PIPELINE_GROUP_EMPTY_MESSAGES.other,
     };
   }
 
