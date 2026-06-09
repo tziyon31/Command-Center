@@ -37,6 +37,7 @@ import {
 import DeleteProjectDialog from '@/components/deletion/DeleteProjectDialog';
 import { invalidateQueriesAfterProjectDeletion } from '@/lib/projectDeletionUtils';
 import ProjectClientSection from '@/components/workflow/ProjectClientSection';
+import ProjectConstructionStatusSection from '@/components/workflow/ProjectConstructionStatusSection';
 import ProjectCreateFormFields from '@/components/workflow/ProjectCreateFormFields';
 import { assertProjectHasClientId } from '@/lib/projectValidation';
 import { runClientReminderRulesForClient } from '@/lib/clientReminderRules';
@@ -882,6 +883,11 @@ export default function ProjectDetails() {
             <DetailField label="תאריך עדכון">{formatDate(project.updated_date)}</DetailField>
           </CardContent>
         </Card>
+
+        <ProjectConstructionStatusSection
+          project={project}
+          onSaved={refreshProjectData}
+        />
 
         {!project.client_id && (
           <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">

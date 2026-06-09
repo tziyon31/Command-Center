@@ -1,4 +1,5 @@
 import { base44 } from '@/api/base44Client';
+import { CONSTRUCTION_STATUS_LABELS } from '@/lib/constructionStatusUtils';
 import {
   getActiveWorkStage,
   getNonCancelledWorkStages,
@@ -21,15 +22,7 @@ export const PROJECT_STATUSES = [
 
 export const PROPOSAL_FORM_STATUSES = ['draft', 'submitted', 'cancelled'];
 
-export const CONSTRUCTION_STATUS_VALUES = {
-  not_updated: 'לא עודכן',
-  licensing_and_permit_process: 'רישוי וקבלת היתר',
-  building_permit_received: 'היתר בניה',
-  execution_excavation_and_shoring: 'ביצוע - חפירה ודיפון',
-  execution_walls_and_ceilings: 'ביצוע - קירות ותקרות',
-  execution_commissioning_and_activation: 'ביצוע - הרצה והפעלה',
-  delivered_to_client: 'מסירה ללקוח',
-};
+export const CONSTRUCTION_STATUS_VALUES = CONSTRUCTION_STATUS_LABELS;
 
 const CONSTRUCTION_KEYWORD_RULES = [
   {
@@ -1061,11 +1054,21 @@ export async function runProjectLifecycleAlignmentAudit({ entities = base44.enti
       proposalFormStatuses: PROPOSAL_FORM_STATUSES,
       quoteEntityAvailable,
       quoteStatuses,
-      supportsConstructionStatus: false,
+      supportsConstructionStatus: true,
       supportsDeliveryStatus: false,
       supportsFacilityOperationalStatus: false,
-      constructionFieldsFound: [],
-      lifecycleFieldsFound: ['Project.status', 'Project.bid_number', 'Project.work_number', 'WorkStage'],
+      constructionFieldsFound: [
+        'construction_status',
+        'construction_status_note',
+        'construction_status_updated_at',
+      ],
+      lifecycleFieldsFound: [
+        'Project.status',
+        'Project.bid_number',
+        'Project.work_number',
+        'Project.construction_status',
+        'WorkStage',
+      ],
     },
     counts,
     groups,
