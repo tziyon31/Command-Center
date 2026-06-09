@@ -91,7 +91,7 @@
     "end_date": {
       "type": "string",
       "format": "date",
-      "description": "\u05ea\u05d0\u05e8\u05d9\u05da \u05e1\u05d9\u05d5\u05dd \u05de\u05e9\u05d5\u05e2\u05e8"
+      "description": "\u05ea\u05d0\u05e8\u05d9\u05da \u05e1\u05d9\u05d5\u05dd \u05de\u05e9\u05d5\u05e2\u05e8\u05da"
     },
     "notes": {
       "type": "string",
@@ -147,6 +147,30 @@
           }
         }
       }
+    },
+    "construction_status": {
+      "type": "string",
+      "enum": [
+        "not_updated",
+        "licensing_and_permit_process",
+        "building_permit_received",
+        "execution_excavation_and_shoring",
+        "execution_walls_and_ceilings",
+        "execution_commissioning_and_activation",
+        "delivered_to_client"
+      ],
+      "default": "not_updated",
+      "description": "\u05e1\u05d8\u05d8\u05d5\u05e1 \u05d1\u05e0\u05d9\u05d9\u05d4/\u05d1\u05d9\u05e6\u05d5\u05e2 \u05d1\u05e9\u05d8\u05d7"
+    },
+    "construction_status_note": {
+      "type": "string",
+      "default": "",
+      "description": "\u05d4\u05e2\u05e8\u05d4 \u05dc\u05e1\u05d8\u05d8\u05d5\u05e1 \u05d4\u05d1\u05e0\u05d9\u05d9\u05d4"
+    },
+    "construction_status_updated_at": {
+      "type": "string",
+      "default": "",
+      "description": "\u05de\u05ea\u05d9 \u05e2\u05d5\u05d3\u05db\u05df \u05e1\u05d8\u05d8\u05d5\u05e1 \u05d4\u05d1\u05e0\u05d9\u05d9\u05d4 (ISO string)"
     }
   },
   "required": [
