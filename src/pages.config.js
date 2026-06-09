@@ -65,6 +65,7 @@ import Collections from './pages/Collections';
 import CollectionDueForm from './pages/CollectionDueForm';
 import Users from './pages/Users';
 import ProjectLifecycleAudit from './pages/ProjectLifecycleAudit';
+import ProjectPipeline from './pages/ProjectPipeline';
 import __Layout from './Layout.jsx';
 
 
@@ -87,6 +88,7 @@ export const PAGES = {
     "CollectionDueForm": CollectionDueForm,
     "Users": Users,
     "ProjectLifecycleAudit": ProjectLifecycleAudit,
+    "ProjectPipeline": ProjectPipeline,
 }
 
 export const pagesConfig = {
