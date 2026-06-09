@@ -66,6 +66,7 @@ import CollectionDueForm from './pages/CollectionDueForm';
 import Users from './pages/Users';
 import ProjectLifecycleAudit from './pages/ProjectLifecycleAudit';
 import ProjectPipeline from './pages/ProjectPipeline';
+import ProjectReminderCoverageAudit from './pages/ProjectReminderCoverageAudit';
 import __Layout from './Layout.jsx';
 
 
@@ -89,6 +90,7 @@ export const PAGES = {
     "Users": Users,
     "ProjectLifecycleAudit": ProjectLifecycleAudit,
     "ProjectPipeline": ProjectPipeline,
+    "ProjectReminderCoverageAudit": ProjectReminderCoverageAudit,
 }
 
 export const pagesConfig = {

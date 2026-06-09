@@ -553,11 +553,18 @@ export default function ProjectPipeline() {
   return (
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6" dir="rtl">
       <div className="max-w-[1400px] mx-auto space-y-6">
-        <div>
-          <h1 className="text-3xl font-bold">Pipeline פרויקטים</h1>
-          <p className="text-muted-foreground mt-2">
-            תמונת מצב לפי סטטוס עבודה, שלבי עבודה, סטטוס בנייה וגבייה.
-          </p>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h1 className="text-3xl font-bold">Pipeline פרויקטים</h1>
+            <p className="text-muted-foreground mt-2">
+              תמונת מצב לפי סטטוס עבודה, שלבי עבודה, סטטוס בנייה וגבייה.
+            </p>
+          </div>
+          <Button asChild variant="outline" size="sm" className="shrink-0 self-start">
+            <Link to={createPageUrl('ProjectReminderCoverageAudit')}>
+              בדוק כיסוי תזכורות
+            </Link>
+          </Button>
         </div>
 
         {isLoading ? (
