@@ -75,6 +75,19 @@ const ACTIVE_PROJECT_STATUSES = new Set([
   'collection_completed',
 ]);
 
+const ACTIVE_CONFLICT_STATUSES = new Set([
+  'signed',
+  'planning',
+  'submission',
+  'execution',
+  'completed',
+  'collection_completed',
+]);
+
+const TERMINAL_PROJECT_STATUSES = new Set(['cancelled', 'rejected']);
+
+const VERSION_HISTORY_KEYWORDS = ['מאוחד', 'גרסה', 'בוטלה'];
+
 const toNumber = (value) => {
   const num = Number(value);
   return Number.isFinite(num) ? num : 0;
@@ -89,6 +102,57 @@ const namesSimilar = (left, right) => {
   if (a === b) return true;
   return a.includes(b) || b.includes(a);
 };
+
+function hasVersionOrMergedHistorySignal(...texts) {
+  const combined = normalizeText(texts.filter(Boolean).join(' '));
+  return VERSION_HISTORY_KEYWORDS.some((keyword) => combined.includes(normalizeText(keyword)));
+}
+
+function areStatusesConflicting(leftStatus, rightStatus) {
+  const left = String(leftStatus || '').trim();
+  const right = String(rightStatus || '').trim();
+  if (!left || !right || left === right) return false;
+
+  const leftActive = ACTIVE_CONFLICT_STATUSES.has(left);
+  const rightActive = ACTIVE_CONFLICT_STATUSES.has(right);
+  const leftTerminal = TERMINAL_PROJECT_STATUSES.has(left);
+  const rightTerminal = TERMINAL_PROJECT_STATUSES.has(right);
+
+  if (leftActive && rightActive) return true;
+  if ((leftActive && rightTerminal) || (rightActive && leftTerminal)) return true;
+
+  return false;
+}
+
+function hasRelatedNameBusinessConflict(project, other) {
+  if (areStatusesConflicting(project?.status, other?.status)) return true;
+
+  const leftAmount = toNumber(project?.total_amount);
+  const rightAmount = toNumber(other?.total_amount);
+  if (leftAmount > 0 && rightAmount > 0 && Math.abs(leftAmount - rightAmount) > 0.01) {
+    return true;
+  }
+
+  const leftBid = String(project?.bid_number || '').trim();
+  const rightBid = String(other?.bid_number || '').trim();
+  if (leftBid && rightBid && leftBid !== rightBid) return true;
+
+  const leftWork = String(project?.work_number || '').trim();
+  const rightWork = String(other?.work_number || '').trim();
+  if (leftWork && rightWork && leftWork !== rightWork) return true;
+
+  return false;
+}
+
+function makePairKey(leftId, rightId) {
+  return [String(leftId), String(rightId)].sort().join('::');
+}
+
+function addFlagsForProject(flagMap, projectId, flag) {
+  const key = String(projectId);
+  if (!flagMap.has(key)) flagMap.set(key, []);
+  flagMap.get(key).push(flag);
+}
 
 function groupByProjectId(records = [], projectIdField = 'project_id') {
   const byProjectId = new Map();
@@ -277,7 +341,7 @@ function assessMigrationComplexity(project, workStageInfo, constructionAnalysis,
   if (duplicateFlags.length > 0) {
     complexity = 'high';
     requiresAharonDecision = true;
-    reasons.push('Duplicate or mismatch candidate detected');
+    reasons.push('True duplicate or business mismatch detected');
   }
 
   if (status === 'execution' && !workStageInfo.has_work_stages) {
@@ -473,109 +537,282 @@ function analyzeQuotes(quotes = [], projectsById = new Map()) {
   };
 }
 
-function findDuplicateCandidates(projects, proposals, quotes) {
-  const duplicates = [];
+function classifyRelationshipCandidates(projects, proposals, quotes) {
+  const duplicateProjectProposalCandidates = [];
+  const relatedNameCandidates = [];
+  const versionOrMergedHistoryCandidates = [];
+  const duplicateFlagsByProjectId = new Map();
+  const handledPairs = new Set();
+
   const proposalsByProjectId = groupByProjectId(proposals);
   const quotesByProjectId = groupByProjectId(quotes);
+
+  for (let index = 0; index < projects.length; index += 1) {
+    for (let otherIndex = index + 1; otherIndex < projects.length; otherIndex += 1) {
+      const project = projects[index];
+      const other = projects[otherIndex];
+      const pairKey = makePairKey(project.id, other.id);
+      if (handledPairs.has(pairKey)) continue;
+
+      const sameWorkNumber = Boolean(
+        project.work_number
+        && other.work_number
+        && String(project.work_number).trim() === String(other.work_number).trim(),
+      );
+      const sameBidNumber = Boolean(
+        project.bid_number
+        && other.bid_number
+        && String(project.bid_number).trim() === String(other.bid_number).trim(),
+      );
+      const similarName = namesSimilar(project.name, other.name);
+      const versionSignal = hasVersionOrMergedHistorySignal(project.notes, other.notes);
+
+      if (versionSignal && (sameWorkNumber || sameBidNumber || similarName)) {
+        versionOrMergedHistoryCandidates.push({
+          type: 'project_pair',
+          project_id: project.id,
+          other_project_id: other.id,
+          project_name: project.name,
+          other_project_name: other.name,
+          status: project.status,
+          other_status: other.status,
+          bid_number: project.bid_number || '',
+          other_bid_number: other.bid_number || '',
+          work_number: project.work_number || '',
+          other_work_number: other.work_number || '',
+          reason: 'Notes suggest merged/version/history relationship',
+          severity: 'info',
+          requires_aharon_decision: false,
+        });
+        handledPairs.add(pairKey);
+        continue;
+      }
+
+      if (sameWorkNumber || sameBidNumber) {
+        duplicateProjectProposalCandidates.push({
+          type: 'project_pair',
+          project_id: project.id,
+          other_project_id: other.id,
+          project_name: project.name,
+          other_project_name: other.name,
+          status: project.status,
+          other_status: other.status,
+          bid_number: project.bid_number || '',
+          other_bid_number: other.bid_number || '',
+          work_number: project.work_number || '',
+          other_work_number: other.work_number || '',
+          reason: sameWorkNumber ? 'Same work_number on different projects' : 'Same bid_number on different projects',
+          severity: 'error',
+          requires_aharon_decision: true,
+        });
+        addFlagsForProject(
+          duplicateFlagsByProjectId,
+          project.id,
+          sameWorkNumber
+            ? `Duplicate work_number with project ${other.id}`
+            : `Duplicate bid_number with project ${other.id}`,
+        );
+        addFlagsForProject(
+          duplicateFlagsByProjectId,
+          other.id,
+          sameWorkNumber
+            ? `Duplicate work_number with project ${project.id}`
+            : `Duplicate bid_number with project ${project.id}`,
+        );
+        handledPairs.add(pairKey);
+        continue;
+      }
+
+      if (similarName && areStatusesConflicting(project.status, other.status)) {
+        duplicateProjectProposalCandidates.push({
+          type: 'project_pair',
+          project_id: project.id,
+          other_project_id: other.id,
+          project_name: project.name,
+          other_project_name: other.name,
+          status: project.status,
+          other_status: other.status,
+          reason: 'Similar project name with conflicting statuses',
+          severity: 'error',
+          requires_aharon_decision: true,
+        });
+        addFlagsForProject(
+          duplicateFlagsByProjectId,
+          project.id,
+          `Conflicting statuses with similar-name project ${other.id}`,
+        );
+        addFlagsForProject(
+          duplicateFlagsByProjectId,
+          other.id,
+          `Conflicting statuses with similar-name project ${project.id}`,
+        );
+        handledPairs.add(pairKey);
+        continue;
+      }
+
+      if (similarName) {
+        const requiresAharonDecision = hasRelatedNameBusinessConflict(project, other);
+        relatedNameCandidates.push({
+          type: 'project_pair',
+          project_id: project.id,
+          other_project_id: other.id,
+          project_name: project.name,
+          other_project_name: other.name,
+          status: project.status,
+          other_status: other.status,
+          reason: 'Similar project name without true duplicate identifiers',
+          severity: requiresAharonDecision ? 'warning' : 'info',
+          requires_aharon_decision: requiresAharonDecision,
+        });
+        handledPairs.add(pairKey);
+      }
+    }
+  }
 
   for (const project of projects) {
     const projectId = String(project.id);
     const linkedProposals = proposalsByProjectId.get(projectId) || [];
     const linkedQuotes = quotesByProjectId.get(projectId) || [];
-    const flags = [];
 
     for (const proposal of linkedProposals) {
-      if (['pricing', 'waiting'].includes(project.status) && proposal.form_status === 'submitted') {
-        flags.push('Proposal document submitted while Project still in proposal pipeline');
-      }
       if (project.status === 'signed' && proposal.form_status === 'draft') {
-        flags.push('Project signed but linked Proposal document still draft');
+        duplicateProjectProposalCandidates.push({
+          type: 'proposal_document',
+          project_id: projectId,
+          proposal_id: proposal.id,
+          project_name: project.name,
+          status: project.status,
+          form_status: proposal.form_status,
+          reason: 'Project signed but linked Proposal document still draft',
+          severity: 'warning',
+          requires_aharon_decision: true,
+        });
+        addFlagsForProject(
+          duplicateFlagsByProjectId,
+          projectId,
+          'Project signed but linked Proposal document still draft',
+        );
       }
     }
 
     for (const quote of linkedQuotes) {
       if (quote.status === 'signed' && ['pricing', 'waiting', 'rejected'].includes(project.status)) {
-        flags.push(`Quote signed but Project.status=${project.status}`);
+        duplicateProjectProposalCandidates.push({
+          type: 'quote',
+          project_id: projectId,
+          quote_id: quote.id,
+          project_name: project.name,
+          status: project.status,
+          quote_status: quote.status,
+          reason: `Quote signed but Project.status=${project.status}`,
+          severity: 'error',
+          requires_aharon_decision: true,
+        });
+        addFlagsForProject(
+          duplicateFlagsByProjectId,
+          projectId,
+          `Quote signed but Project.status=${project.status}`,
+        );
       }
     }
 
-    for (const other of projects) {
-      if (other.id === project.id) continue;
-      if (project.bid_number && other.bid_number && project.bid_number === other.bid_number) {
-        flags.push(`Duplicate bid_number with project ${other.id}`);
-      }
-      if (project.work_number && other.work_number && project.work_number === other.work_number) {
-        flags.push(`Duplicate work_number with project ${other.id}`);
-      }
-      if (namesSimilar(project.name, other.name)) {
-        flags.push(`Similar project name with project ${other.id}`);
-      }
-    }
-
-    if (flags.length > 0) {
-      duplicates.push({
+    if (hasVersionOrMergedHistorySignal(project.notes) && !versionOrMergedHistoryCandidates.some(
+      (item) => item.project_id === projectId || item.other_project_id === projectId,
+    )) {
+      versionOrMergedHistoryCandidates.push({
+        type: 'project_notes',
         project_id: projectId,
         project_name: project.name,
         status: project.status,
-        bid_number: project.bid_number,
-        work_number: project.work_number,
-        flags,
+        reason: 'Project notes suggest merged/version/history context',
+        severity: 'info',
+        requires_aharon_decision: false,
       });
     }
   }
 
   for (const proposal of proposals) {
     if (proposal.project_id) continue;
+
     for (const project of projects) {
-      if (namesSimilar(proposal.project_name, project.name)) {
-        duplicates.push({
-          proposal_id: proposal.id,
-          project_name: proposal.project_name,
-          candidate_project_id: project.id,
-          flags: ['Proposal without project_id but similar project name exists'],
-        });
-      }
-    }
-  }
+      if (!namesSimilar(proposal.project_name, project.name)) continue;
 
-  return duplicates;
-}
-
-function findMissingCriticalFields(projects = []) {
-  const missing = [];
-
-  for (const project of projects) {
-    const issues = [];
-    const status = String(project?.status || '').trim();
-
-    if (!String(project?.name || '').trim()) issues.push('missing project name');
-    if (!status) issues.push('missing status');
-    if (ACTIVE_PROJECT_STATUSES.has(status) && toNumber(project.total_amount) <= 0) {
-      issues.push('missing total_amount on active project');
-    }
-    if (['signed', 'planning', 'submission', 'execution', 'completed'].includes(status)
-      && !String(project?.work_number || '').trim()) {
-      issues.push('missing work_number on active project');
-    }
-    if (['signed', 'planning', 'submission', 'execution', 'completed'].includes(status)
-      && !String(project?.bid_number || '').trim()) {
-      issues.push('missing bid_number on active project');
-    }
-
-    if (issues.length > 0) {
-      missing.push({
-        project_id: project.id,
-        project_name: project.name || '',
-        status,
-        issues,
-        severity: issues.some((item) => item.includes('missing project name') || item.includes('missing status'))
-          ? 'error'
-          : 'warning',
+      relatedNameCandidates.push({
+        type: 'proposal_without_project_id',
+        proposal_id: proposal.id,
+        candidate_project_id: project.id,
+        project_name: proposal.project_name,
+        candidate_project_name: project.name,
+        candidate_project_status: project.status,
+        reason: 'Proposal without project_id but similar project name exists',
+        severity: 'info',
+        requires_aharon_decision: false,
       });
     }
   }
 
-  return missing;
+  return {
+    duplicateProjectProposalCandidates,
+    relatedNameCandidates,
+    versionOrMergedHistoryCandidates,
+    duplicateFlagsByProjectId,
+  };
+}
+
+function findDataQualityWarnings(projects = []) {
+  const warnings = [];
+
+  for (const project of projects) {
+    const issues = [];
+    const status = String(project?.status || '').trim();
+    let highestSeverity = 'warning';
+
+    if (!String(project?.name || '').trim()) {
+      issues.push({ code: 'missing_project_name', message: 'missing project name', severity: 'error' });
+      highestSeverity = 'error';
+    }
+    if (!status) {
+      issues.push({ code: 'missing_status', message: 'missing status', severity: 'error' });
+      highestSeverity = 'error';
+    }
+
+    if (ACTIVE_PROJECT_STATUSES.has(status) && toNumber(project.total_amount) <= 0) {
+      issues.push({
+        code: 'missing_total_amount',
+        message: 'missing total_amount on active/completed project',
+        severity: 'warning_high',
+      });
+      if (highestSeverity !== 'error') highestSeverity = 'warning_high';
+    }
+
+    if (['signed', 'execution'].includes(status) && !String(project?.work_number || '').trim()) {
+      issues.push({
+        code: 'missing_work_number',
+        message: 'missing work_number on signed/execution project',
+        severity: 'warning',
+      });
+    }
+
+    if (!String(project?.bid_number || '').trim()) {
+      issues.push({
+        code: 'missing_bid_number',
+        message: 'missing bid_number',
+        severity: 'warning',
+      });
+    }
+
+    if (issues.length > 0) {
+      warnings.push({
+        project_id: project.id,
+        project_name: project.name || '',
+        status,
+        issues,
+        severity: highestSeverity,
+      });
+    }
+  }
+
+  return warnings;
 }
 
 function emptyGroups() {
@@ -597,8 +834,10 @@ function emptyGroups() {
     proposalDocumentDiagnostics: [],
     quoteDiagnostics: [],
     duplicateProjectProposalCandidates: [],
+    relatedNameCandidates: [],
+    versionOrMergedHistoryCandidates: [],
     proposalsWithWorkNumberButNoProject: [],
-    missingCriticalFields: [],
+    dataQualityWarnings: [],
   };
 }
 
@@ -637,7 +876,7 @@ function assignProjectToGroups(groups, row) {
   }
 }
 
-function buildRecommendations(groups, duplicates, missingCriticalFields) {
+function buildRecommendations(groups, duplicates, dataQualityWarnings) {
   const safeStatusMigrationCandidates = [];
   const requiresAharonDecision = [];
   const doNotAutoMigrate = [];
@@ -696,11 +935,11 @@ function buildRecommendations(groups, duplicates, missingCriticalFields) {
     });
   }
 
-  if (missingCriticalFields.length > 0) {
+  if (dataQualityWarnings.length > 0) {
     requiresAharonDecision.push({
-      type: 'missing_critical_fields',
-      count: missingCriticalFields.length,
-      reason: 'Projects missing bid/work_number/total_amount or name',
+      type: 'data_quality_warnings',
+      count: dataQualityWarnings.length,
+      reason: 'Projects with missing bid/work_number/total_amount or name warnings',
     });
   }
 
@@ -743,15 +982,8 @@ export async function runProjectLifecycleAlignmentAudit({ entities = base44.enti
   const collectionDuesByProjectId = groupByProjectId(collectionDues);
   const proposalsByProjectId = groupByProjectId(proposals);
   const signedProposalByProjectId = buildSignedProposalByProjectId(signedProposals);
-  const duplicates = findDuplicateCandidates(projects, proposals, quotes);
-  const duplicateFlagsByProjectId = new Map();
-
-  for (const duplicate of duplicates) {
-    const projectId = duplicate.project_id || duplicate.candidate_project_id;
-    if (!projectId) continue;
-    if (!duplicateFlagsByProjectId.has(projectId)) duplicateFlagsByProjectId.set(projectId, []);
-    duplicateFlagsByProjectId.get(projectId).push(...(duplicate.flags || []));
-  }
+  const relationshipClassification = classifyRelationshipCandidates(projects, proposals, quotes);
+  const duplicateFlagsByProjectId = relationshipClassification.duplicateFlagsByProjectId;
 
   const groups = emptyGroups();
   const projectRows = [];
@@ -776,12 +1008,14 @@ export async function runProjectLifecycleAlignmentAudit({ entities = base44.enti
     : { totalQuotes: 0, statusCounts: {}, records: [], linkedToProjectCount: 0, mismatchCount: 0 };
   groups.quoteDiagnostics = quoteDiagnostics.records;
 
-  groups.duplicateProjectProposalCandidates = duplicates;
+  groups.duplicateProjectProposalCandidates = relationshipClassification.duplicateProjectProposalCandidates;
+  groups.relatedNameCandidates = relationshipClassification.relatedNameCandidates;
+  groups.versionOrMergedHistoryCandidates = relationshipClassification.versionOrMergedHistoryCandidates;
   groups.proposalsWithWorkNumberButNoProject = [{
     not_applicable_due_to_schema: true,
     reason: 'Proposal and Quote entities do not expose work_number; use Project.status and Project.work_number instead',
   }];
-  groups.missingCriticalFields = findMissingCriticalFields(projects);
+  groups.dataQualityWarnings = findDataQualityWarnings(projects);
 
   const projectsWithWorkStages = projectRows.filter((row) => row.has_work_stages).length;
 
@@ -811,8 +1045,10 @@ export async function runProjectLifecycleAlignmentAudit({ entities = base44.enti
     planningDoneProjects: groups.planningDoneProjects.length,
     constructionStatusCandidates: groups.constructionStatusCandidates.length,
     deliveredFacilityCandidates: groups.deliveredFacilityCandidates.length,
-    duplicateCandidatesCount: duplicates.length,
-    missingCriticalFieldsCount: groups.missingCriticalFields.length,
+    duplicateCandidatesCount: groups.duplicateProjectProposalCandidates.length,
+    relatedNameCandidatesCount: groups.relatedNameCandidates.length,
+    versionOrMergedHistoryCandidatesCount: groups.versionOrMergedHistoryCandidates.length,
+    dataQualityWarningsCount: groups.dataQualityWarnings.length,
   };
 
   const quoteStatuses = Object.keys(quoteDiagnostics.statusCounts || {});
@@ -833,7 +1069,7 @@ export async function runProjectLifecycleAlignmentAudit({ entities = base44.enti
     },
     counts,
     groups,
-    recommendations: buildRecommendations(groups, duplicates, groups.missingCriticalFields),
+    recommendations: buildRecommendations(groups, groups.duplicateProjectProposalCandidates, groups.dataQualityWarnings),
     readOnly: true,
   };
 

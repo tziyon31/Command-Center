@@ -29,8 +29,10 @@ const GROUP_SECTIONS = [
   { key: 'leads', title: 'לידים' },
   { key: 'constructionStatusCandidates', title: 'מועמדים לעדכון סטטוס בנייה' },
   { key: 'deliveredFacilityCandidates', title: 'מועמדים למסירה ללקוח' },
-  { key: 'duplicateProjectProposalCandidates', title: 'כפילויות / אי התאמות' },
-  { key: 'missingCriticalFields', title: 'חסרים קריטיים' },
+  { key: 'duplicateProjectProposalCandidates', title: 'כפילויות / אי התאמות אמיתיים' },
+  { key: 'relatedNameCandidates', title: 'שמות דומים / קשורים' },
+  { key: 'versionOrMergedHistoryCandidates', title: 'מועמדים למאוחד / גרסה / היסטוריה' },
+  { key: 'dataQualityWarnings', title: 'אזהרות איכות נתונים' },
 ];
 
 function SummaryCard({ label, value }) {
@@ -49,7 +51,12 @@ function ProjectGroupTable({ rows = [] }) {
     return <p className="text-sm text-muted-foreground">אין רשומות בקבוצה זו.</p>;
   }
 
-  const isProjectRow = Boolean(rows[0]?.project_id || rows[0]?.current_project_status);
+  const isProjectRow = Boolean(
+    rows[0]?.project_id
+    || rows[0]?.current_project_status
+    || rows[0]?.candidate_project_id
+    || rows[0]?.other_project_id,
+  );
 
   if (!isProjectRow) {
     return (
@@ -66,19 +73,27 @@ function ProjectGroupTable({ rows = [] }) {
           <TableRow>
             <TableHead>פרויקט</TableHead>
             <TableHead>סטטוס</TableHead>
-            <TableHead>עבודה</TableHead>
-            <TableHead>שלבים</TableHead>
-            <TableHead>המלצה</TableHead>
+            <TableHead>חומרה</TableHead>
+            <TableHead>עבודה / שלבים</TableHead>
+            <TableHead>סיבה</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {rows.map((row) => (
-            <TableRow key={row.project_id || row.proposal_id || row.quote_id}>
-              <TableCell>{row.project_name || row.project_id}</TableCell>
-              <TableCell>{row.current_project_status || row.status || '-'}</TableCell>
-              <TableCell>{row.work_progress_label || row.recommended_action || '-'}</TableCell>
-              <TableCell>{row.work_stage_count ?? '-'}</TableCell>
-              <TableCell className="text-xs">{row.recommended_action || row.migration_reason || '-'}</TableCell>
+            <TableRow key={row.project_id || row.proposal_id || row.quote_id || row.other_project_id}>
+              <TableCell>
+                {row.project_name || row.candidate_project_name || row.project_id}
+                {row.other_project_name ? ` ↔ ${row.other_project_name}` : ''}
+              </TableCell>
+              <TableCell>
+                {row.current_project_status || row.status || row.candidate_project_status || '-'}
+                {row.other_status ? ` / ${row.other_status}` : ''}
+              </TableCell>
+              <TableCell>{row.severity || row.issues?.[0]?.severity || '-'}</TableCell>
+              <TableCell>{row.work_progress_label || (row.work_stage_count ?? '-')}</TableCell>
+              <TableCell className="text-xs">
+                {row.reason || row.recommended_action || row.migration_reason || '-'}
+              </TableCell>
             </TableRow>
           ))}
         </TableBody>
@@ -167,6 +182,9 @@ export default function ProjectLifecycleAudit() {
             <SummaryCard label="בוצע" value={report.counts.planningDoneProjects} />
             <SummaryCard label="מועמדים לבנייה" value={report.counts.constructionStatusCandidates} />
             <SummaryCard label="מועמדים למסירה" value={report.counts.deliveredFacilityCandidates} />
+            <SummaryCard label="כפילויות אמיתיות" value={report.counts.duplicateCandidatesCount} />
+            <SummaryCard label="שמות דומים" value={report.counts.relatedNameCandidatesCount} />
+            <SummaryCard label="אזהרות נתונים" value={report.counts.dataQualityWarningsCount} />
           </div>
 
           <Card>
