@@ -48,6 +48,8 @@ import {
   TEST_GROUP_LABELS,
 } from '@/lib/reminderTestRunner';
 import { filterRealBusinessCollectionEvents } from '@/lib/testDataUtils';
+import { buildDashboardCollectionMetrics } from '@/lib/dashboardCollectionMetrics';
+import { buildCollectionDueFormPageUrl } from '@/lib/workflowNavigation';
 import { toast } from '@/components/ui/use-toast';
 
 const getActiveReminderTestRunningLabel = (groupKey) => {
@@ -64,32 +66,14 @@ const PROPOSAL_STATUSES = [
   ...WON_PROPOSAL_STATUSES,
   ...LOST_PROPOSAL_STATUSES,
 ];
-const COLLECTION_RELEVANT_STATUSES = ['signed', 'planning', 'submission', 'execution', 'completed'];
 const ACTIVE_INACTIVITY_STATUSES = ['pricing', 'waiting', 'signed', 'planning', 'submission', 'execution'];
 const INACTIVE_PROJECT_EXCLUDED_STATUSES = ['rejected', 'cancelled', 'collection_completed'];
 const INACTIVITY_THRESHOLD_DAYS = 14;
-const RECORDED_COLLECTION_TYPES = ['collection_paid', 'collection_paid_legacy'];
 const COLLECTION_PERIOD_SUBTITLES = {
   month: 'לפי פעולות גבייה שתועדו החודש',
   quarter: 'לפי פעולות גבייה שתועדו ברבעון',
   year: 'לפי פעולות גבייה שתועדו השנה',
   all: 'לפי כל פעולות הגבייה שתועדו במערכת',
-};
-
-const hasValidPaidAt = (paidAt) => {
-  if (!paidAt) return false;
-
-  const paidDate = new Date(paidAt);
-  return !Number.isNaN(paidDate.getTime());
-};
-
-const isEventInCollectionPeriod = (event, period, now) => {
-  if (!RECORDED_COLLECTION_TYPES.includes(event.type)) return false;
-  if (!hasValidPaidAt(event.paid_at)) return false;
-  if (period === 'all') return true;
-
-  const paidDate = new Date(event.paid_at);
-  return paidDate >= getPeriodStart(period, now);
 };
 
 const getPeriodStart = (period, now) => (
@@ -103,70 +87,6 @@ const getProjectTimelineDate = (project) => project?.created_date || project?.up
 const toNumber = (value) => {
   const num = Number(value);
   return Number.isFinite(num) ? num : 0;
-};
-const daysSince = (dateValue) => {
-  if (!dateValue) return null;
-
-  const date = parseDateOnly(dateValue);
-  if (!date) return null;
-
-  const diffMs = Date.now() - date.getTime();
-  return Math.floor(diffMs / (1000 * 60 * 60 * 24));
-};
-
-const parseDateOnly = (value) => {
-  if (!value) return null;
-
-  const datePart = String(value).split('T')[0];
-  const parts = datePart.split('-');
-  if (parts.length === 3) {
-    const date = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
-    if (!Number.isNaN(date.getTime())) return date;
-  }
-
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
-};
-
-const formatShortDate = (value) => {
-  const date = parseDateOnly(value);
-  if (!date) return null;
-
-  return new Intl.DateTimeFormat('he-IL').format(date);
-};
-
-const hasCollectionTargetDate = (project) => (
-  Boolean(project?.collection_due_target_date && String(project.collection_due_target_date).trim())
-);
-
-const isOverdueCollection = (project, now = new Date()) => {
-  if (project.collection_due_now !== true || toNumber(project.collection_due_amount) <= 0) {
-    return false;
-  }
-
-  if (!hasCollectionTargetDate(project)) return false;
-
-  const targetDate = parseDateOnly(project.collection_due_target_date);
-  if (!targetDate) return false;
-
-  const today = new Date(now);
-  today.setHours(0, 0, 0, 0);
-  targetDate.setHours(0, 0, 0, 0);
-
-  return targetDate < today;
-};
-
-const getDaysOverdue = (targetDateValue, now = new Date()) => {
-  const targetDate = parseDateOnly(targetDateValue);
-  if (!targetDate) return null;
-
-  const today = new Date(now);
-  today.setHours(0, 0, 0, 0);
-  targetDate.setHours(0, 0, 0, 0);
-
-  if (targetDate >= today) return null;
-
-  return Math.floor((today.getTime() - targetDate.getTime()) / (1000 * 60 * 60 * 24));
 };
 
 const getProjectLastActivityDate = (project) => {
@@ -242,6 +162,12 @@ export default function Dashboard() {
   const { data: collectionEvents = [], refetch: refetchCollectionEvents } = useQuery({
     queryKey: ['collection-events'],
     queryFn: () => base44.entities.CollectionEvent.list(),
+    enabled: currentUser?.role === 'admin' || currentUser?.role === 'office_manager' || currentUser?.role === 'project_worker',
+  });
+
+  const { data: collectionDues = [] } = useQuery({
+    queryKey: ['collection-dues'],
+    queryFn: () => base44.entities.CollectionDue.list('-created_date'),
     enabled: currentUser?.role === 'admin' || currentUser?.role === 'office_manager' || currentUser?.role === 'project_worker',
   });
 
@@ -525,21 +451,12 @@ export default function Dashboard() {
     });
   }, [tasks]);
 
-  const collectionDueMetrics = useMemo(() => {
-    const collectionDueNowProjects = projects.filter((project) =>
-      project.collection_due_now === true &&
-      toNumber(project.collection_due_amount) > 0
-    );
-
-    const collectionDueNowAmount = collectionDueNowProjects.reduce((sum, project) => (
-      sum + toNumber(project.collection_due_amount)
-    ), 0);
-
-    return {
-      collectionDueNowProjects,
-      collectionDueNowAmount,
-    };
-  }, [projects]);
+  const dashboardCollectionMetrics = useMemo(() => buildDashboardCollectionMetrics({
+    projects,
+    collectionDues,
+    collectionEvents: realCollectionEvents,
+    collectionPeriod,
+  }), [projects, collectionDues, realCollectionEvents, collectionPeriod]);
 
   const proposalMetrics = useMemo(() => {
     const now = new Date();
@@ -588,47 +505,26 @@ export default function Dashboard() {
 
   // חישובי בריאות עסקית
   const businessHealth = useMemo(() => {
-    const now = new Date();
-    const events = Array.isArray(realCollectionEvents) ? realCollectionEvents : [];
-
-    const recordedCollection = events
-      .filter((event) => isEventInCollectionPeriod(event, collectionPeriod, now))
-      .reduce((sum, event) => sum + toNumber(event.amount), 0);
-
-    const completedProjects = projects.filter(p => p.status === 'completed' || p.status === 'collection_completed');
+    const completedProjects = projects.filter((project) => (
+      project.status === 'completed' || project.status === 'collection_completed'
+    ));
     const averageProjectValue = completedProjects.length > 0
-      ? completedProjects.reduce((sum, p) => sum + toNumber(p.total_amount), 0) / completedProjects.length
+      ? completedProjects.reduce((sum, project) => sum + toNumber(project.total_amount), 0) / completedProjects.length
       : 0;
-    
-    // גבייה פתוחה
-    const collectionProjects = projects.filter((project) =>
-      COLLECTION_RELEVANT_STATUSES.includes(project.status)
-    );
-    const openCollectionProjects = collectionProjects.filter((project) => {
-      const total = toNumber(project.total_amount);
-      const collected = toNumber(project.collected_amount);
 
-      return total > collected;
-    });
-    const totalOutstanding = openCollectionProjects.reduce((sum, project) => {
-      const total = toNumber(project.total_amount);
-      const collected = toNumber(project.collected_amount);
-
-      return sum + Math.max(total - collected, 0);
-    }, 0);
-    
     return {
-      recordedCollection,
+      recordedCollection: dashboardCollectionMetrics.recordedCollection,
       averageProjectValue,
       closeRate: proposalMetrics.closeRate,
       wonProposalsCount: proposalMetrics.wonProposals.length,
       decidedProposalsCount: proposalMetrics.decidedCount,
-      totalOutstanding,
-      openCollectionProjectsCount: openCollectionProjects.length,
-      collectionDueNowAmount: collectionDueMetrics.collectionDueNowAmount,
-      collectionDueNowProjectsCount: collectionDueMetrics.collectionDueNowProjects.length,
+      totalOutstanding: dashboardCollectionMetrics.totalOutstandingAmount,
+      openCollectionProjectsCount: dashboardCollectionMetrics.openCollectionProjectsCount,
+      collectionDueNowAmount: dashboardCollectionMetrics.openCollectionAmount,
+      collectionDueNowCount: dashboardCollectionMetrics.openCollectionCount,
+      awaitingTaxInvoiceCount: dashboardCollectionMetrics.awaitingTaxInvoiceCount,
     };
-  }, [projects, realCollectionEvents, collectionPeriod, proposalMetrics, collectionDueMetrics]);
+  }, [projects, proposalMetrics, dashboardCollectionMetrics]);
 
   // דורש טיפול
   const needsAttention = useMemo(() => {
@@ -670,34 +566,9 @@ export default function Dashboard() {
         };
       });
 
-    const collectionDueNow = collectionDueMetrics.collectionDueNowProjects
-      .map((project) => {
-        const amount = toNumber(project.collection_due_amount);
-        const notePart = project.collection_due_note ? ` - ${project.collection_due_note}` : '';
-        const targetLabel = hasCollectionTargetDate(project)
-          ? `יעד: ${formatShortDate(project.collection_due_target_date)}`
-          : 'ללא תאריך יעד';
+    const collectionDueNow = dashboardCollectionMetrics.openCollectionActionItems;
+    const overdueCollections = dashboardCollectionMetrics.overdueCollectionActionItems;
 
-        return {
-          title: project.name || 'פרויקט ללא שם',
-          subtitle: `₪${amount.toLocaleString()}${notePart} - ${targetLabel}`,
-          data: project,
-        };
-      });
-
-    const overdueCollections = projects
-      .filter((project) => isOverdueCollection(project, now))
-      .map((project) => {
-        const amount = toNumber(project.collection_due_amount);
-        const daysOverdue = getDaysOverdue(project.collection_due_target_date, now);
-
-        return {
-          title: project.name || 'פרויקט ללא שם',
-          subtitle: `₪${amount.toLocaleString()} - תאריך יעד עבר לפני ${daysOverdue} ימים`,
-          data: project,
-        };
-      });
-    
     const inactiveProjects = projects
       .filter(isProjectEligibleForInactivityCheck)
       .map((project) => {
@@ -747,13 +618,22 @@ export default function Dashboard() {
       overdueCollections,
       inactiveProjects,
     };
-  }, [collectionDueMetrics, projects, proposalMetrics]);
+  }, [dashboardCollectionMetrics, projects, proposalMetrics]);
 
   const openProjectDetails = (item) => {
     const projectId = item?.data?.id;
     if (!projectId) return;
 
     navigate(createPageUrl(`ProjectDetails?id=${projectId}`));
+  };
+
+  const openCollectionItem = (item) => {
+    if (item?.collectionDueId) {
+      navigate(buildCollectionDueFormPageUrl({ collectionDueId: item.collectionDueId }));
+      return;
+    }
+
+    openProjectDetails(item);
   };
 
   const openCollectionActivity = (activity) => {
@@ -771,22 +651,11 @@ export default function Dashboard() {
     });
   };
 
-  // תנועה עסקית — רק גביות אמיתיות שנרשמו במערכת (לא legacy)
-  const recentActivity = useMemo(() => {
-    const events = Array.isArray(realCollectionEvents) ? realCollectionEvents : [];
-
-    return events
-      .filter((event) => event.type === 'collection_paid' && hasValidPaidAt(event.paid_at))
-      .sort((a, b) => new Date(b.paid_at).getTime() - new Date(a.paid_at).getTime())
-      .slice(0, 10)
-      .map((event) => ({
-        type: 'collection_paid',
-        title: 'גבייה בוצעה',
-        description: `${event.project_name || 'פרויקט ללא שם'} · ₪${toNumber(event.amount).toLocaleString()}`,
-        date: event.paid_at,
-        projectId: event.project_id,
-      }));
-  }, [realCollectionEvents]);
+  // Activity feed still uses CollectionEvent; financial KPIs use CollectionDue to avoid double counting.
+  const recentActivity = useMemo(
+    () => dashboardCollectionMetrics.businessCollectionActivityItems,
+    [dashboardCollectionMetrics],
+  );
 
   // תצוגה למבצע משימות
   if (isTaskWorker) {
@@ -907,11 +776,11 @@ export default function Dashboard() {
               <BusinessHealthCard
                 title="גבייה לטיפול עכשיו"
                 value={`₪${businessHealth.collectionDueNowAmount.toLocaleString()}`}
-                subtitle={businessHealth.collectionDueNowProjectsCount > 0
-                  ? `${businessHealth.collectionDueNowProjectsCount} פרויקטים דורשים גבייה`
+                subtitle={businessHealth.collectionDueNowCount > 0
+                  ? `${businessHealth.collectionDueNowCount} גביות דורשות טיפול`
                   : 'אין גביות פתוחות לטיפול'}
                 icon={AlertCircle}
-                color={businessHealth.collectionDueNowProjectsCount > 0 ? 'amber' : 'blue'}
+                color={businessHealth.collectionDueNowCount > 0 ? 'amber' : 'blue'}
               />
             </button>
           </div>
@@ -970,7 +839,7 @@ export default function Dashboard() {
                 items={needsAttention.collectionDueNow}
                 icon={AlertCircle}
                 color="red"
-                onItemClick={openProjectDetails}
+                onItemClick={openCollectionItem}
               />
             </div>
             <ActionCard
@@ -978,7 +847,7 @@ export default function Dashboard() {
               items={needsAttention.overdueCollections}
               icon={AlertCircle}
               color="red"
-              onItemClick={openProjectDetails}
+              onItemClick={openCollectionItem}
               emptyMessage="הכל מסודר! אין גביות שעברו את תאריך היעד"
             />
             <ActionCard
