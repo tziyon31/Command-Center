@@ -258,40 +258,150 @@ function validateCollectionEvents(collectionEvents, collectionDues, issues) {
   };
 }
 
+const OPEN_REMINDER_STATUSES = new Set(['active', 'snoozed']);
+
+function isOpenReminder(reminder) {
+  return OPEN_REMINDER_STATUSES.has(String(reminder?.status || '').trim());
+}
+
+function reminderEntry(reminder, reason) {
+  return {
+    id: reminder.id,
+    condition_key: reminder.condition_key,
+    status: reminder.status,
+    title: reminder.title,
+    reason,
+  };
+}
+
+function getRemindersForCollectionDue(reminders, collectionId, prefix) {
+  const conditionKey = `${prefix}${collectionId}`;
+  return (reminders || []).filter(
+    (reminder) => String(reminder?.condition_key || '') === conditionKey,
+  );
+}
+
 function validateReminders(reminders, collectionDues) {
-  const collectionDueIds = new Set((collectionDues || []).map((record) => String(record.id)));
-  const unexpectedReminders = [];
+  const expectedCollectionPaymentDueReminders = [];
+  const missingCollectionPaymentDueReminders = [];
+  const duplicateCollectionPaymentDueReminders = [];
+  const unexpectedCollectionPaymentDueReminders = [];
+  const unexpectedTaxInvoiceReminders = [];
+
   let collectionPaymentDueCount = 0;
   let collectionNeedsTaxInvoiceCount = 0;
 
   for (const reminder of reminders || []) {
     const conditionKey = String(reminder?.condition_key || '');
-
     if (conditionKey.startsWith(COLLECTION_PAYMENT_DUE_PREFIX)) {
       collectionPaymentDueCount += 1;
-      const collectionId = conditionKey.slice(COLLECTION_PAYMENT_DUE_PREFIX.length);
-      if (collectionDueIds.has(collectionId)) {
-        unexpectedReminders.push({
-          id: reminder.id,
-          condition_key: conditionKey,
-          status: reminder.status,
-          title: reminder.title,
-          reason: 'COL1 reminder exists for backfilled CollectionDue',
+    }
+    if (conditionKey.startsWith(COLLECTION_NEEDS_TAX_INVOICE_PREFIX)) {
+      collectionNeedsTaxInvoiceCount += 1;
+    }
+  }
+
+  for (const record of collectionDues || []) {
+    const collectionId = String(record.id);
+    const col1Reminders = getRemindersForCollectionDue(
+      reminders,
+      collectionId,
+      COLLECTION_PAYMENT_DUE_PREFIX,
+    );
+    const col2Reminders = getRemindersForCollectionDue(
+      reminders,
+      collectionId,
+      COLLECTION_NEEDS_TAX_INVOICE_PREFIX,
+    );
+    const openCol1 = col1Reminders.filter(isOpenReminder);
+    const openCol2 = col2Reminders.filter(isOpenReminder);
+
+    if (record.status === 'open') {
+      if (openCol1.length === 1) {
+        expectedCollectionPaymentDueReminders.push({
+          collection_due_id: collectionId,
+          project_name: record.project_name,
+          reminder: reminderEntry(openCol1[0], 'expected COL1 for open CollectionDue'),
         });
+      } else if (openCol1.length === 0) {
+        missingCollectionPaymentDueReminders.push({
+          collection_due_id: collectionId,
+          project_name: record.project_name,
+          expected_condition_key: getCollectionPaymentDueConditionKey(collectionId),
+        });
+      } else {
+        duplicateCollectionPaymentDueReminders.push({
+          collection_due_id: collectionId,
+          project_name: record.project_name,
+          reminders: openCol1.map((reminder) => reminderEntry(reminder, 'duplicate COL1')),
+        });
+      }
+
+      for (const reminder of openCol2) {
+        unexpectedTaxInvoiceReminders.push(
+          reminderEntry(reminder, 'COL2 should not be open for open CollectionDue'),
+        );
       }
     }
 
-    if (conditionKey.startsWith(COLLECTION_NEEDS_TAX_INVOICE_PREFIX)) {
-      collectionNeedsTaxInvoiceCount += 1;
-      const collectionId = conditionKey.slice(COLLECTION_NEEDS_TAX_INVOICE_PREFIX.length);
-      if (collectionDueIds.has(collectionId)) {
-        unexpectedReminders.push({
-          id: reminder.id,
-          condition_key: conditionKey,
-          status: reminder.status,
-          title: reminder.title,
-          reason: 'COL2 reminder exists for backfilled CollectionDue',
+    if (record.status === 'paid') {
+      for (const reminder of openCol1) {
+        unexpectedCollectionPaymentDueReminders.push(
+          reminderEntry(reminder, 'COL1 should not be open for paid CollectionDue'),
+        );
+      }
+      for (const reminder of openCol2) {
+        unexpectedTaxInvoiceReminders.push(
+          reminderEntry(reminder, 'COL2 should not be open for paid CollectionDue'),
+        );
+      }
+    }
+
+    if (record.status === 'cancelled') {
+      for (const reminder of openCol1) {
+        unexpectedCollectionPaymentDueReminders.push(
+          reminderEntry(reminder, 'COL1 should not be open for cancelled CollectionDue'),
+        );
+      }
+      for (const reminder of openCol2) {
+        unexpectedTaxInvoiceReminders.push(
+          reminderEntry(reminder, 'COL2 should not be open for cancelled CollectionDue'),
+        );
+      }
+    }
+
+    if (record.status === 'awaiting_tax_invoice') {
+      for (const reminder of openCol1) {
+        unexpectedCollectionPaymentDueReminders.push(
+          reminderEntry(reminder, 'COL1 should not be open for awaiting_tax_invoice CollectionDue'),
+        );
+      }
+    }
+
+    if (record.status === 'partially_paid') {
+      if (openCol1.length === 1) {
+        expectedCollectionPaymentDueReminders.push({
+          collection_due_id: collectionId,
+          project_name: record.project_name,
+          reminder: reminderEntry(openCol1[0], 'expected COL1 for partially_paid CollectionDue'),
         });
+      } else if (openCol1.length === 0) {
+        missingCollectionPaymentDueReminders.push({
+          collection_due_id: collectionId,
+          project_name: record.project_name,
+          expected_condition_key: getCollectionPaymentDueConditionKey(collectionId),
+        });
+      } else {
+        duplicateCollectionPaymentDueReminders.push({
+          collection_due_id: collectionId,
+          project_name: record.project_name,
+          reminders: openCol1.map((reminder) => reminderEntry(reminder, 'duplicate COL1')),
+        });
+      }
+      for (const reminder of openCol2) {
+        unexpectedTaxInvoiceReminders.push(
+          reminderEntry(reminder, 'COL2 should not be open for partially_paid CollectionDue'),
+        );
       }
     }
   }
@@ -299,13 +409,14 @@ function validateReminders(reminders, collectionDues) {
   return {
     collectionPaymentDueCount,
     collectionNeedsTaxInvoiceCount,
-    unexpectedReminders,
+    expectedCollectionPaymentDueReminders,
+    missingCollectionPaymentDueReminders,
+    duplicateCollectionPaymentDueReminders,
+    unexpectedCollectionPaymentDueReminders,
+    unexpectedTaxInvoiceReminders,
     openCollectionDueIds: [...collectionDues]
       .filter((record) => record.status === 'open')
       .map((record) => record.id),
-    expectedCol1KeysForOpen: [...collectionDues]
-      .filter((record) => record.status === 'open')
-      .map((record) => getCollectionPaymentDueConditionKey(record.id)),
   };
 }
 
@@ -446,12 +557,36 @@ export async function runCollectionDuePostBackfillValidation({ entities = base44
   const collectionEventsReport = validateCollectionEvents(collectionEvents, collectionDues, issues);
   const remindersReport = validateReminders(reminders, collectionDues);
 
-  if (remindersReport.unexpectedReminders.length > 0) {
+  if (remindersReport.missingCollectionPaymentDueReminders.length > 0) {
     addIssue(
       issues,
       'reminders',
-      'Collection reminders exist for backfilled CollectionDue records',
-      remindersReport.unexpectedReminders,
+      'Open CollectionDue missing expected COL1 reminder',
+      remindersReport.missingCollectionPaymentDueReminders,
+    );
+  }
+  if (remindersReport.duplicateCollectionPaymentDueReminders.length > 0) {
+    addIssue(
+      issues,
+      'reminders',
+      'Duplicate COL1 reminders for open CollectionDue',
+      remindersReport.duplicateCollectionPaymentDueReminders,
+    );
+  }
+  if (remindersReport.unexpectedCollectionPaymentDueReminders.length > 0) {
+    addIssue(
+      issues,
+      'reminders',
+      'Unexpected open COL1 reminder for paid/cancelled CollectionDue',
+      remindersReport.unexpectedCollectionPaymentDueReminders,
+    );
+  }
+  if (remindersReport.unexpectedTaxInvoiceReminders.length > 0) {
+    addIssue(
+      issues,
+      'reminders',
+      'Unexpected open COL2 reminder',
+      remindersReport.unexpectedTaxInvoiceReminders,
     );
   }
 
@@ -467,7 +602,11 @@ export async function runCollectionDuePostBackfillValidation({ entities = base44
     testCollectionEventsCount: collectionEventsReport.testEvents.length,
     collectionPaymentDueReminders: remindersReport.collectionPaymentDueCount,
     collectionNeedsTaxInvoiceReminders: remindersReport.collectionNeedsTaxInvoiceCount,
-    unexpectedRemindersCount: remindersReport.unexpectedReminders.length,
+    expectedCollectionPaymentDueReminders: remindersReport.expectedCollectionPaymentDueReminders.length,
+    missingCollectionPaymentDueReminders: remindersReport.missingCollectionPaymentDueReminders.length,
+    duplicateCollectionPaymentDueReminders: remindersReport.duplicateCollectionPaymentDueReminders.length,
+    unexpectedCollectionPaymentDueReminders: remindersReport.unexpectedCollectionPaymentDueReminders.length,
+    unexpectedTaxInvoiceReminders: remindersReport.unexpectedTaxInvoiceReminders.length,
     projectFinancialSamplesCount: projectFinancialSamples.length,
     dashboardChanged: false,
     issuesCount: issues.length,
