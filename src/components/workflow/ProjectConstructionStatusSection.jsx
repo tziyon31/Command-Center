@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from 'react';
-import { Check } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import { Button } from '@/components/ui/button';
 import {
@@ -22,7 +21,6 @@ import {
   CONSTRUCTION_STATUS_NOT_UPDATED,
   CONSTRUCTION_STATUS_OPTIONS,
   getConstructionStatusLabel,
-  getConstructionStatusProgress,
   normalizeConstructionStatus,
 } from '@/lib/constructionStatusUtils';
 
@@ -37,66 +35,6 @@ const formatDateTime = (value) => {
     timeStyle: 'short',
   }).format(date);
 };
-
-function MilestoneProgress({ progress }) {
-  if (!progress.isUpdated) {
-    return (
-      <div className="space-y-3">
-        <p className="text-sm font-medium text-muted-foreground">לא עודכן</p>
-        <div className="space-y-2">
-          {progress.milestones.map((milestone) => (
-            <div
-              key={milestone.value}
-              className="flex items-center gap-3 rounded-md border border-dashed border-slate-200 px-3 py-2 text-sm text-muted-foreground"
-            >
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-slate-300 text-xs">
-                —
-              </span>
-              <span>{milestone.label}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-2">
-      {progress.milestones.map((milestone, index) => {
-        const isCompleted = progress.currentIndex >= 0 && index < progress.currentIndex;
-        const isCurrent = index === progress.currentIndex;
-
-        return (
-          <div
-            key={milestone.value}
-            className={[
-              'flex items-center gap-3 rounded-md border px-3 py-2 text-sm transition-colors',
-              isCurrent
-                ? 'border-primary bg-primary/5 font-semibold text-primary'
-                : isCompleted
-                  ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
-                  : 'border-slate-200 bg-slate-50 text-muted-foreground',
-            ].join(' ')}
-          >
-            <span
-              className={[
-                'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs',
-                isCurrent
-                  ? 'bg-primary text-primary-foreground'
-                  : isCompleted
-                    ? 'bg-emerald-600 text-white'
-                    : 'border border-slate-300 bg-white text-slate-400',
-              ].join(' ')}
-            >
-              {isCompleted ? <Check className="h-3.5 w-3.5" /> : index + 1}
-            </span>
-            <span>{milestone.label}</span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 export default function ProjectConstructionStatusSection({ project, onSaved }) {
   const [selectedStatus, setSelectedStatus] = useState(CONSTRUCTION_STATUS_NOT_UPDATED);
@@ -113,7 +51,7 @@ export default function ProjectConstructionStatusSection({ project, onSaved }) {
   if (!project?.id) return null;
 
   const savedStatus = normalizeConstructionStatus(project.construction_status);
-  const displayProgress = getConstructionStatusProgress(savedStatus);
+  const currentStatusLabel = getConstructionStatusLabel(savedStatus);
   const updatedAtLabel = formatDateTime(project.construction_status_updated_at);
 
   const handleSave = async (event) => {
@@ -144,20 +82,19 @@ export default function ProjectConstructionStatusSection({ project, onSaved }) {
 
   return (
     <Card className="border-0 shadow-sm">
-      <CardHeader>
+      <CardHeader className="pb-3">
         <CardTitle>סטטוס בנייה / מצב מתקן</CardTitle>
         <CardDescription>
           מעקב נפרד מסטטוס הפרויקט ומשלבי העבודה של אהרון.
-          {' '}
-          סטטוס נוכחי:
-          {' '}
-          <span className="font-medium text-foreground">
-            {getConstructionStatusLabel(savedStatus)}
-          </span>
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-6">
-        <MilestoneProgress progress={displayProgress} />
+      <CardContent className="space-y-4">
+        <p className="text-sm">
+          <span className="text-muted-foreground">
+            {savedStatus === CONSTRUCTION_STATUS_NOT_UPDATED ? 'סטטוס נוכחי: ' : 'שלב נוכחי: '}
+          </span>
+          <span className="font-medium">{currentStatusLabel}</span>
+        </p>
 
         {updatedAtLabel ? (
           <p className="text-xs text-muted-foreground">

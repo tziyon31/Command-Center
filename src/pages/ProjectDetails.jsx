@@ -849,25 +849,6 @@ export default function ProjectDetails() {
         </Card>
 
         <Card className="border-0 shadow-sm">
-          <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <CardTitle>הצעות מחיר</CardTitle>
-              <CardDescription>
-                פתיחת טפסי הצעת מחיר או הצעה חתומה — ללא יצירה אוטומטית של רשומה.
-              </CardDescription>
-            </div>
-            <div className="flex flex-wrap gap-2 shrink-0">
-              <Button asChild variant="outline">
-                <Link to={proposalFormUrl}>פתח הצעת מחיר</Link>
-              </Button>
-              <Button asChild variant="outline">
-                <Link to={signedProposalFormUrl}>פתח הצעה חתומה</Link>
-              </Button>
-            </div>
-          </CardHeader>
-        </Card>
-
-        <Card className="border-0 shadow-sm">
           <CardHeader>
             <CardTitle>פרטים כלליים</CardTitle>
             <CardDescription>מידע בסיסי על הפרויקט והסטטוס הנוכחי שלו.</CardDescription>
