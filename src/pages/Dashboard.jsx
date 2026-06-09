@@ -36,7 +36,6 @@ import {
   cleanupPendingReminderTestData,
   CLEANUP_PENDING_TEST_MESSAGE,
   deepCleanReminderTestData,
-  findReminderTestLeftovers,
   getDeepCleanReminderTestPreview,
   getPendingReminderTestCleanupStatus,
   isReminderTestCleanupRequired,
@@ -47,6 +46,7 @@ import {
   REMINDER_TEST_DASHBOARD_RUN_GROUPS,
   TEST_GROUP_LABELS,
 } from '@/lib/reminderTestRunner';
+import { isLocalDevEnvironment } from '@/lib/isLocalDev';
 import { filterRealBusinessCollectionEvents } from '@/lib/testDataUtils';
 import { buildDashboardCollectionMetrics } from '@/lib/dashboardCollectionMetrics';
 import { buildCollectionDueFormPageUrl } from '@/lib/workflowNavigation';
@@ -178,7 +178,7 @@ export default function Dashboard() {
 
   const isTaskWorker = currentUser?.role === 'task_worker';
   const canSeeFullDashboard = !isTaskWorker;
-  const canRunReminderTests = currentUser?.role === 'admin';
+  const canRunReminderTests = currentUser?.role === 'admin' && isLocalDevEnvironment();
 
   const {
     data: visibleReminders = [],
