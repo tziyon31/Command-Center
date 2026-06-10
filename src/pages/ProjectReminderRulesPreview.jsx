@@ -16,7 +16,8 @@ import {
   PLANNER_MODE_RUNTIME,
   runProjectLifecycleReminderRulesForAll,
 } from '@/lib/projectLifecycleReminderRules';
-import { isLocalDevEnvironment } from '@/lib/isLocalDev';
+import { canAccessAdminPage, canRunAdminMutations } from '@/lib/adminAccess';
+import AdminAccessDenied from '@/components/admin/AdminAccessDenied';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -183,14 +184,20 @@ export default function ProjectReminderRulesPreview() {
   const [onboardingApplying, setOnboardingApplying] = useState(false);
   const [error, setError] = useState('');
 
-  const { data: currentUser } = useQuery({
+  const { data: currentUser, isLoading: userLoading } = useQuery({
     queryKey: ['currentUser'],
     queryFn: () => base44.auth.me(),
   });
 
-  const canAccess = useMemo(() => (
-    isLocalDevEnvironment() || currentUser?.role === 'admin'
-  ), [currentUser?.role]);
+  const canAccess = useMemo(
+    () => canAccessAdminPage(currentUser),
+    [currentUser],
+  );
+
+  const canMutate = useMemo(
+    () => canRunAdminMutations(currentUser),
+    [currentUser],
+  );
 
   const handleRunPreview = async (mode = PLANNER_MODE_RUNTIME) => {
     setRunning(true);
@@ -234,6 +241,8 @@ export default function ProjectReminderRulesPreview() {
   };
 
   const handleOnboardingApply = async () => {
+    if (!canMutate) return;
+
     if (onboardingConfirmText !== APPLY_PROJECT_WORKFLOW_ONBOARDING_CONFIRM_TEXT) {
       setError(`יש להקליד בדיוק: ${APPLY_PROJECT_WORKFLOW_ONBOARDING_CONFIRM_TEXT}`);
       return;
@@ -260,6 +269,8 @@ export default function ProjectReminderRulesPreview() {
   const confirmTextIsValid = ACCEPTED_CONFIRM_TEXTS.includes(confirmText);
 
   const handleApply = async () => {
+    if (!canMutate) return;
+
     if (report?.mode !== PLANNER_MODE_LEGACY_BOOTSTRAP) {
       setError('Apply מותר רק לאחר Preview במצב Legacy Bootstrap');
       return;
@@ -289,15 +300,12 @@ export default function ProjectReminderRulesPreview() {
     }
   };
 
+  if (userLoading) {
+    return <div className="max-w-3xl mx-auto px-6 py-16 text-muted-foreground">טוען...</div>;
+  }
+
   if (!canAccess) {
-    return (
-      <div className="max-w-3xl mx-auto px-6 py-16">
-        <h1 className="text-2xl font-bold mb-4">Project Reminder Rules Preview</h1>
-        <p className="text-muted-foreground">
-          This page is available only in local development/admin mode.
-        </p>
-      </div>
-    );
+    return <AdminAccessDenied />;
   }
 
   return (
@@ -415,39 +423,41 @@ export default function ProjectReminderRulesPreview() {
             </Card>
           ))}
 
-          <Card className="border-amber-300">
-            <CardHeader>
-              <CardTitle>Onboarding Apply — עדכון שדות Project בלבד</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <p className="text-sm text-muted-foreground">
-                מעדכן רק שדות workflow על Project. לא יוצר ולא סוגר Reminders.
-                יש להקליד במדויק:
-                {' '}
-                <span className="font-mono" dir="ltr">{APPLY_PROJECT_WORKFLOW_ONBOARDING_CONFIRM_TEXT}</span>
-              </p>
-              <div className="flex gap-2 items-center">
-                <Input
-                  dir="ltr"
-                  value={onboardingConfirmText}
-                  onChange={(event) => setOnboardingConfirmText(event.target.value)}
-                  placeholder={APPLY_PROJECT_WORKFLOW_ONBOARDING_CONFIRM_TEXT}
-                  className="max-w-md font-mono"
-                />
-                <Button
-                  type="button"
-                  variant="destructive"
-                  onClick={handleOnboardingApply}
-                  disabled={
-                    onboardingApplying
-                    || onboardingConfirmText !== APPLY_PROJECT_WORKFLOW_ONBOARDING_CONFIRM_TEXT
-                  }
-                >
-                  {onboardingApplying ? 'מבצע Onboarding Apply...' : 'Onboarding Apply'}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+          {canMutate ? (
+            <Card className="border-amber-300">
+              <CardHeader>
+                <CardTitle>Onboarding Apply — עדכון שדות Project בלבד</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <p className="text-sm text-muted-foreground">
+                  מעדכן רק שדות workflow על Project. לא יוצר ולא סוגר Reminders.
+                  יש להקליד במדויק:
+                  {' '}
+                  <span className="font-mono" dir="ltr">{APPLY_PROJECT_WORKFLOW_ONBOARDING_CONFIRM_TEXT}</span>
+                </p>
+                <div className="flex gap-2 items-center">
+                  <Input
+                    dir="ltr"
+                    value={onboardingConfirmText}
+                    onChange={(event) => setOnboardingConfirmText(event.target.value)}
+                    placeholder={APPLY_PROJECT_WORKFLOW_ONBOARDING_CONFIRM_TEXT}
+                    className="max-w-md font-mono"
+                  />
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    onClick={handleOnboardingApply}
+                    disabled={
+                      onboardingApplying
+                      || onboardingConfirmText !== APPLY_PROJECT_WORKFLOW_ONBOARDING_CONFIRM_TEXT
+                    }
+                  >
+                    {onboardingApplying ? 'מבצע Onboarding Apply...' : 'Onboarding Apply'}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
         </>
       ) : null}
 
@@ -493,7 +503,7 @@ export default function ProjectReminderRulesPreview() {
             </Card>
           ))}
 
-          {report.mode === PLANNER_MODE_LEGACY_BOOTSTRAP ? (
+          {report.mode === PLANNER_MODE_LEGACY_BOOTSTRAP && canMutate ? (
           <Card className="border-amber-300">
             <CardHeader>
               <CardTitle>Apply — ביצוע בפועל (admin בלבד, Legacy Bootstrap)</CardTitle>

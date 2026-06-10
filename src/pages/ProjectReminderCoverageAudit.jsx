@@ -7,7 +7,8 @@ import {
   COVERAGE_STATUS_LABELS,
   runProjectReminderCoverageAudit,
 } from '@/lib/projectReminderCoverageAudit';
-import { isLocalDevEnvironment } from '@/lib/isLocalDev';
+import { canAccessAdminPage } from '@/lib/adminAccess';
+import AdminAccessDenied from '@/components/admin/AdminAccessDenied';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -116,14 +117,15 @@ export default function ProjectReminderCoverageAudit() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
 
-  const { data: currentUser } = useQuery({
+  const { data: currentUser, isLoading: userLoading } = useQuery({
     queryKey: ['currentUser'],
     queryFn: () => base44.auth.me(),
   });
 
-  const canAccessAudit = useMemo(() => (
-    isLocalDevEnvironment() || currentUser?.role === 'admin'
-  ), [currentUser?.role]);
+  const canAccessAudit = useMemo(
+    () => canAccessAdminPage(currentUser),
+    [currentUser],
+  );
 
   const handleRunAudit = async () => {
     setRunning(true);
@@ -144,15 +146,12 @@ export default function ProjectReminderCoverageAudit() {
     await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
   };
 
+  if (userLoading) {
+    return <div className="max-w-3xl mx-auto px-6 py-16 text-muted-foreground">טוען...</div>;
+  }
+
   if (!canAccessAudit) {
-    return (
-      <div className="max-w-3xl mx-auto px-6 py-16">
-        <h1 className="text-2xl font-bold mb-4">Project Reminder Coverage Audit</h1>
-        <p className="text-muted-foreground">
-          Audit page is available only in local development/admin mode.
-        </p>
-      </div>
-    );
+    return <AdminAccessDenied />;
   }
 
   return (

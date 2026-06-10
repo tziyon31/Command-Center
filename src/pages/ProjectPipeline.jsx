@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
+import { canAccessAdminPage } from '@/lib/adminAccess';
 import { createPageUrl } from '@/utils';
 import {
   buildPipelineSummary,
@@ -550,6 +551,13 @@ export default function ProjectPipeline() {
     || isLoadingCollectionDues
     || isLoadingReminders;
 
+  const { data: currentUser } = useQuery({
+    queryKey: ['currentUser'],
+    queryFn: () => base44.auth.me(),
+  });
+
+  const showAdminAuditLinks = canAccessAdminPage(currentUser);
+
   return (
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6" dir="rtl">
       <div className="max-w-[1400px] mx-auto space-y-6">
@@ -560,23 +568,25 @@ export default function ProjectPipeline() {
               תמונת מצב לפי סטטוס עבודה, שלבי עבודה, סטטוס בנייה וגבייה.
             </p>
           </div>
-          <div className="flex flex-wrap gap-2 shrink-0 self-start">
-            <Button asChild variant="outline" size="sm">
-              <Link to={createPageUrl('ProjectReminderCoverageAudit')}>
-                בדוק כיסוי תזכורות
-              </Link>
-            </Button>
-            <Button asChild variant="outline" size="sm">
-              <Link to={createPageUrl('ProjectReminderIntegrityAudit')}>
-                בדוק תקינות תזכורות
-              </Link>
-            </Button>
-            <Button asChild variant="outline" size="sm">
-              <Link to={createPageUrl('ProjectReminderRulesPreview')}>
-                Preview התאמת חוקי תזכורות
-              </Link>
-            </Button>
-          </div>
+          {showAdminAuditLinks ? (
+            <div className="flex flex-wrap gap-2 shrink-0 self-start">
+              <Button asChild variant="outline" size="sm">
+                <Link to={createPageUrl('ProjectReminderCoverageAudit')}>
+                  בדוק כיסוי תזכורות
+                </Link>
+              </Button>
+              <Button asChild variant="outline" size="sm">
+                <Link to={createPageUrl('ProjectReminderIntegrityAudit')}>
+                  בדוק תקינות תזכורות
+                </Link>
+              </Button>
+              <Button asChild variant="outline" size="sm">
+                <Link to={createPageUrl('ProjectReminderRulesPreview')}>
+                  Preview התאמת חוקי תזכורות
+                </Link>
+              </Button>
+            </div>
+          ) : null}
         </div>
 
         {isLoading ? (

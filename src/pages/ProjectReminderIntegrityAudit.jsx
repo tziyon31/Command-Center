@@ -4,7 +4,8 @@ import { useQuery } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
 import { createPageUrl } from '@/utils';
 import { runProjectReminderIntegrityAudit } from '@/lib/projectReminderIntegrityAudit';
-import { isLocalDevEnvironment } from '@/lib/isLocalDev';
+import { canAccessAdminPage } from '@/lib/adminAccess';
+import AdminAccessDenied from '@/components/admin/AdminAccessDenied';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -138,14 +139,15 @@ export default function ProjectReminderIntegrityAudit() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
 
-  const { data: currentUser } = useQuery({
+  const { data: currentUser, isLoading: userLoading } = useQuery({
     queryKey: ['currentUser'],
     queryFn: () => base44.auth.me(),
   });
 
-  const canAccessAudit = useMemo(() => (
-    isLocalDevEnvironment() || currentUser?.role === 'admin'
-  ), [currentUser?.role]);
+  const canAccessAudit = useMemo(
+    () => canAccessAdminPage(currentUser),
+    [currentUser],
+  );
 
   const handleRunAudit = async () => {
     setRunning(true);
@@ -166,15 +168,12 @@ export default function ProjectReminderIntegrityAudit() {
     await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
   };
 
+  if (userLoading) {
+    return <div className="max-w-3xl mx-auto px-6 py-16 text-muted-foreground">טוען...</div>;
+  }
+
   if (!canAccessAudit) {
-    return (
-      <div className="max-w-3xl mx-auto px-6 py-16">
-        <h1 className="text-2xl font-bold mb-4">Project Reminder Integrity Audit</h1>
-        <p className="text-muted-foreground">
-          Audit page is available only in local development/admin mode.
-        </p>
-      </div>
-    );
+    return <AdminAccessDenied />;
   }
 
   return (
