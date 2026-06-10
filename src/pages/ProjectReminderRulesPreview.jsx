@@ -42,6 +42,7 @@ const PREVIEW_SECTIONS = [
   { key: 'workflowExcludedProjects', title: 'פרויקטים מוחרגים מ-Workflow (אישור אהרון — דיווח בלבד)' },
   { key: 'runtimeEvidenceGaps', title: 'פערי ראיות ב-runtime — status ללא records (דיווח בלבד)' },
   { key: 'completedNoReminders', title: 'completed_no_reminders (דיווח בלבד)' },
+  { key: 'closedProjectsNoWorkflow', title: 'פרויקטים rejected/cancelled (דיווח בלבד)' },
 ];
 
 const ONBOARDING_SECTIONS = [
@@ -474,6 +475,7 @@ export default function ProjectReminderRulesPreview() {
             <SummaryCard label="תזכורות מוחרגות לסגירה" value={report.counts.excludedWorkflowRemindersToResolve ?? 0} />
             <SummaryCard label="פערי ראיות runtime" value={report.counts.runtimeEvidenceGaps ?? 0} />
             <SummaryCard label="completed_no_reminders" value={report.counts.completedNoReminders ?? 0} />
+            <SummaryCard label="rejected/cancelled" value={report.counts.closedProjectsNoWorkflow ?? 0} />
           </div>
 
           {PREVIEW_SECTIONS.map((section) => (

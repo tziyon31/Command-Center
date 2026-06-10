@@ -109,6 +109,16 @@ const WORK_STAGE_FALLBACK_STATUSES = new Set(['signed', 'execution']);
 
 const STATUS_BEHIND_WORKFLOW = new Set(['pricing', 'waiting']);
 
+const REJECTED_OR_CANCELLED_STATUSES = new Set(['rejected', 'cancelled']);
+
+function isRejectedOrCancelledStatus(status) {
+  return REJECTED_OR_CANCELLED_STATUSES.has(String(status || '').trim());
+}
+
+function isCompletedStatus(status) {
+  return String(status || '').trim() === 'completed';
+}
+
 const normalizeStatus = (project) => String(project?.status || '').trim();
 
 /**
@@ -474,6 +484,29 @@ function planRuntimeWorkflowActions(project, context, shared) {
     return actions;
   }
 
+  if (isRejectedOrCancelledStatus(status)) {
+    actions.push({
+      ...baseActionRow(project, 'closedProjectsNoWorkflow', 'closed_project', ''),
+      action: 'report_only',
+      reason: `Project.status is "${status}" — no runtime workflow reminders`,
+      workflow_entry_stage: entryStage,
+    });
+    return actions;
+  }
+
+  // Completed projects are not onboarding gaps — align with completed_no_reminders
+  // (onboarded or pending onboarding suggestion).
+  if (isCompletedStatus(status) && !isWorkflowManagedProject(project)) {
+    actions.push({
+      ...baseActionRow(project, 'completedNoReminders', 'completed_status', ''),
+      action: 'report_only',
+      reason: 'Completed project — no workflow reminders at this stage',
+      workflow_entry_stage: entryStage,
+      recommended_action: 'Apply Workflow Onboarding to set completed_no_reminders if not yet onboarded',
+    });
+    return actions;
+  }
+
   if (!isWorkflowManagedProject(project)) {
     actions.push({
       ...baseActionRow(project, 'runtimeEvidenceGaps', 'workflow_onboarding', ''),
@@ -651,12 +684,16 @@ function planRuntimeWorkflowActions(project, context, shared) {
   }
 
   // Report-only: legacy status without records — never act on Project.status alone.
+  // Skip terminal/closed projects (completed / rejected / cancelled / completed_no_reminders).
   if (
     !hasSubmittedSignedProposal
     && !hasWorkStages
     && WORK_STAGE_FALLBACK_STATUSES.has(status)
     && !isWorkStagesEntryStage(project)
     && !exemptSignedProposal
+    && !isCompletedNoRemindersEntry(project)
+    && !isRejectedOrCancelledStatus(status)
+    && !isCompletedStatus(status)
   ) {
     actions.push({
       ...baseActionRow(project, 'runtimeEvidenceGaps', 'work_stages_needed', ''),
@@ -937,6 +974,7 @@ function emptyGroups() {
     workflowExcludedProjects: [],
     runtimeEvidenceGaps: [],
     completedNoReminders: [],
+    closedProjectsNoWorkflow: [],
   };
 }
 
@@ -962,6 +1000,7 @@ function buildCounts(groups) {
     workflowExcludedProjects: groups.workflowExcludedProjects.length,
     runtimeEvidenceGaps: groups.runtimeEvidenceGaps.length,
     completedNoReminders: groups.completedNoReminders.length,
+    closedProjectsNoWorkflow: groups.closedProjectsNoWorkflow.length,
   };
 }
 
