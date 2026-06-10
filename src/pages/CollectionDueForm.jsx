@@ -29,9 +29,34 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { formatProjectSelectLabel } from '@/lib/projectSelectLabel';
 import { ArrowRight } from 'lucide-react';
 
 const CANCEL_CONFIRM = 'לבטל את הגבייה?';
+const HISTORICAL_PAYMENT_MODE = 'historical_payment';
+
+const dateInputToIso = (value) => {
+  const raw = String(value || '').trim().slice(0, 10);
+  if (!raw) return '';
+
+  const date = new Date(`${raw}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return '';
+
+  return date.toISOString();
+};
+
+const toDateInputValue = (value) => {
+  if (!value) return '';
+  return String(value).slice(0, 10);
+};
 
 const EMPTY_FORM = {
   invoice_process_id: '',
@@ -64,6 +89,7 @@ const readSearchParams = () => {
   return {
     id: params.get('id') || '',
     invoiceProcessId: params.get('invoice_process_id') || '',
+    mode: params.get('mode') || '',
   };
 };
 
@@ -93,19 +119,37 @@ const recordToForm = (record) => ({
   form_status: record?.form_status || 'submitted',
 });
 
-const buildPayload = (formData) => {
+const buildPayload = (formData, { historical = false } = {}) => {
   const amountDue = Number(String(formData.amount_due || '').trim() || 0);
   const amountPaid = Number(String(formData.amount_paid || '').trim() || 0);
+  const paymentReceivedAt = historical
+    ? dateInputToIso(formData.payment_received_at)
+    : (formData.payment_received_at || '');
+  const taxInvoiceSentAt = historical
+    ? dateInputToIso(formData.tax_invoice_sent_at)
+    : (formData.tax_invoice_sent_at || '');
+  const taxInvoiceSent = formData.tax_invoice_sent_to_client === true;
+  const paymentReceivedFlag = historical
+    ? amountPaid >= amountDue && amountPaid > 0
+    : formData.payment_received === true;
+  const paidAt = historical
+    ? (taxInvoiceSent ? taxInvoiceSentAt : paymentReceivedAt)
+    : (formData.paid_at || '');
+
   const statusFields = computeCollectionDueStatus({
     amount_due: amountDue,
     amount_paid: amountPaid,
-    payment_received: formData.payment_received === true,
-    tax_invoice_sent_to_client: formData.tax_invoice_sent_to_client === true,
-    payment_received_at: formData.payment_received_at || '',
-    tax_invoice_sent_at: formData.tax_invoice_sent_at || '',
-    paid_at: formData.paid_at || '',
+    payment_received: paymentReceivedFlag,
+    tax_invoice_sent_to_client: taxInvoiceSent,
+    payment_received_at: paymentReceivedAt,
+    tax_invoice_sent_at: taxInvoiceSentAt,
+    paid_at: paidAt,
     status: formData.status,
   });
+
+  if (historical && amountPaid > 0 && amountPaid < amountDue && paymentReceivedAt) {
+    statusFields.payment_received_at = paymentReceivedAt;
+  }
 
   return {
     invoice_process_id: formData.invoice_process_id || '',
@@ -117,9 +161,11 @@ const buildPayload = (formData) => {
     amount_due: amountDue,
     ...statusFields,
     tax_invoice_reference: formData.tax_invoice_reference || '',
-    due_date: formData.due_date || '',
-    opened_at: formData.opened_at || new Date().toISOString(),
-    source_type: formData.source_type || 'manual',
+    due_date: formData.due_date || (historical ? toDateInputValue(paymentReceivedAt) : ''),
+    opened_at: historical
+      ? (paymentReceivedAt || new Date().toISOString())
+      : (formData.opened_at || new Date().toISOString()),
+    source_type: historical ? 'manual_historical' : (formData.source_type || 'manual'),
     work_stage_ids: formData.work_stage_ids || '',
     work_stage_titles: formData.work_stage_titles || '',
     notes: formData.notes || '',
@@ -130,7 +176,7 @@ const buildPayload = (formData) => {
 export default function CollectionDueForm() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { id: initialId, invoiceProcessId } = readSearchParams();
+  const { id: initialId, invoiceProcessId, mode: initialMode } = readSearchParams();
 
   const [recordId, setRecordId] = useState(initialId);
   const [formData, setFormData] = useState(EMPTY_FORM);
@@ -141,6 +187,19 @@ export default function CollectionDueForm() {
   const [projectPercent, setProjectPercent] = useState('');
 
   const isEditMode = Boolean(recordId);
+  const isHistoricalMode = !isEditMode && initialMode === HISTORICAL_PAYMENT_MODE;
+
+  const { data: projects = [] } = useQuery({
+    queryKey: ['projects'],
+    queryFn: () => base44.entities.Project.list('-year'),
+    enabled: isHistoricalMode,
+  });
+
+  const { data: clients = [] } = useQuery({
+    queryKey: ['clients'],
+    queryFn: () => base44.entities.Client.list(),
+    enabled: isHistoricalMode,
+  });
 
   const { data: record, isLoading: isLoadingRecord } = useQuery({
     queryKey: ['collection-due', recordId],
@@ -231,24 +290,47 @@ export default function CollectionDueForm() {
     [formData.amount_paid],
   );
 
-  const previewPayment = useMemo(
-    () => computeCollectionDueStatus({
+  const previewPayment = useMemo(() => {
+    const paymentReceivedAt = isHistoricalMode
+      ? dateInputToIso(formData.payment_received_at)
+      : (formData.payment_received_at || '');
+    const taxInvoiceSentAt = isHistoricalMode
+      ? dateInputToIso(formData.tax_invoice_sent_at)
+      : (formData.tax_invoice_sent_at || '');
+    const taxInvoiceSent = formData.tax_invoice_sent_to_client === true;
+    const paymentReceivedFlag = isHistoricalMode
+      ? parsedAmountPaid >= parsedAmountDue && parsedAmountPaid > 0
+      : formData.payment_received === true;
+
+    const statusFields = computeCollectionDueStatus({
       amount_due: parsedAmountDue,
       amount_paid: parsedAmountPaid,
-      payment_received: formData.payment_received,
-      tax_invoice_sent_to_client: formData.tax_invoice_sent_to_client,
-      paid_at: formData.paid_at || null,
+      payment_received: paymentReceivedFlag,
+      tax_invoice_sent_to_client: taxInvoiceSent,
+      payment_received_at: paymentReceivedAt,
+      tax_invoice_sent_at: taxInvoiceSentAt,
+      paid_at: isHistoricalMode
+        ? (taxInvoiceSent ? taxInvoiceSentAt : paymentReceivedAt)
+        : (formData.paid_at || null),
       status: formData.status,
-    }),
-    [
-      parsedAmountDue,
-      parsedAmountPaid,
-      formData.payment_received,
-      formData.tax_invoice_sent_to_client,
-      formData.paid_at,
-      formData.status,
-    ],
-  );
+    });
+
+    if (isHistoricalMode && parsedAmountPaid > 0 && parsedAmountPaid < parsedAmountDue && paymentReceivedAt) {
+      statusFields.payment_received_at = paymentReceivedAt;
+    }
+
+    return statusFields;
+  }, [
+    parsedAmountDue,
+    parsedAmountPaid,
+    formData.payment_received,
+    formData.tax_invoice_sent_to_client,
+    formData.payment_received_at,
+    formData.tax_invoice_sent_at,
+    formData.paid_at,
+    formData.status,
+    isHistoricalMode,
+  ]);
 
   const projectFeeAmount = getProjectFeeAmount(project);
   const outstandingAmount = getProjectOutstandingAmount(project);
@@ -279,9 +361,25 @@ export default function CollectionDueForm() {
     }
   };
 
+  const applyHistoricalProjectSelection = (projectId) => {
+    const selected = projects.find((item) => item.id === projectId);
+    if (!selected) return;
+
+    const linkedClient = clients.find((client) => client.id === selected.client_id);
+
+    setFormData((prev) => ({
+      ...prev,
+      project_id: selected.id,
+      project_name: selected.name || '',
+      client_id: selected.client_id || '',
+      client_name: linkedClient?.name || selected.client_name || '',
+    }));
+    setProjectPercent('');
+  };
+
   const handleSave = async () => {
     if (!formData.project_id) {
-      alert('חסר פרויקט');
+      alert(isHistoricalMode ? 'יש לבחור פרויקט לפני שמירת גבייה' : 'חסר פרויקט');
       return;
     }
 
@@ -290,20 +388,32 @@ export default function CollectionDueForm() {
       return;
     }
 
-    if (project?.id && projectFeeAmount > 0 && parsedAmountDue > maxCollectionAmount) {
-      alert('הסכום לגבייה לא יכול להיות גבוה מיתרת הגבייה הכוללת');
-      return;
-    }
+    if (isHistoricalMode) {
+      if (parsedAmountPaid > 0 && !String(formData.payment_received_at || '').trim()) {
+        alert('יש להזין תאריך קבלת תשלום עבור גבייה ישנה');
+        return;
+      }
 
-    if (project?.id && parsedAmountDue > 0 && projectFeeAmount <= 0) {
-      alert('לא הוגדר שכ״ט לפרויקט. יש לעדכן שכ״ט לפני עדכון הגבייה.');
-      return;
+      if (formData.tax_invoice_sent_to_client === true && !String(formData.tax_invoice_sent_at || '').trim()) {
+        alert('יש להזין תאריך שליחת חשבונית מס');
+        return;
+      }
+    } else {
+      if (project?.id && projectFeeAmount > 0 && parsedAmountDue > maxCollectionAmount) {
+        alert('הסכום לגבייה לא יכול להיות גבוה מיתרת הגבייה הכוללת');
+        return;
+      }
+
+      if (project?.id && parsedAmountDue > 0 && projectFeeAmount <= 0) {
+        alert('לא הוגדר שכ״ט לפרויקט. יש לעדכן שכ״ט לפני עדכון הגבייה.');
+        return;
+      }
     }
 
     setIsSaving(true);
 
     try {
-      const payload = buildPayload(formData);
+      const payload = buildPayload(formData, { historical: isHistoricalMode });
       let savedId = recordId;
       let savedRecord = null;
 
@@ -339,7 +449,7 @@ export default function CollectionDueForm() {
 
       setFormData(recordToForm({ ...formData, ...payload }));
       await invalidateQueries(formData.project_id);
-      alert(recordId ? 'השינויים נשמרו' : 'הגבייה נשמרה');
+      alert(recordId ? 'השינויים נשמרו' : (isHistoricalMode ? 'הגבייה הישנה נשמרה' : 'הגבייה נשמרה'));
     } catch (error) {
       console.error('[CollectionDueForm] save failed', error);
       alert('לא הצלחנו לשמור את הגבייה');
@@ -393,6 +503,15 @@ export default function CollectionDueForm() {
 
   const isLoading = (recordId && isLoadingRecord) || (!recordId && invoiceProcessId && isLoadingInvoice);
   const isBusy = isSaving || isActionBusy;
+  const pageTitle = isHistoricalMode
+    ? 'רישום גבייה ישנה'
+    : (isEditMode ? 'גבייה' : 'גבייה חדשה');
+  const pageDescription = isHistoricalMode
+    ? 'רישום תשלום שהתקבל בעבר עבור פרויקט'
+    : 'צפייה ועריכת פרטי גבייה';
+  const previewStatusLabel = COLLECTION_DUE_STATUS_LABELS[previewPayment.status]
+    || previewPayment.status
+    || statusLabel;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50" dir="rtl">
@@ -408,16 +527,200 @@ export default function CollectionDueForm() {
 
         <div className="flex items-center justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">
-              {isEditMode ? 'גבייה' : 'גבייה חדשה'}
-            </h1>
-            <p className="text-muted-foreground mt-1">צפייה ועריכת פרטי גבייה</p>
+            <h1 className="text-3xl font-bold tracking-tight">{pageTitle}</h1>
+            <p className="text-muted-foreground mt-1">{pageDescription}</p>
           </div>
-          <Badge variant="secondary">{statusLabel}</Badge>
+          <Badge variant="secondary">{isHistoricalMode ? previewStatusLabel : statusLabel}</Badge>
         </div>
 
         {isLoading ? (
           <p className="text-sm text-muted-foreground">טוען...</p>
+        ) : isHistoricalMode ? (
+          <>
+            <Card>
+              <CardHeader>
+                <CardTitle>פרויקט</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label>בחר פרויקט</Label>
+                  <Select
+                    value={formData.project_id || undefined}
+                    onValueChange={applyHistoricalProjectSelection}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="בחר פרויקט" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {projects.map((item) => (
+                        <SelectItem key={item.id} value={item.id}>
+                          {formatProjectSelectLabel(item)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {formData.project_id ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>לקוח</Label>
+                      <Input value={formData.client_name} disabled />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>פרויקט</Label>
+                      <Input value={formData.project_name} disabled />
+                    </div>
+                  </div>
+                ) : null}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>פרטי שכ״ט וסכום גבייה</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label>שכ״ט פרויקט</Label>
+                  <Input
+                    value={projectFeeAmount > 0 ? new Intl.NumberFormat('he-IL').format(projectFeeAmount) : 'לא מוגדר'}
+                    disabled
+                  />
+                  {project?.id && projectFeeAmount <= 0 ? (
+                    <p className="text-xs text-amber-700">
+                      לא מוגדר שכ״ט לפרויקט, יש להזין סכום גבייה ידנית.
+                    </p>
+                  ) : null}
+                </div>
+
+                <CollectionAmountPercentFields
+                  project={project}
+                  amountValue={formData.amount_due}
+                  percentValue={projectPercent}
+                  percentLabel="אחוז משכ״ט לגבייה"
+                  amountId="historical-collection-amount"
+                  percentId="historical-collection-percent"
+                  onAmountChange={(value) => setFormData((prev) => ({
+                    ...prev,
+                    amount_due: value,
+                  }))}
+                  onPercentChange={setProjectPercent}
+                />
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>סכום ששולם</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={formData.amount_paid}
+                      onChange={(event) => setFormData((prev) => ({
+                        ...prev,
+                        amount_paid: event.target.value,
+                      }))}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>יתרה (מחושב)</Label>
+                    <Input value={String(previewPayment.remaining_amount)} disabled />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>פרטי תשלום עבר</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>תאריך קבלת תשלום</Label>
+                    <Input
+                      type="date"
+                      value={toDateInputValue(formData.payment_received_at)}
+                      onChange={(event) => setFormData((prev) => ({
+                        ...prev,
+                        payment_received_at: event.target.value,
+                      }))}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>אסמכתא / חשבונית</Label>
+                    <Input
+                      value={formData.invoice_reference}
+                      onChange={(event) => setFormData((prev) => ({
+                        ...prev,
+                        invoice_reference: event.target.value,
+                      }))}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-3 rounded-lg border p-4">
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id="historical-tax-invoice-sent"
+                      checked={formData.tax_invoice_sent_to_client === true}
+                      onCheckedChange={(value) => setFormData((prev) => ({
+                        ...prev,
+                        tax_invoice_sent_to_client: value === true,
+                      }))}
+                    />
+                    <Label htmlFor="historical-tax-invoice-sent" className="cursor-pointer">
+                      חשבונית מס נשלחה ללקוח
+                    </Label>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>תאריך שליחת חשבונית מס</Label>
+                      <Input
+                        type="date"
+                        value={toDateInputValue(formData.tax_invoice_sent_at)}
+                        disabled={!formData.tax_invoice_sent_to_client}
+                        onChange={(event) => setFormData((prev) => ({
+                          ...prev,
+                          tax_invoice_sent_at: event.target.value,
+                        }))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>מספר חשבונית מס / אסמכתא</Label>
+                      <Input
+                        value={formData.tax_invoice_reference}
+                        disabled={!formData.tax_invoice_sent_to_client}
+                        onChange={(event) => setFormData((prev) => ({
+                          ...prev,
+                          tax_invoice_reference: event.target.value,
+                        }))}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>הערות</Label>
+                  <Textarea
+                    value={formData.notes}
+                    onChange={(event) => setFormData((prev) => ({
+                      ...prev,
+                      notes: event.target.value,
+                    }))}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+
+            <div className="flex flex-wrap gap-3">
+              <Button type="button" disabled={isBusy} onClick={() => { void handleSave(); }}>
+                שמור גבייה ישנה
+              </Button>
+              <Button type="button" variant="outline" disabled={isBusy} onClick={() => navigate(createPageUrl('Collections'))}>
+                חזרה לרשימה
+              </Button>
+            </div>
+          </>
         ) : (
           <>
             <Card>
@@ -571,13 +874,15 @@ export default function CollectionDueForm() {
         )}
       </div>
 
-      <CompleteCollectionDueDialog
-        open={completeDialogOpen}
-        onOpenChange={setCompleteDialogOpen}
-        collectionDue={record || { ...formData, id: recordId, amount_due: parsedAmountDue }}
-        onComplete={handleComplete}
-        isSaving={isActionBusy}
-      />
+      {!isHistoricalMode ? (
+        <CompleteCollectionDueDialog
+          open={completeDialogOpen}
+          onOpenChange={setCompleteDialogOpen}
+          collectionDue={record || { ...formData, id: recordId, amount_due: parsedAmountDue }}
+          onComplete={handleComplete}
+          isSaving={isActionBusy}
+        />
+      ) : null}
     </div>
   );
 }

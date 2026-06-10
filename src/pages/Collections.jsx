@@ -3,7 +3,10 @@ import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
 import { createPageUrl } from '@/utils';
-import { buildCollectionDueFormPageUrl } from '@/lib/workflowNavigation';
+import {
+  buildCollectionDueFormPageUrl,
+  buildInvoiceProcessFormPageUrl,
+} from '@/lib/workflowNavigation';
 import {
   ACTIVE_COLLECTION_STATUSES,
   COLLECTION_DUE_STATUS_LABELS,
@@ -145,10 +148,22 @@ export default function Collections() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50" dir="rtl">
       <div className="max-w-[1600px] mx-auto px-8 py-10 space-y-6">
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h1 className="text-3xl font-bold tracking-tight">גבייה</h1>
             <p className="text-muted-foreground mt-1">מעקב אחרי גביות פתוחות וסגורות</p>
+          </div>
+          <div className="flex flex-wrap gap-2 shrink-0">
+            <Button asChild>
+              <Link to={buildInvoiceProcessFormPageUrl({ from: 'collections' })}>
+                פתח חשבונית וגבייה
+              </Link>
+            </Button>
+            <Button asChild variant="outline">
+              <Link to={buildCollectionDueFormPageUrl({ mode: 'historical_payment' })}>
+                הוסף גבייה ישנה
+              </Link>
+            </Button>
           </div>
         </div>
 

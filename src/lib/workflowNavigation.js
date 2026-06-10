@@ -115,7 +115,8 @@ export const buildInvoiceProcessFormPageUrl = ({
   invoiceScope,
   clientId,
   clientName,
-}) => {
+  from,
+} = {}) => {
   const query = new URLSearchParams();
 
   if (invoiceProcessId) {
@@ -125,6 +126,7 @@ export const buildInvoiceProcessFormPageUrl = ({
     if (clientId) query.set('client_id', clientId);
     if (clientName) query.set('client_name', clientName);
     if (invoiceScope) query.set('invoice_scope', invoiceScope);
+    if (from) query.set('from', from);
     if (workStageIds?.length) {
       const ids = [...new Set(workStageIds.map((id) => String(id).trim()).filter(Boolean))];
       if (ids.length) query.set('work_stage_ids', ids.join(','));
@@ -138,6 +140,7 @@ export const buildInvoiceProcessFormPageUrl = ({
 export const buildCollectionDueFormPageUrl = ({
   collectionDueId,
   invoiceProcessId,
+  mode,
 } = {}) => {
   const query = new URLSearchParams();
 
@@ -145,6 +148,8 @@ export const buildCollectionDueFormPageUrl = ({
     query.set('id', collectionDueId);
   } else if (invoiceProcessId) {
     query.set('invoice_process_id', invoiceProcessId);
+  } else if (mode) {
+    query.set('mode', mode);
   }
 
   const queryString = query.toString();
