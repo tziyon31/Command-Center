@@ -26,6 +26,7 @@ import {
   getProjectWorkflowExclusion,
   isProjectExcludedFromWorkflowReminders,
 } from '@/lib/projectWorkflowExclusions';
+import { isCompletedNoRemindersEntry } from '@/lib/projectWorkflowOnboarding';
 
 const INTAKE_CONDITION_PREFIXES = [
   CLIENT_NEEDS_PROJECT_CONDITION_PREFIX,
@@ -573,7 +574,7 @@ function buildMissingReminderCandidateRow(project, pipelineRow, activeRemindersC
 function buildCompletedNeedsPolicyRow(project, pipelineRow) {
   return {
     project_id: project.id,
-    project_name: project.name || '',
+    project_name: project.name || project.project_name || '',
     project_status: String(project?.status || '').trim(),
     project_status_label: getProjectWorkStatusLabel(project),
     construction_status: pipelineRow?.construction_status || CONSTRUCTION_STATUS_NOT_UPDATED,
@@ -583,6 +584,24 @@ function buildCompletedNeedsPolicyRow(project, pipelineRow) {
     severity: 'info',
     reason: 'Completed project without construction status policy decision',
     recommended_action: 'Define business policy for construction/facility follow-up',
+  };
+}
+
+function buildCompletedNoWorkflowNeededRow(project, pipelineRow) {
+  return {
+    project_id: project.id,
+    project_name: project.name || project.project_name || '',
+    project_status: String(project?.status || '').trim(),
+    project_status_label: getProjectWorkStatusLabel(project),
+    construction_status: pipelineRow?.construction_status || CONSTRUCTION_STATUS_NOT_UPDATED,
+    construction_status_label: pipelineRow?.construction_status_label || '',
+    active_reminders_count: pipelineRow?.active_reminder_count || 0,
+    workflow_entry_stage: project.workflow_entry_stage,
+    workflow_state: project.workflow_entry_stage,
+    classification: 'completed_no_workflow_needed',
+    severity: 'info',
+    reason: 'Project already marked as completed_no_reminders',
+    recommended_action: 'No workflow reminder needed at this stage',
   };
 }
 
@@ -618,6 +637,14 @@ function buildRecommendations(groups, counts) {
       type: 'completed_needs_policy',
       count: counts.completedNeedsPolicyCount,
       message: 'Completed projects need a business policy for construction/facility follow-up.',
+    });
+  }
+
+  if (counts.completedNoWorkflowNeededCount > 0) {
+    recommendations.push({
+      type: 'completed_no_workflow_needed',
+      count: counts.completedNoWorkflowNeededCount,
+      message: 'Completed projects are already marked as no workflow reminders needed.',
     });
   }
 
@@ -712,6 +739,7 @@ export async function runProjectReminderIntegrityAudit({ entities = base44.entit
     unknownConditionKeys: classifiedRows.filter((row) => row.classification === 'unknown_condition_key'),
     validProjectReminders: classifiedRows.filter((row) => row.classification === 'valid_project_reminder'),
     completedNeedsPolicy: [],
+    completedNoWorkflowNeeded: [],
     statusWorkflowMismatches: [],
     workflowExcludedProjects: [],
   };
@@ -762,7 +790,13 @@ export async function runProjectReminderIntegrityAudit({ entities = base44.entit
       status === 'completed'
       && pipelineRow?.construction_status === CONSTRUCTION_STATUS_NOT_UPDATED
     ) {
-      groups.completedNeedsPolicy.push(buildCompletedNeedsPolicyRow(project, pipelineRow));
+      if (isCompletedNoRemindersEntry(project)) {
+        groups.completedNoWorkflowNeeded.push(
+          buildCompletedNoWorkflowNeededRow(project, pipelineRow),
+        );
+      } else {
+        groups.completedNeedsPolicy.push(buildCompletedNeedsPolicyRow(project, pipelineRow));
+      }
     }
   }
 
@@ -789,6 +823,7 @@ export async function runProjectReminderIntegrityAudit({ entities = base44.entit
       (row) => row.project_status === 'execution',
     ).length,
     completedNeedsPolicyCount: groups.completedNeedsPolicy.length,
+    completedNoWorkflowNeededCount: groups.completedNoWorkflowNeeded.length,
     statusWorkflowMismatchesCount: groups.statusWorkflowMismatches.length,
     workflowExcludedProjectsCount: groups.workflowExcludedProjects.length,
   };
