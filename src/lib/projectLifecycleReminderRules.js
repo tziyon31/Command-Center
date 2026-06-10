@@ -562,6 +562,36 @@ function buildCounts(groups) {
 const shouldApply = (options = {}) => options.apply === true && options.dryRun === false;
 
 /**
+ * Plan-aware confirm guard: each apply scope has its own confirmText.
+ * - P2H pricing creations require APPLY_PRICING_PROPOSAL_REMINDERS (the P2G
+ *   text is NOT accepted for them).
+ * - P2G lifecycle alignment actions (without pricing creations) require
+ *   APPLY_PROJECT_REMINDER_RULES_ALIGNMENT.
+ */
+function assertConfirmTextMatchesPlan(groups, confirmText) {
+  const hasPricingCreates = groups.pricingProposalRemindersToCreate.length > 0;
+  const hasLifecycleAlignmentActions = (
+    groups.staleProposalRemindersToResolve.length > 0
+    || groups.waitingFollowupRemindersToCreate.length > 0
+    || groups.workStageRemindersToCreate.length > 0
+    || groups.projectWorkStageRemindersToResolve.length > 0
+    || groups.excludedWorkflowRemindersToResolve.length > 0
+  );
+
+  if (hasPricingCreates && confirmText !== APPLY_PRICING_PROPOSAL_REMINDERS_CONFIRM_TEXT) {
+    throw new Error('Missing explicit confirmText for pricing proposal reminders');
+  }
+
+  if (
+    !hasPricingCreates
+    && hasLifecycleAlignmentActions
+    && confirmText !== APPLY_PROJECT_REMINDER_RULES_CONFIRM_TEXT
+  ) {
+    throw new Error('Missing explicit confirmText for lifecycle alignment');
+  }
+}
+
+/**
  * Runs lifecycle rules for a single project.
  * Default: dryRun=true, apply=false — returns the plan without mutating.
  */
@@ -580,6 +610,8 @@ export async function runProjectLifecycleReminderRulesForProject(project, option
     return { dryRun: true, applied: false, actions };
   }
 
+  assertConfirmTextMatchesPlan(groupActions(actions), confirmText);
+
   const results = [];
   for (const action of actions) {
     results.push({ action, result: await executeAction(action, context.cache) });
@@ -592,9 +624,9 @@ export async function runProjectLifecycleReminderRulesForProject(project, option
  * Runs lifecycle rules for all projects.
  *
  * Mutation requires ALL of:
- *   apply: true, dryRun: false,
- *   confirmText: one of the accepted apply confirm texts
- *   (APPLY_PROJECT_REMINDER_RULES_ALIGNMENT / APPLY_PRICING_PROPOSAL_REMINDERS)
+ *   apply: true, dryRun: false, and a confirmText that matches the plan:
+ *   - plan contains pricing creations → APPLY_PRICING_PROPOSAL_REMINDERS only
+ *   - lifecycle alignment actions only → APPLY_PROJECT_REMINDER_RULES_ALIGNMENT
  */
 export async function runProjectLifecycleReminderRulesForAll(options = {}) {
   const { dryRun = true, apply = false, confirmText = '' } = options;
@@ -613,6 +645,10 @@ export async function runProjectLifecycleReminderRulesForAll(options = {}) {
 
   const groups = groupActions(allActions);
   const counts = buildCounts(groups);
+
+  if (applying) {
+    assertConfirmTextMatchesPlan(groups, confirmText);
+  }
 
   const summary = {
     status: 'completed',
