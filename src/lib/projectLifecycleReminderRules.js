@@ -38,7 +38,7 @@ import {
   hasNonCancelledWorkStageForProject,
   SIGNED_PROPOSAL_NEEDS_WORK_STAGES_PREFIX,
 } from '@/lib/workStageReminderRules';
-import { buildWorkStagesPageUrl } from '@/lib/workflowNavigation';
+import { buildProposalFormPageUrl, buildWorkStagesPageUrl } from '@/lib/workflowNavigation';
 import {
   getProjectWorkflowExclusion,
   isProjectExcludedFromWorkflowReminders,
@@ -48,6 +48,12 @@ export const PROJECT_WAITING_FOLLOWUP_PREFIX = 'project_waiting_followup:';
 export const PROJECT_NEEDS_WORK_STAGES_PREFIX = 'project_needs_work_stages:';
 
 export const APPLY_PROJECT_REMINDER_RULES_CONFIRM_TEXT = 'APPLY_PROJECT_REMINDER_RULES_ALIGNMENT';
+export const APPLY_PRICING_PROPOSAL_REMINDERS_CONFIRM_TEXT = 'APPLY_PRICING_PROPOSAL_REMINDERS';
+
+const ACCEPTED_APPLY_CONFIRM_TEXTS = new Set([
+  APPLY_PROJECT_REMINDER_RULES_CONFIRM_TEXT,
+  APPLY_PRICING_PROPOSAL_REMINDERS_CONFIRM_TEXT,
+]);
 
 export function getProjectWaitingFollowupConditionKey(projectId) {
   return `${PROJECT_WAITING_FOLLOWUP_PREFIX}${projectId}`;
@@ -129,6 +135,36 @@ function buildWaitingFollowupReminderInput(project, clientsById) {
     condition_key: getProjectWaitingFollowupConditionKey(project.id),
     action_url: createPageUrl(`ProjectDetails?id=${project.id}`),
     action_label: 'פתח פרויקט',
+    frequency: 'daily',
+  };
+}
+
+/** P2H: missing project_needs_proposal reminder for a pricing project. */
+function buildPricingProposalReminderInput(project, clientsById) {
+  const projectName = project.name || project.project_name || 'ללא שם';
+  const clientId = String(project.client_id || '').trim();
+  const resolvedClient = clientsById.get(clientId);
+  const clientName = project.client_name
+    || resolvedClient?.name
+    || projectName;
+
+  return {
+    title: `לפתוח הצעת מחיר לפרויקט ${projectName}`,
+    description: 'הפרויקט נמצא בתמחור ועדיין אין לו תזכורת פעילה לפתיחת הצעת מחיר.',
+    client_name: clientName,
+    client_id: clientId,
+    project_name: projectName,
+    project_id: project.id,
+    source_type: 'project',
+    source_id: project.id,
+    condition_key: getProjectNeedsProposalConditionKey(project.id),
+    action_url: buildProposalFormPageUrl({
+      clientId,
+      clientName: clientId ? clientName : '',
+      projectId: project.id,
+      projectName,
+    }),
+    action_label: 'פתח הצעת מחיר',
     frequency: 'daily',
   };
 }
@@ -216,11 +252,12 @@ async function safeListEntity(entities, entityName) {
 export async function loadProjectLifecycleRuleContext({ entities = base44.entities } = {}) {
   const cache = await loadReminderEngineCache();
 
-  const [projects, workStages, signedProposals, clients] = await Promise.all([
+  const [projects, workStages, signedProposals, clients, proposals] = await Promise.all([
     safeListEntity(entities, 'Project'),
     safeListEntity(entities, 'WorkStage'),
     safeListEntity(entities, 'SignedProposal'),
     safeListEntity(entities, 'Client'),
+    safeListEntity(entities, 'Proposal'),
   ]);
 
   const signedProposalsById = new Map(
@@ -233,12 +270,20 @@ export async function loadProjectLifecycleRuleContext({ entities = base44.entiti
     projects,
     workStages,
     signedProposals,
+    proposals,
     signedProposalsById,
     clientsById,
     openSignedProposalWorkStageRemindersByProjectId:
       buildOpenSignedProposalWorkStageReminderMap(cache, signedProposalsById),
   };
 }
+
+const hasNonCancelledProposalForProject = (projectId, proposals = []) => (
+  proposals.some(
+    (proposal) => String(proposal?.project_id || '').trim() === String(projectId).trim()
+      && proposal?.form_status !== 'cancelled',
+  )
+);
 
 function baseActionRow(project, bucket, reminderKind, conditionKey) {
   return {
@@ -260,7 +305,7 @@ export function planProjectLifecycleReminderActions(project, context) {
   if (!project?.id) return actions;
 
   const status = normalizeStatus(project);
-  const { cache, workStages, signedProposals, clientsById } = context;
+  const { cache, workStages, signedProposals, proposals = [], clientsById } = context;
 
   const workflow = evaluateProjectWorkflowState(project, { workStages, signedProposals });
   const { hasWorkStages, hasSubmittedSignedProposal } = workflow;
@@ -354,6 +399,23 @@ export function planProjectLifecycleReminderActions(project, context) {
         ...existing,
       });
     }
+  }
+
+  // Rule E (P2H): pricing project with no proposal coverage → create
+  // project_needs_proposal. Missing client_id does NOT block creation.
+  if (
+    status === 'pricing'
+    && !hasOpenReminderForConditionKey(cache, proposalKey)
+    && !hasSubmittedSignedProposal
+    && !hasWorkStages
+    && !hasNonCancelledProposalForProject(project.id, proposals)
+  ) {
+    actions.push({
+      ...baseActionRow(project, 'pricingProposalRemindersToCreate', 'project_needs_proposal', proposalKey),
+      action: 'create',
+      reason: 'Pricing project has no proposal, no signed proposal, no work stages and no active proposal reminder',
+      reminder_input: buildPricingProposalReminderInput(project, clientsById),
+    });
   }
 
   // Rule B: waiting follow-up is valid ONLY when there are no workflow records.
@@ -464,6 +526,7 @@ async function executeAction(action, cache) {
 function emptyGroups() {
   return {
     staleProposalRemindersToResolve: [],
+    pricingProposalRemindersToCreate: [],
     waitingFollowupRemindersToCreate: [],
     workStageRemindersToCreate: [],
     projectWorkStageRemindersToResolve: [],
@@ -485,6 +548,7 @@ function groupActions(actions) {
 function buildCounts(groups) {
   return {
     staleProposalRemindersToResolve: groups.staleProposalRemindersToResolve.length,
+    pricingProposalRemindersToCreate: groups.pricingProposalRemindersToCreate.length,
     waitingFollowupRemindersToCreate: groups.waitingFollowupRemindersToCreate.length,
     workStageRemindersToCreate: groups.workStageRemindersToCreate.length,
     projectWorkStageRemindersToResolve: groups.projectWorkStageRemindersToResolve.length,
@@ -505,7 +569,7 @@ export async function runProjectLifecycleReminderRulesForProject(project, option
   const { dryRun = true, apply = false, confirmText = '' } = options;
   const applying = shouldApply({ dryRun, apply });
 
-  if (applying && confirmText !== APPLY_PROJECT_REMINDER_RULES_CONFIRM_TEXT) {
+  if (applying && !ACCEPTED_APPLY_CONFIRM_TEXTS.has(confirmText)) {
     throw new Error('Missing explicit confirmText');
   }
 
@@ -529,13 +593,14 @@ export async function runProjectLifecycleReminderRulesForProject(project, option
  *
  * Mutation requires ALL of:
  *   apply: true, dryRun: false,
- *   confirmText: APPLY_PROJECT_REMINDER_RULES_CONFIRM_TEXT
+ *   confirmText: one of the accepted apply confirm texts
+ *   (APPLY_PROJECT_REMINDER_RULES_ALIGNMENT / APPLY_PRICING_PROPOSAL_REMINDERS)
  */
 export async function runProjectLifecycleReminderRulesForAll(options = {}) {
   const { dryRun = true, apply = false, confirmText = '' } = options;
   const applying = shouldApply({ dryRun, apply });
 
-  if (applying && confirmText !== APPLY_PROJECT_REMINDER_RULES_CONFIRM_TEXT) {
+  if (applying && !ACCEPTED_APPLY_CONFIRM_TEXTS.has(confirmText)) {
     throw new Error('Missing explicit confirmText');
   }
 

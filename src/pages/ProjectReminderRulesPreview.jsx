@@ -5,6 +5,7 @@ import { base44 } from '@/api/base44Client';
 import { createPageUrl } from '@/utils';
 import { runProjectReminderRulesPreview } from '@/lib/projectReminderRulesPreview';
 import {
+  APPLY_PRICING_PROPOSAL_REMINDERS_CONFIRM_TEXT,
   APPLY_PROJECT_REMINDER_RULES_CONFIRM_TEXT,
   runProjectLifecycleReminderRulesForAll,
 } from '@/lib/projectLifecycleReminderRules';
@@ -23,6 +24,7 @@ import {
 
 const PREVIEW_SECTIONS = [
   { key: 'staleProposalRemindersToResolve', title: 'תזכורות הצעת מחיר שייסגרו' },
+  { key: 'pricingProposalRemindersToCreate', title: 'תזכורות הצעת מחיר שיווצרו לפרויקטים בתמחור (P2H)' },
   { key: 'waitingFollowupRemindersToCreate', title: 'תזכורות follow-up שיווצרו עבור waiting (ללא workflow)' },
   { key: 'workStageRemindersToCreate', title: 'תזכורות שלבי עבודה שיווצרו (SignedProposal או signed/execution)' },
   { key: 'projectWorkStageRemindersToResolve', title: 'תזכורות שייסגרו (יש WorkStages / אין מקור workflow)' },
@@ -30,6 +32,11 @@ const PREVIEW_SECTIONS = [
   { key: 'statusWorkflowMismatches', title: 'Project.status לא תואם ל-Workflow (דיווח בלבד — לא מבוצעת פעולה)' },
   { key: 'excludedWorkflowRemindersToResolve', title: 'תזכורות workflow פעילות על פרויקטים מוחרגים (ייסגרו ב-Apply)' },
   { key: 'workflowExcludedProjects', title: 'פרויקטים מוחרגים מ-Workflow (אישור אהרון — דיווח בלבד)' },
+];
+
+const ACCEPTED_CONFIRM_TEXTS = [
+  APPLY_PRICING_PROPOSAL_REMINDERS_CONFIRM_TEXT,
+  APPLY_PROJECT_REMINDER_RULES_CONFIRM_TEXT,
 ];
 
 function SummaryCard({ label, value }) {
@@ -131,9 +138,11 @@ export default function ProjectReminderRulesPreview() {
     await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
   };
 
+  const confirmTextIsValid = ACCEPTED_CONFIRM_TEXTS.includes(confirmText);
+
   const handleApply = async () => {
-    if (confirmText !== APPLY_PROJECT_REMINDER_RULES_CONFIRM_TEXT) {
-      setError(`יש להקליד בדיוק: ${APPLY_PROJECT_REMINDER_RULES_CONFIRM_TEXT}`);
+    if (!confirmTextIsValid) {
+      setError(`יש להקליד בדיוק את אחד מהטקסטים: ${ACCEPTED_CONFIRM_TEXTS.join(' / ')}`);
       return;
     }
 
@@ -219,6 +228,7 @@ export default function ProjectReminderRulesPreview() {
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
             <SummaryCard label="פרויקטים נבדקו" value={report.projectsChecked} />
             <SummaryCard label="הצעות מחיר שייסגרו" value={report.counts.staleProposalRemindersToResolve} />
+            <SummaryCard label="הצעות מחיר שיווצרו (pricing)" value={report.counts.pricingProposalRemindersToCreate ?? 0} />
             <SummaryCard label="follow-up שיווצרו" value={report.counts.waitingFollowupRemindersToCreate} />
             <SummaryCard label="שלבי עבודה שיווצרו" value={report.counts.workStageRemindersToCreate} />
             <SummaryCard label="תזכורות שייסגרו" value={report.counts.projectWorkStageRemindersToResolve} />
@@ -249,7 +259,12 @@ export default function ProjectReminderRulesPreview() {
             </CardHeader>
             <CardContent className="space-y-3">
               <p className="text-sm text-muted-foreground">
-                לביצוע הפעולות המתוכננות יש להקליד במדויק:
+                ליצירת תזכורות pricing חסרות (P2H) יש להקליד במדויק:
+                {' '}
+                <span className="font-mono" dir="ltr">{APPLY_PRICING_PROPOSAL_REMINDERS_CONFIRM_TEXT}</span>
+              </p>
+              <p className="text-sm text-muted-foreground">
+                ליישור מלא של כל החוקים (P2G) ניתן גם להקליד:
                 {' '}
                 <span className="font-mono" dir="ltr">{APPLY_PROJECT_REMINDER_RULES_CONFIRM_TEXT}</span>
               </p>
@@ -258,14 +273,14 @@ export default function ProjectReminderRulesPreview() {
                   dir="ltr"
                   value={confirmText}
                   onChange={(event) => setConfirmText(event.target.value)}
-                  placeholder={APPLY_PROJECT_REMINDER_RULES_CONFIRM_TEXT}
+                  placeholder={APPLY_PRICING_PROPOSAL_REMINDERS_CONFIRM_TEXT}
                   className="max-w-md font-mono"
                 />
                 <Button
                   type="button"
                   variant="destructive"
                   onClick={handleApply}
-                  disabled={applying || confirmText !== APPLY_PROJECT_REMINDER_RULES_CONFIRM_TEXT}
+                  disabled={applying || !confirmTextIsValid}
                 >
                   {applying ? 'מבצע Apply...' : 'Apply with confirmation'}
                 </Button>
