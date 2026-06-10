@@ -14,6 +14,7 @@ const CONDITION_PREFIXES_BY_SOURCE_TYPE = {
     'proposal_not_sent:',
     'proposal_not_seen:',
     'proposal_needs_signed_proposal:',
+    'proposal_waiting_followup:',
   ],
   signed_proposal: ['signed_proposal_needs_work_stages:'],
   work_stage: [

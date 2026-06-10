@@ -7,6 +7,8 @@ import { runProjectReminderRulesPreview } from '@/lib/projectReminderRulesPrevie
 import {
   APPLY_PRICING_PROPOSAL_REMINDERS_CONFIRM_TEXT,
   APPLY_PROJECT_REMINDER_RULES_CONFIRM_TEXT,
+  PLANNER_MODE_LEGACY_BOOTSTRAP,
+  PLANNER_MODE_RUNTIME,
   runProjectLifecycleReminderRulesForAll,
 } from '@/lib/projectLifecycleReminderRules';
 import { isLocalDevEnvironment } from '@/lib/isLocalDev';
@@ -24,15 +26,22 @@ import {
 
 const PREVIEW_SECTIONS = [
   { key: 'staleProposalRemindersToResolve', title: 'תזכורות הצעת מחיר שייסגרו' },
-  { key: 'pricingProposalRemindersToCreate', title: 'תזכורות הצעת מחיר שיווצרו לפרויקטים בתמחור (P2H)' },
-  { key: 'waitingFollowupRemindersToCreate', title: 'תזכורות follow-up שיווצרו עבור waiting (ללא workflow)' },
-  { key: 'workStageRemindersToCreate', title: 'תזכורות שלבי עבודה שיווצרו (SignedProposal או signed/execution)' },
+  { key: 'pricingProposalRemindersToCreate', title: 'תזכורות הצעת מחיר שיווצרו (P2H legacy / runtime לפי records)' },
+  { key: 'waitingFollowupRemindersToCreate', title: 'תזכורות follow-up שיווצרו עבור waiting (legacy bootstrap בלבד)' },
+  { key: 'proposalFollowupRemindersToCreate', title: 'תזכורות follow-up שיווצרו לפי Proposal submitted (runtime בלבד)' },
+  { key: 'workStageRemindersToCreate', title: 'תזכורות שלבי עבודה שיווצרו' },
   { key: 'projectWorkStageRemindersToResolve', title: 'תזכורות שייסגרו (יש WorkStages / אין מקור workflow)' },
   { key: 'duplicatesPrevented', title: 'כפילויות שנמנעו / כבר מכוסה' },
   { key: 'statusWorkflowMismatches', title: 'Project.status לא תואם ל-Workflow (דיווח בלבד — לא מבוצעת פעולה)' },
   { key: 'excludedWorkflowRemindersToResolve', title: 'תזכורות workflow פעילות על פרויקטים מוחרגים (ייסגרו ב-Apply)' },
   { key: 'workflowExcludedProjects', title: 'פרויקטים מוחרגים מ-Workflow (אישור אהרון — דיווח בלבד)' },
+  { key: 'runtimeEvidenceGaps', title: 'פערי ראיות ב-runtime — status ללא records (דיווח בלבד)' },
 ];
+
+const MODE_LABELS = {
+  [PLANNER_MODE_LEGACY_BOOTSTRAP]: 'Legacy Bootstrap (מיגרציה — מותר Project.status)',
+  [PLANNER_MODE_RUNTIME]: 'Runtime (records בלבד — ללא Project.status)',
+};
 
 const ACCEPTED_CONFIRM_TEXTS = [
   APPLY_PRICING_PROPOSAL_REMINDERS_CONFIRM_TEXT,
@@ -70,7 +79,7 @@ function PlannedActionsTable({ rows = [] }) {
         </TableHeader>
         <TableBody>
           {rows.map((row) => (
-            <TableRow key={`${row.project_id}-${row.reminder_kind}-${row.action}`}>
+            <TableRow key={`${row.project_id}-${row.reminder_kind}-${row.action}-${row.condition_key || ''}`}>
               <TableCell>
                 <Link
                   to={createPageUrl(`ProjectDetails?id=${row.project_id}`)}
@@ -118,12 +127,15 @@ export default function ProjectReminderRulesPreview() {
     isLocalDevEnvironment() || currentUser?.role === 'admin'
   ), [currentUser?.role]);
 
-  const handleRunPreview = async () => {
+  const handleRunPreview = async (mode = PLANNER_MODE_RUNTIME) => {
     setRunning(true);
     setError('');
     setApplyResult(null);
     try {
-      const result = await runProjectReminderRulesPreview();
+      const previewOptions = mode === PLANNER_MODE_RUNTIME
+        ? {}
+        : { mode: PLANNER_MODE_LEGACY_BOOTSTRAP };
+      const result = await runProjectReminderRulesPreview(previewOptions);
       setReport(result);
     } catch (previewError) {
       console.error('[ProjectReminderRulesPreview] preview failed', previewError);
@@ -141,6 +153,11 @@ export default function ProjectReminderRulesPreview() {
   const confirmTextIsValid = ACCEPTED_CONFIRM_TEXTS.includes(confirmText);
 
   const handleApply = async () => {
+    if (report?.mode !== PLANNER_MODE_LEGACY_BOOTSTRAP) {
+      setError('Apply מותר רק לאחר Preview במצב Legacy Bootstrap');
+      return;
+    }
+
     if (!confirmTextIsValid) {
       setError(`יש להקליד בדיוק את אחד מהטקסטים: ${ACCEPTED_CONFIRM_TEXTS.join(' / ')}`);
       return;
@@ -153,6 +170,7 @@ export default function ProjectReminderRulesPreview() {
         apply: true,
         dryRun: false,
         confirmText,
+        mode: PLANNER_MODE_LEGACY_BOOTSTRAP,
       });
       setApplyResult(result);
       setConfirmText('');
@@ -188,8 +206,20 @@ export default function ProjectReminderRulesPreview() {
           <Button type="button" variant="outline" asChild>
             <Link to={createPageUrl('ProjectPipeline')}>חזרה ל-Pipeline</Link>
           </Button>
-          <Button type="button" onClick={handleRunPreview} disabled={running}>
-            {running ? 'מריץ Preview...' : 'הרץ Preview'}
+          <Button
+            type="button"
+            onClick={() => handleRunPreview(PLANNER_MODE_LEGACY_BOOTSTRAP)}
+            disabled={running}
+          >
+            {running ? 'מריץ Preview...' : 'Preview — Legacy Bootstrap'}
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => handleRunPreview()}
+            disabled={running}
+          >
+            Preview — Runtime (ברירת מחדל)
           </Button>
           <Button type="button" variant="outline" onClick={handleCopyReport} disabled={!report}>
             Copy JSON
@@ -225,17 +255,27 @@ export default function ProjectReminderRulesPreview() {
 
       {report ? (
         <>
+          <Card>
+            <CardContent className="pt-6 text-sm">
+              מצב הרצה:
+              {' '}
+              <span className="font-semibold">{MODE_LABELS[report.mode] || report.mode}</span>
+            </CardContent>
+          </Card>
+
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
             <SummaryCard label="פרויקטים נבדקו" value={report.projectsChecked} />
             <SummaryCard label="הצעות מחיר שייסגרו" value={report.counts.staleProposalRemindersToResolve} />
             <SummaryCard label="הצעות מחיר שיווצרו (pricing)" value={report.counts.pricingProposalRemindersToCreate ?? 0} />
-            <SummaryCard label="follow-up שיווצרו" value={report.counts.waitingFollowupRemindersToCreate} />
+            <SummaryCard label="follow-up שיווצרו (legacy)" value={report.counts.waitingFollowupRemindersToCreate} />
+            <SummaryCard label="follow-up לפי Proposal (runtime)" value={report.counts.proposalFollowupRemindersToCreate ?? 0} />
             <SummaryCard label="שלבי עבודה שיווצרו" value={report.counts.workStageRemindersToCreate} />
             <SummaryCard label="תזכורות שייסגרו" value={report.counts.projectWorkStageRemindersToResolve} />
             <SummaryCard label="כפילויות שנמנעו" value={report.counts.duplicatesPrevented} />
             <SummaryCard label="סתירת status/workflow" value={report.counts.statusWorkflowMismatches ?? 0} />
             <SummaryCard label="מוחרגים מ-Workflow" value={report.counts.workflowExcludedProjectsCount ?? 0} />
             <SummaryCard label="תזכורות מוחרגות לסגירה" value={report.counts.excludedWorkflowRemindersToResolve ?? 0} />
+            <SummaryCard label="פערי ראיות runtime" value={report.counts.runtimeEvidenceGaps ?? 0} />
           </div>
 
           {PREVIEW_SECTIONS.map((section) => (
@@ -253,9 +293,10 @@ export default function ProjectReminderRulesPreview() {
             </Card>
           ))}
 
+          {report.mode === PLANNER_MODE_LEGACY_BOOTSTRAP ? (
           <Card className="border-amber-300">
             <CardHeader>
-              <CardTitle>Apply — ביצוע בפועל (admin בלבד)</CardTitle>
+              <CardTitle>Apply — ביצוע בפועל (admin בלבד, Legacy Bootstrap)</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               <p className="text-sm text-muted-foreground">
@@ -287,6 +328,14 @@ export default function ProjectReminderRulesPreview() {
               </div>
             </CardContent>
           </Card>
+          ) : (
+            <Card className="border-sky-300">
+              <CardContent className="pt-6 text-sm text-muted-foreground">
+                Runtime mode — Apply חסום. Apply מותר רק לאחר Preview במצב
+                Legacy Bootstrap (מיגרציה). הרץ Preview — Legacy Bootstrap כדי לבצע Apply.
+              </CardContent>
+            </Card>
+          )}
         </>
       ) : null}
     </div>

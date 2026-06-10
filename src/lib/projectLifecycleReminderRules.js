@@ -1,23 +1,36 @@
 /**
- * P2G — Project lifecycle reminder rules (workflow-first).
+ * P2G/P2I — Project lifecycle reminder rules.
  *
- * Truth order: workflow records are stronger than Project.status —
- *   1. WorkStages exist            → project is in execution workflow
- *   2. submitted SignedProposal    → project is at least at signed-proposal stage
- *   3. Project.status              → fallback only when no workflow records
- * When Project.status contradicts the workflow, valid reminders are NOT
- * resolved — the conflict is reported as a statusWorkflowMismatch instead.
+ * Two planner modes (architectural rule — Project.status is legacy/display):
  *
- * Rules:
+ * legacy_bootstrap (explicit only): one-time migration of old projects that
+ * have no workflow records yet. ONLY this mode may use Project.status as a trigger.
+ * runtime (default): ongoing workflow driven by records only.
  * - status !== pricing                          → resolve stale project_needs_proposal
+ * - status === pricing + no records             → create project_needs_proposal (P2H)
  * - waiting + no workflow records               → ensure project_waiting_followup
  * - submitted SignedProposal OR signed/execution, without WorkStages
  *                                               → ensure work-stage reminder (with dedup
  *                                                 against signed_proposal_needs_work_stages)
  * - WorkStages exist / no workflow source       → resolve project_needs_work_stages
  *
- * Default mode is dry-run (plan only, zero mutations). Mutations require
- * apply: true, dryRun: false AND the explicit confirmText.
+ * runtime (records only — Proposal/SignedProposal/WorkStage; Project.status is
+ * NEVER a creation trigger):
+ * - proposal needed:   no non-cancelled Proposal + no submitted SignedProposal
+ *                      + no WorkStages + project is workflow-managed
+ * - follow-up:         submitted Proposal without SignedProposal/WorkStages
+ *                      → proposal_waiting_followup:<proposal.id>
+ * - work stages:       submitted SignedProposal without WorkStages
+ *                      → signed_proposal_needs_work_stages:<sp.id>
+ * - status-only evidence (e.g. signed/execution with no records)
+ *                      → runtimeEvidenceGaps, report only.
+ *
+ * Truth order in both modes: workflow records outrank Project.status. When
+ * status contradicts the records, valid reminders are NOT resolved — the
+ * conflict is reported as a statusWorkflowMismatch instead.
+ *
+ * Default is dry-run (plan only, zero mutations). Mutations require
+ * apply: true, dryRun: false AND the plan-matching explicit confirmText.
  */
 import { base44 } from '@/api/base44Client';
 import { createPageUrl } from '@/utils';
@@ -35,6 +48,7 @@ import {
   hasSignedProposalForProject,
 } from '@/lib/proposalReminderRules';
 import {
+  getSignedProposalNeedsWorkStagesConditionKey,
   hasNonCancelledWorkStageForProject,
   SIGNED_PROPOSAL_NEEDS_WORK_STAGES_PREFIX,
 } from '@/lib/workStageReminderRules';
@@ -46,6 +60,20 @@ import {
 
 export const PROJECT_WAITING_FOLLOWUP_PREFIX = 'project_waiting_followup:';
 export const PROJECT_NEEDS_WORK_STAGES_PREFIX = 'project_needs_work_stages:';
+export const PROPOSAL_WAITING_FOLLOWUP_PREFIX = 'proposal_waiting_followup:';
+
+/**
+ * Planner modes — architectural separation:
+ * - legacy_bootstrap: one-time migration of old projects that have no workflow
+ *   records yet. ONLY this mode may use Project.status (pricing/waiting/
+ *   signed/execution) as a trigger.
+ * - runtime: ongoing workflow. Reminders are driven by records only
+ *   (Proposal / SignedProposal / WorkStage). Project.status is display/legacy
+ *   and is never a creation trigger; status-only evidence becomes a
+ *   report-only runtimeEvidenceGaps row.
+ */
+export const PLANNER_MODE_LEGACY_BOOTSTRAP = 'legacy_bootstrap';
+export const PLANNER_MODE_RUNTIME = 'runtime';
 
 export const APPLY_PROJECT_REMINDER_RULES_CONFIRM_TEXT = 'APPLY_PROJECT_REMINDER_RULES_ALIGNMENT';
 export const APPLY_PRICING_PROPOSAL_REMINDERS_CONFIRM_TEXT = 'APPLY_PRICING_PROPOSAL_REMINDERS';
@@ -61,6 +89,26 @@ export function getProjectWaitingFollowupConditionKey(projectId) {
 
 export function getProjectNeedsWorkStagesConditionKey(projectId) {
   return `${PROJECT_NEEDS_WORK_STAGES_PREFIX}${projectId}`;
+}
+
+export function getProposalWaitingFollowupConditionKey(proposalId) {
+  return `${PROPOSAL_WAITING_FOLLOWUP_PREFIX}${proposalId}`;
+}
+
+/**
+ * Heuristic: is this project born/managed inside the new workflow?
+ * Every current create path writes form_status (projectCreatePayload.js), and
+ * inquiry/signed-proposal born projects carry source ids. Legacy imported
+ * projects have none of these. An explicit `workflow_managed: true` field on
+ * Project would be safer — flagged in the P2I report.
+ */
+export function isProjectWorkflowManaged(project) {
+  if (project?.workflow_managed === true) return true;
+  return Boolean(
+    String(project?.form_status || '').trim()
+    || String(project?.source_inquiry_id || '').trim()
+    || String(project?.source_signed_proposal_id || '').trim(),
+  );
 }
 
 const WORK_STAGE_FALLBACK_STATUSES = new Set(['signed', 'execution']);
@@ -165,6 +213,51 @@ function buildPricingProposalReminderInput(project, clientsById) {
       projectName,
     }),
     action_label: 'פתח הצעת מחיר',
+    frequency: 'daily',
+  };
+}
+
+/** Runtime: follow-up keyed to the submitted Proposal record, not Project.status. */
+function buildProposalFollowupReminderInput(proposal, project, clientsById) {
+  const projectName = project.name || project.project_name || proposal.project_name || 'ללא שם';
+
+  return {
+    title: `לעקוב אחרי הצעה ממתינה לתגובה עבור ${projectName}`,
+    description: 'הצעת המחיר הוגשה וממתינה לתגובת הלקוח. כדאי לבצע מעקב.',
+    client_name: proposal.client_name || resolveClientName(project, clientsById),
+    client_id: proposal.client_id || project.client_id || '',
+    project_name: projectName,
+    project_id: project.id,
+    source_type: 'proposal',
+    source_id: proposal.id,
+    condition_key: getProposalWaitingFollowupConditionKey(proposal.id),
+    action_url: buildProposalFormPageUrl({ proposalId: proposal.id }),
+    action_label: 'פתח הצעת מחיר',
+    frequency: 'daily',
+  };
+}
+
+/** Runtime: work-stage reminder keyed to the submitted SignedProposal (R7 key). */
+function buildSignedProposalWorkStagesReminderInput(signedProposal, project, clientsById) {
+  const projectName = String(signedProposal.project_name || project.name || '').trim();
+
+  return {
+    title: projectName
+      ? `להגדיר שלבי עבודה לפרויקט ${projectName}`
+      : 'להגדיר שלבי עבודה לפרויקט',
+    description: 'קיימת הצעה/הזמנה חתומה, אך עדיין לא הוגדרו שלבי עבודה לפרויקט.',
+    client_name: signedProposal.client_name || resolveClientName(project, clientsById),
+    client_id: signedProposal.client_id || project.client_id || '',
+    project_name: projectName,
+    project_id: signedProposal.project_id || project.id,
+    source_type: 'signed_proposal',
+    source_id: signedProposal.id,
+    condition_key: getSignedProposalNeedsWorkStagesConditionKey(signedProposal.id),
+    action_url: buildWorkStagesPageUrl({
+      projectId: signedProposal.project_id || project.id,
+      signedProposalId: signedProposal.id,
+    }),
+    action_label: 'הגדר שלבי עבודה',
     frequency: 'daily',
   };
 }
@@ -278,11 +371,29 @@ export async function loadProjectLifecycleRuleContext({ entities = base44.entiti
   };
 }
 
-const hasNonCancelledProposalForProject = (projectId, proposals = []) => (
-  proposals.some(
-    (proposal) => String(proposal?.project_id || '').trim() === String(projectId).trim()
-      && proposal?.form_status !== 'cancelled',
+const getProposalsForProject = (projectId, proposals = []) => (
+  proposals.filter(
+    (proposal) => String(proposal?.project_id || '').trim() === String(projectId).trim(),
   )
+);
+
+// Same semantics as proposalReminderRules: only 'cancelled' stops covering
+// the proposal need (P2H legacy bootstrap relies on this).
+const isNonCancelledProposal = (proposal) => proposal?.form_status !== 'cancelled';
+
+// Runtime follow-up targets: submitted proposals. Proposal has no separate
+// rejected field — form_status (draft/submitted/cancelled) is the whole truth,
+// and 'submitted' already excludes cancelled.
+const isSubmittedActiveProposal = (proposal) => proposal?.form_status === 'submitted';
+
+const hasNonCancelledProposalForProject = (projectId, proposals = []) => (
+  getProposalsForProject(projectId, proposals).some(isNonCancelledProposal)
+);
+
+const findSubmittedSignedProposalForProject = (project, signedProposals = []) => (
+  signedProposals.find(
+    (signedProposal) => hasSignedProposalForProject(project, [signedProposal]),
+  ) || null
 );
 
 function baseActionRow(project, bucket, reminderKind, conditionKey) {
@@ -297,10 +408,184 @@ function baseActionRow(project, bucket, reminderKind, conditionKey) {
 }
 
 /**
+ * Runtime rules — records only. Project.status is NEVER a trigger here:
+ * status-only evidence is reported in runtimeEvidenceGaps instead of acted on.
+ */
+function planRuntimeWorkflowActions(project, context, shared) {
+  const actions = [];
+  const { cache, signedProposals, proposals = [], clientsById } = context;
+  const {
+    workflow, proposalKey, followupKey, workStagesKey, openSignedProposalReminders,
+  } = shared;
+  const { hasWorkStages, hasSubmittedSignedProposal } = workflow;
+  const status = normalizeStatus(project);
+
+  const projectProposals = getProposalsForProject(project.id, proposals);
+  const nonCancelledProposals = projectProposals.filter(isNonCancelledProposal);
+  const submittedProposals = projectProposals.filter(isSubmittedActiveProposal);
+
+  // Runtime Rule 1 — proposal needed (records only, no Project.status):
+  // covered by any non-cancelled Proposal / submitted SignedProposal / WorkStages.
+  const proposalNeedIsCovered = (
+    nonCancelledProposals.length > 0 || hasSubmittedSignedProposal || hasWorkStages
+  );
+
+  if (proposalNeedIsCovered) {
+    const existingProposalReminder = summarizeExistingReminder(cache, proposalKey);
+    if (existingProposalReminder) {
+      actions.push({
+        ...baseActionRow(project, 'staleProposalRemindersToResolve', 'project_needs_proposal', proposalKey),
+        action: 'resolve',
+        reason: 'Workflow records (proposal / signed proposal / work stages) already cover the proposal need',
+        ...existingProposalReminder,
+      });
+    }
+  } else if (!hasOpenReminderForConditionKey(cache, proposalKey)) {
+    if (isProjectWorkflowManaged(project)) {
+      actions.push({
+        ...baseActionRow(project, 'pricingProposalRemindersToCreate', 'project_needs_proposal', proposalKey),
+        action: 'create',
+        reason: 'Workflow-managed project has no proposal records and no active proposal reminder (records-based)',
+        reminder_input: buildPricingProposalReminderInput(project, clientsById),
+      });
+    } else {
+      actions.push({
+        ...baseActionRow(project, 'runtimeEvidenceGaps', 'project_needs_proposal', proposalKey),
+        action: 'report_only',
+        reason: 'Project has no workflow records and is not identifiably workflow-managed (no form_status / source_inquiry_id / source_signed_proposal_id)',
+        recommended_action: 'Align via legacy bootstrap, or add an explicit workflow_managed field to Project',
+      });
+    }
+  }
+
+  // Runtime Rule 2 — proposal follow-up, based on submitted Proposal records
+  // (NOT Project.status === waiting). Key: proposal_waiting_followup:<proposal.id>.
+  const followupIsNeeded = (
+    submittedProposals.length > 0 && !hasSubmittedSignedProposal && !hasWorkStages
+  );
+
+  if (followupIsNeeded) {
+    for (const proposal of submittedProposals) {
+      const proposalFollowupKey = getProposalWaitingFollowupConditionKey(proposal.id);
+      if (hasOpenReminderForConditionKey(cache, proposalFollowupKey)) continue;
+
+      if (hasOpenReminderForConditionKey(cache, followupKey)) {
+        actions.push({
+          ...baseActionRow(project, 'duplicatesPrevented', 'proposal_waiting_followup', proposalFollowupKey),
+          action: 'skip_duplicate',
+          reason: 'Legacy project_waiting_followup reminder already covers this follow-up',
+        });
+        continue;
+      }
+
+      actions.push({
+        ...baseActionRow(project, 'proposalFollowupRemindersToCreate', 'proposal_waiting_followup', proposalFollowupKey),
+        action: 'create',
+        reason: 'Submitted proposal awaits client response (no signed proposal, no work stages)',
+        reminder_input: buildProposalFollowupReminderInput(proposal, project, clientsById),
+      });
+    }
+  } else {
+    for (const proposal of projectProposals) {
+      const proposalFollowupKey = getProposalWaitingFollowupConditionKey(proposal.id);
+      const existing = summarizeExistingReminder(cache, proposalFollowupKey);
+      if (existing) {
+        actions.push({
+          ...baseActionRow(project, 'projectWorkStageRemindersToResolve', 'proposal_waiting_followup', proposalFollowupKey),
+          action: 'resolve',
+          reason: hasSubmittedSignedProposal || hasWorkStages
+            ? 'Workflow records (signed proposal / work stages) supersede the proposal follow-up'
+            : 'Proposal is no longer submitted; follow-up has no record source',
+          ...existing,
+        });
+      }
+    }
+
+    if (hasSubmittedSignedProposal || hasWorkStages) {
+      const existingLegacyFollowup = summarizeExistingReminder(cache, followupKey);
+      if (existingLegacyFollowup) {
+        actions.push({
+          ...baseActionRow(project, 'projectWorkStageRemindersToResolve', 'project_waiting_followup', followupKey),
+          action: 'resolve',
+          reason: 'Workflow records (signed proposal / work stages) supersede the legacy follow-up',
+          ...existingLegacyFollowup,
+        });
+      }
+    }
+  }
+
+  // Runtime Rule 3 — work stages needed: ONLY submitted SignedProposal counts
+  // (no signed/execution status fallback). Key stays SP-based (R7).
+  if (hasSubmittedSignedProposal && !hasWorkStages) {
+    if (openSignedProposalReminders.length > 0) {
+      actions.push({
+        ...baseActionRow(project, 'duplicatesPrevented', 'signed_proposal_needs_work_stages', ''),
+        action: 'skip_duplicate',
+        reason: 'Active signed_proposal_needs_work_stages reminder already covers this project',
+        existing_signed_proposal_reminders: openSignedProposalReminders,
+      });
+    } else if (hasOpenReminderForConditionKey(cache, workStagesKey)) {
+      actions.push({
+        ...baseActionRow(project, 'duplicatesPrevented', 'project_needs_work_stages', workStagesKey),
+        action: 'skip_duplicate',
+        reason: 'Active project_needs_work_stages reminder already covers this project',
+      });
+    } else {
+      const signedProposal = findSubmittedSignedProposalForProject(project, signedProposals);
+      if (signedProposal?.id) {
+        const signedProposalKey = getSignedProposalNeedsWorkStagesConditionKey(signedProposal.id);
+        actions.push({
+          ...baseActionRow(project, 'workStageRemindersToCreate', 'signed_proposal_needs_work_stages', signedProposalKey),
+          action: 'create',
+          reason: 'Submitted signed proposal exists but no work stages and no work-stage reminder (records-based)',
+          reminder_input: buildSignedProposalWorkStagesReminderInput(signedProposal, project, clientsById),
+        });
+      }
+    }
+  } else {
+    const existingWorkStagesReminder = summarizeExistingReminder(cache, workStagesKey);
+    if (existingWorkStagesReminder) {
+      actions.push({
+        ...baseActionRow(project, 'projectWorkStageRemindersToResolve', 'project_needs_work_stages', workStagesKey),
+        action: 'resolve',
+        reason: hasWorkStages
+          ? 'Work stages already exist for this project'
+          : 'No submitted signed proposal; work-stage reminder has no record source',
+        ...existingWorkStagesReminder,
+      });
+    }
+  }
+
+  // Evidence gap (report only): legacy status claims the project was accepted
+  // but there are no records to act on. Runtime never guesses from status.
+  if (!hasSubmittedSignedProposal && !hasWorkStages && WORK_STAGE_FALLBACK_STATUSES.has(status)) {
+    actions.push({
+      ...baseActionRow(project, 'runtimeEvidenceGaps', 'work_stages_needed', ''),
+      action: 'report_only',
+      reason: `Project.status is "${status}" but there is no submitted SignedProposal and no WorkStages record`,
+      recommended_action: 'Align via legacy bootstrap or attach workflow records; runtime does not act on Project.status',
+    });
+  }
+
+  return actions;
+}
+
+/**
  * Pure planner: returns the list of planned actions for one project.
  * Workflow records win over Project.status. Performs zero mutations.
+ *
+ * mode:
+ * - PLANNER_MODE_RUNTIME (default): records-only (Proposal/SignedProposal/WorkStage);
+ *   Project.status is never a creation trigger.
+ * - PLANNER_MODE_LEGACY_BOOTSTRAP (explicit only): may use Project.status as a
+ *   trigger — one-time migration of legacy projects without workflow records.
+ *   Apply mutations are permitted ONLY in this mode.
  */
-export function planProjectLifecycleReminderActions(project, context) {
+export function planProjectLifecycleReminderActions(
+  project,
+  context,
+  mode = PLANNER_MODE_RUNTIME,
+) {
   const actions = [];
   if (!project?.id) return actions;
 
@@ -330,13 +615,23 @@ export function planProjectLifecycleReminderActions(project, context) {
       recommended_action: 'No workflow reminder needed unless Aharon changes the decision.',
     });
 
-    if (status !== 'pricing') {
+    const proposalReminderIsStale = mode === PLANNER_MODE_RUNTIME
+      ? (
+        hasNonCancelledProposalForProject(project.id, proposals)
+        || hasSubmittedSignedProposal
+        || hasWorkStages
+      )
+      : status !== 'pricing';
+
+    if (proposalReminderIsStale) {
       const existingProposal = summarizeExistingReminder(cache, proposalKey);
       if (existingProposal) {
         actions.push({
           ...baseActionRow(project, 'staleProposalRemindersToResolve', 'project_needs_proposal', proposalKey),
           action: 'resolve',
-          reason: `Project status is "${status}" (not pricing); proposal reminder is stale`,
+          reason: mode === PLANNER_MODE_RUNTIME
+            ? 'Workflow records (proposal / signed proposal / work stages) already cover the proposal need'
+            : `Project status is "${status}" (not pricing); proposal reminder is stale`,
           ...existingProposal,
         });
       }
@@ -387,6 +682,19 @@ export function planProjectLifecycleReminderActions(project, context) {
       recommended_action: mismatch.recommended_action,
     });
   }
+
+  if (mode === PLANNER_MODE_RUNTIME) {
+    actions.push(...planRuntimeWorkflowActions(project, context, {
+      workflow,
+      proposalKey,
+      followupKey,
+      workStagesKey,
+      openSignedProposalReminders,
+    }));
+    return actions;
+  }
+
+  // ---- Legacy bootstrap rules below: Project.status is allowed ONLY here ----
 
   // Rule A: stale project_needs_proposal — valid only for pricing.
   if (status !== 'pricing') {
@@ -528,12 +836,14 @@ function emptyGroups() {
     staleProposalRemindersToResolve: [],
     pricingProposalRemindersToCreate: [],
     waitingFollowupRemindersToCreate: [],
+    proposalFollowupRemindersToCreate: [],
     workStageRemindersToCreate: [],
     projectWorkStageRemindersToResolve: [],
     duplicatesPrevented: [],
     statusWorkflowMismatches: [],
     excludedWorkflowRemindersToResolve: [],
     workflowExcludedProjects: [],
+    runtimeEvidenceGaps: [],
   };
 }
 
@@ -550,12 +860,14 @@ function buildCounts(groups) {
     staleProposalRemindersToResolve: groups.staleProposalRemindersToResolve.length,
     pricingProposalRemindersToCreate: groups.pricingProposalRemindersToCreate.length,
     waitingFollowupRemindersToCreate: groups.waitingFollowupRemindersToCreate.length,
+    proposalFollowupRemindersToCreate: groups.proposalFollowupRemindersToCreate.length,
     workStageRemindersToCreate: groups.workStageRemindersToCreate.length,
     projectWorkStageRemindersToResolve: groups.projectWorkStageRemindersToResolve.length,
     duplicatesPrevented: groups.duplicatesPrevented.length,
     statusWorkflowMismatches: groups.statusWorkflowMismatches.length,
     excludedWorkflowRemindersToResolve: groups.excludedWorkflowRemindersToResolve.length,
     workflowExcludedProjects: groups.workflowExcludedProjects.length,
+    runtimeEvidenceGaps: groups.runtimeEvidenceGaps.length,
   };
 }
 
@@ -573,6 +885,7 @@ function assertConfirmTextMatchesPlan(groups, confirmText) {
   const hasLifecycleAlignmentActions = (
     groups.staleProposalRemindersToResolve.length > 0
     || groups.waitingFollowupRemindersToCreate.length > 0
+    || groups.proposalFollowupRemindersToCreate.length > 0
     || groups.workStageRemindersToCreate.length > 0
     || groups.projectWorkStageRemindersToResolve.length > 0
     || groups.excludedWorkflowRemindersToResolve.length > 0
@@ -591,20 +904,32 @@ function assertConfirmTextMatchesPlan(groups, confirmText) {
   }
 }
 
+function assertApplyModeIsLegacyBootstrap(mode) {
+  if (mode !== PLANNER_MODE_LEGACY_BOOTSTRAP) {
+    throw new Error('Apply is allowed only in legacy_bootstrap mode');
+  }
+}
+
 /**
  * Runs lifecycle rules for a single project.
- * Default: dryRun=true, apply=false — returns the plan without mutating.
+ * Default: dryRun=true, apply=false, mode=runtime — returns the plan without mutating.
  */
 export async function runProjectLifecycleReminderRulesForProject(project, options = {}) {
-  const { dryRun = true, apply = false, confirmText = '' } = options;
+  const {
+    dryRun = true, apply = false, confirmText = '', mode = PLANNER_MODE_RUNTIME,
+  } = options;
   const applying = shouldApply({ dryRun, apply });
+
+  if (applying) {
+    assertApplyModeIsLegacyBootstrap(mode);
+  }
 
   if (applying && !ACCEPTED_APPLY_CONFIRM_TEXTS.has(confirmText)) {
     throw new Error('Missing explicit confirmText');
   }
 
   const context = options.context || await loadProjectLifecycleRuleContext(options);
-  const actions = planProjectLifecycleReminderActions(project, context);
+  const actions = planProjectLifecycleReminderActions(project, context, mode);
 
   if (!applying) {
     return { dryRun: true, applied: false, actions };
@@ -624,13 +949,20 @@ export async function runProjectLifecycleReminderRulesForProject(project, option
  * Runs lifecycle rules for all projects.
  *
  * Mutation requires ALL of:
- *   apply: true, dryRun: false, and a confirmText that matches the plan:
+ *   apply: true, dryRun: false, mode: legacy_bootstrap (explicit),
+ *   and a confirmText that matches the plan:
  *   - plan contains pricing creations → APPLY_PRICING_PROPOSAL_REMINDERS only
  *   - lifecycle alignment actions only → APPLY_PROJECT_REMINDER_RULES_ALIGNMENT
  */
 export async function runProjectLifecycleReminderRulesForAll(options = {}) {
-  const { dryRun = true, apply = false, confirmText = '' } = options;
+  const {
+    dryRun = true, apply = false, confirmText = '', mode = PLANNER_MODE_RUNTIME,
+  } = options;
   const applying = shouldApply({ dryRun, apply });
+
+  if (applying) {
+    assertApplyModeIsLegacyBootstrap(mode);
+  }
 
   if (applying && !ACCEPTED_APPLY_CONFIRM_TEXTS.has(confirmText)) {
     throw new Error('Missing explicit confirmText');
@@ -640,7 +972,7 @@ export async function runProjectLifecycleReminderRulesForAll(options = {}) {
   const allActions = [];
 
   for (const project of context.projects) {
-    allActions.push(...planProjectLifecycleReminderActions(project, context));
+    allActions.push(...planProjectLifecycleReminderActions(project, context, mode));
   }
 
   const groups = groupActions(allActions);
@@ -652,6 +984,7 @@ export async function runProjectLifecycleReminderRulesForAll(options = {}) {
 
   const summary = {
     status: 'completed',
+    mode,
     readOnly: !applying,
     dryRun: !applying,
     applied: applying,

@@ -214,6 +214,7 @@ const REMINDER_CONDITION_PREFIX_BY_ENTITY_TYPE = {
     'proposal_not_sent:',
     'proposal_not_seen:',
     'proposal_needs_signed_proposal:',
+    'proposal_waiting_followup:',
   ],
   signed_proposal: ['signed_proposal_needs_work_stages:'],
   work_stage: [
@@ -260,6 +261,7 @@ const CONDITION_KEY_PREFIX_COUNTS = [
   { label: 'proposal_not_sent', prefix: 'proposal_not_sent:' },
   { label: 'proposal_not_seen', prefix: 'proposal_not_seen:' },
   { label: 'proposal_needs_signed_proposal', prefix: 'proposal_needs_signed_proposal:' },
+  { label: 'proposal_waiting_followup', prefix: 'proposal_waiting_followup:' },
   { label: 'signed_proposal_needs_work_stages', prefix: 'signed_proposal_needs_work_stages:' },
   { label: 'work_stage_needs_check', prefix: 'work_stage_needs_check:' },
   { label: 'work_stage_target_date', prefix: 'work_stage_target_date:' },
