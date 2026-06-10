@@ -23,10 +23,11 @@ import {
 
 const PREVIEW_SECTIONS = [
   { key: 'staleProposalRemindersToResolve', title: 'תזכורות הצעת מחיר שייסגרו' },
-  { key: 'waitingFollowupRemindersToCreate', title: 'תזכורות follow-up שיווצרו עבור waiting' },
-  { key: 'workStageRemindersToCreate', title: 'תזכורות שלבי עבודה שיווצרו עבור signed/execution' },
-  { key: 'projectWorkStageRemindersToResolve', title: 'תזכורות שייסגרו כי כבר יש WorkStages או שהסטטוס השתנה' },
-  { key: 'duplicatesPrevented', title: 'כפילויות שנמנעו' },
+  { key: 'waitingFollowupRemindersToCreate', title: 'תזכורות follow-up שיווצרו עבור waiting (ללא workflow)' },
+  { key: 'workStageRemindersToCreate', title: 'תזכורות שלבי עבודה שיווצרו (SignedProposal או signed/execution)' },
+  { key: 'projectWorkStageRemindersToResolve', title: 'תזכורות שייסגרו (יש WorkStages / אין מקור workflow)' },
+  { key: 'duplicatesPrevented', title: 'כפילויות שנמנעו / כבר מכוסה' },
+  { key: 'statusWorkflowMismatches', title: 'Project.status לא תואם ל-Workflow (דיווח בלבד — לא מבוצעת פעולה)' },
 ];
 
 function SummaryCard({ label, value }) {
@@ -60,7 +61,7 @@ function PlannedActionsTable({ rows = [] }) {
         </TableHeader>
         <TableBody>
           {rows.map((row) => (
-            <TableRow key={`${row.condition_key}-${row.action}`}>
+            <TableRow key={`${row.project_id}-${row.reminder_kind}-${row.action}`}>
               <TableCell>
                 <Link
                   to={createPageUrl(`ProjectDetails?id=${row.project_id}`)}
@@ -70,11 +71,14 @@ function PlannedActionsTable({ rows = [] }) {
                 </Link>
               </TableCell>
               <TableCell className="text-xs">{row.project_status}</TableCell>
-              <TableCell className="text-xs font-mono" dir="ltr">{row.condition_key}</TableCell>
+              <TableCell className="text-xs font-mono" dir="ltr">
+                {row.condition_key || row.workflow_state || '-'}
+              </TableCell>
               <TableCell className="text-xs">
                 {row.action === 'create' ? 'יצירה' : null}
                 {row.action === 'resolve' ? 'סגירה' : null}
                 {row.action === 'skip_duplicate' ? 'דילוג (כפילות)' : null}
+                {row.action === 'report_only' ? 'דיווח בלבד' : null}
               </TableCell>
               <TableCell className="text-xs">
                 {row.reminder_input?.title || row.reminder_title || '-'}
@@ -217,6 +221,7 @@ export default function ProjectReminderRulesPreview() {
             <SummaryCard label="שלבי עבודה שיווצרו" value={report.counts.workStageRemindersToCreate} />
             <SummaryCard label="תזכורות שייסגרו" value={report.counts.projectWorkStageRemindersToResolve} />
             <SummaryCard label="כפילויות שנמנעו" value={report.counts.duplicatesPrevented} />
+            <SummaryCard label="סתירת status/workflow" value={report.counts.statusWorkflowMismatches ?? 0} />
           </div>
 
           {PREVIEW_SECTIONS.map((section) => (

@@ -15,6 +15,13 @@ import {
 import { CLIENT_NEEDS_PROJECT_CONDITION_PREFIX } from '@/lib/clientReminderRules';
 import { INQUIRY_NEEDS_NEXT_STEP_CONDITION_PREFIX } from '@/lib/inquiryReminderRules';
 import { SIGNED_PROPOSAL_NEEDS_WORK_STAGES_PREFIX, hasNonCancelledWorkStageForProject } from '@/lib/workStageReminderRules';
+import { isValidSignedProposal } from '@/lib/signedProposalValidation';
+import {
+  buildStatusWorkflowMismatch,
+  evaluateProjectWorkflowState,
+  PROJECT_NEEDS_WORK_STAGES_PREFIX,
+  PROJECT_WAITING_FOLLOWUP_PREFIX,
+} from '@/lib/projectLifecycleReminderRules';
 
 const INTAKE_CONDITION_PREFIXES = [
   CLIENT_NEEDS_PROJECT_CONDITION_PREFIX,
@@ -225,12 +232,18 @@ function resolveSignedProposalProjectId(reminder, signedProposalId, context) {
   return '';
 }
 
+/**
+ * Workflow-first: a submitted SignedProposal without WorkStages keeps this
+ * reminder VALID regardless of Project.status. Status contradictions are
+ * reported via statusWorkflowMismatches, never as stale.
+ */
 function classifySignedProposalNeedsWorkStages(reminder, context) {
   const row = buildBaseReminderRow(reminder);
   const signedProposalId = parseIdFromConditionKey(
     row.condition_key,
     SIGNED_PROPOSAL_NEEDS_WORK_STAGES_PREFIX,
   );
+  const signedProposal = context.signedProposalsById.get(signedProposalId) || null;
   const projectId = resolveSignedProposalProjectId(reminder, signedProposalId, context);
   const projectContext = resolveProjectContext(projectId, context.projectsById);
 
@@ -255,33 +268,38 @@ function classifySignedProposalNeedsWorkStages(reminder, context) {
     });
   }
 
-  if (status === 'completed' || status === 'collection_completed') {
-    return finalizeReminderRow(row, 'stale_project_reminder', {
-      severity: 'warning_high',
-      reason: 'Project completed; work-stage setup reminder may be stale',
-      recommended_action: 'Ask Aharon whether to close this reminder',
+  if (context.supportsSignedProposal) {
+    if (!signedProposal) {
+      return finalizeReminderRow(row, 'stale_project_reminder', {
+        severity: 'warning_high',
+        reason: 'SignedProposal record not found; reminder workflow source is gone',
+        recommended_action: 'Ask Aharon whether to close this reminder',
+        projectContext,
+      });
+    }
+
+    if (signedProposal.form_status === 'cancelled' || !isValidSignedProposal(signedProposal)) {
+      return finalizeReminderRow(row, 'stale_project_reminder', {
+        severity: 'warning_high',
+        reason: 'SignedProposal is cancelled or no longer valid',
+        recommended_action: 'Ask Aharon whether to close this reminder',
+        projectContext,
+      });
+    }
+
+    // Submitted SignedProposal + no WorkStages → valid workflow reminder.
+    const statusLagsBehind = status === 'pricing' || status === 'waiting';
+    return finalizeReminderRow(row, 'valid_project_reminder', {
+      severity: 'info',
+      reason: statusLagsBehind
+        ? `Submitted signed proposal without work stages — valid workflow reminder (Project.status "${status}" lags behind; see statusWorkflowMismatches)`
+        : 'Submitted signed proposal without work stages — valid workflow reminder',
+      recommended_action: 'Keep: reminder until work stages are configured',
       projectContext,
     });
   }
 
-  if (status === 'rejected' || status === 'cancelled') {
-    return finalizeReminderRow(row, 'stale_project_reminder', {
-      severity: 'warning_high',
-      reason: 'Project rejected/cancelled; work-stage reminder should probably be closed',
-      recommended_action: 'Ask Aharon whether to close this reminder',
-      projectContext,
-    });
-  }
-
-  if (status === 'pricing' || status === 'waiting') {
-    return finalizeReminderRow(row, 'stale_project_reminder', {
-      severity: 'warning',
-      reason: 'Project not accepted yet; signed-proposal reminder conflicts with project status',
-      recommended_action: 'Likely stale: project not yet accepted',
-      projectContext,
-    });
-  }
-
+  // SignedProposal entity unavailable — fall back to status, without claiming stale.
   if (status === 'signed' || status === 'execution') {
     return finalizeReminderRow(row, 'valid_project_reminder', {
       severity: 'info',
@@ -292,9 +310,99 @@ function classifySignedProposalNeedsWorkStages(reminder, context) {
   }
 
   return finalizeReminderRow(row, 'valid_project_reminder', {
-    severity: 'info',
-    reason: `Project status "${status}" with no work stages — review if reminder is still needed`,
+    severity: 'warning',
+    reason: `Cannot verify SignedProposal in this environment; project status is "${status}"`,
     recommended_action: 'Review with Aharon whether reminder is still needed',
+    projectContext,
+  });
+}
+
+function classifyProjectWaitingFollowup(reminder, context) {
+  const row = buildBaseReminderRow(reminder);
+  const projectId = parseIdFromConditionKey(row.condition_key, PROJECT_WAITING_FOLLOWUP_PREFIX);
+  const projectContext = resolveProjectContext(projectId, context.projectsById);
+
+  if (!projectId || !projectContext.project) {
+    return finalizeReminderRow(row, 'missing_target_or_orphan', {
+      severity: 'error',
+      reason: 'Reminder points to missing project',
+      recommended_action: 'Ask Aharon whether to close this reminder',
+      projectContext,
+    });
+  }
+
+  const workflow = context.workflowByProjectId.get(projectId)
+    || evaluateProjectWorkflowState(projectContext.project, context);
+  const status = projectContext.project_status;
+
+  if (status !== 'waiting') {
+    return finalizeReminderRow(row, 'stale_project_reminder', {
+      severity: 'warning',
+      reason: `Project status is "${status}" (not waiting); follow-up reminder is no longer relevant`,
+      recommended_action: 'Ask Aharon whether to close this reminder',
+      projectContext,
+    });
+  }
+
+  if (workflow.workflowState !== 'none') {
+    return finalizeReminderRow(row, 'stale_project_reminder', {
+      severity: 'warning',
+      reason: 'Workflow records exist (signed proposal / work stages); follow-up reminder is superseded',
+      recommended_action: 'Likely stale: workflow already progressed past waiting',
+      projectContext,
+    });
+  }
+
+  return finalizeReminderRow(row, 'valid_project_reminder', {
+    severity: 'info',
+    reason: 'Waiting project with no workflow records; follow-up reminder is appropriate',
+    recommended_action: 'Keep: active follow-up for waiting proposal',
+    projectContext,
+  });
+}
+
+function classifyProjectNeedsWorkStages(reminder, context) {
+  const row = buildBaseReminderRow(reminder);
+  const projectId = parseIdFromConditionKey(row.condition_key, PROJECT_NEEDS_WORK_STAGES_PREFIX);
+  const projectContext = resolveProjectContext(projectId, context.projectsById);
+
+  if (!projectId || !projectContext.project) {
+    return finalizeReminderRow(row, 'missing_target_or_orphan', {
+      severity: 'error',
+      reason: 'Reminder points to missing project',
+      recommended_action: 'Ask Aharon whether to close this reminder',
+      projectContext,
+    });
+  }
+
+  const workflow = context.workflowByProjectId.get(projectId)
+    || evaluateProjectWorkflowState(projectContext.project, context);
+  const status = projectContext.project_status;
+
+  if (workflow.hasWorkStages) {
+    return finalizeReminderRow(row, 'stale_project_reminder', {
+      severity: 'warning_high',
+      reason: 'Work stages already exist',
+      recommended_action: 'Likely stale: work stages already configured',
+      projectContext,
+    });
+  }
+
+  if (workflow.hasSubmittedSignedProposal || status === 'signed' || status === 'execution') {
+    return finalizeReminderRow(row, 'valid_project_reminder', {
+      severity: 'info',
+      reason: workflow.hasSubmittedSignedProposal
+        ? 'Submitted signed proposal without work stages — valid workflow reminder'
+        : 'Accepted/in-work project without work stages; reminder is appropriate',
+      recommended_action: 'Keep: reminder until work stages are configured',
+      projectContext,
+    });
+  }
+
+  return finalizeReminderRow(row, 'stale_project_reminder', {
+    severity: 'warning',
+    reason: `No submitted signed proposal and status "${status}" is not signed/execution; work-stage reminder has no workflow source`,
+    recommended_action: 'Ask Aharon whether to close this reminder',
     projectContext,
   });
 }
@@ -389,6 +497,14 @@ function classifyReminder(reminder, context) {
 
   if (conditionKey.startsWith(SIGNED_PROPOSAL_NEEDS_WORK_STAGES_PREFIX)) {
     return classifySignedProposalNeedsWorkStages(reminder, context);
+  }
+
+  if (conditionKey.startsWith(PROJECT_WAITING_FOLLOWUP_PREFIX)) {
+    return classifyProjectWaitingFollowup(reminder, context);
+  }
+
+  if (conditionKey.startsWith(PROJECT_NEEDS_WORK_STAGES_PREFIX)) {
+    return classifyProjectNeedsWorkStages(reminder, context);
   }
 
   if (matchesAnyPrefix(conditionKey, COLLECTION_CONDITION_PREFIXES)) {
@@ -487,6 +603,14 @@ function buildRecommendations(groups, counts) {
     });
   }
 
+  if (groups.statusWorkflowMismatches.length > 0) {
+    recommendations.push({
+      type: 'status_workflow_mismatches',
+      count: groups.statusWorkflowMismatches.length,
+      message: 'Project.status lags behind workflow records on some projects — review whether to update the status manually. Do NOT close workflow reminders because of this.',
+    });
+  }
+
   return recommendations;
 }
 
@@ -534,12 +658,22 @@ export async function runProjectReminderIntegrityAudit({ entities = base44.entit
 
   const reminderMapResult = buildProjectReminderMap(activeReminders, projects, collectionDues);
 
+  const workflowByProjectId = new Map(
+    projects.map((project) => [
+      String(project.id),
+      evaluateProjectWorkflowState(project, { workStages, signedProposals }),
+    ]),
+  );
+
   const context = {
     projectsById,
     signedProposalsById,
     collectionDuesById,
     workStages,
+    signedProposals,
     quotes,
+    workflowByProjectId,
+    supportsSignedProposal: signedProposalResult.available,
   };
 
   const classifiedRows = activeReminders.map((reminder) => classifyReminder(reminder, context));
@@ -552,7 +686,19 @@ export async function runProjectReminderIntegrityAudit({ entities = base44.entit
     unknownConditionKeys: classifiedRows.filter((row) => row.classification === 'unknown_condition_key'),
     validProjectReminders: classifiedRows.filter((row) => row.classification === 'valid_project_reminder'),
     completedNeedsPolicy: [],
+    statusWorkflowMismatches: [],
   };
+
+  for (const project of projects) {
+    const workflow = workflowByProjectId.get(String(project.id));
+    const mismatch = buildStatusWorkflowMismatch(project, workflow);
+    if (mismatch) {
+      groups.statusWorkflowMismatches.push({
+        ...mismatch,
+        project_status_label: getProjectWorkStatusLabel(project),
+      });
+    }
+  }
 
   for (const project of projects) {
     const projectId = String(project.id);
@@ -602,6 +748,7 @@ export async function runProjectReminderIntegrityAudit({ entities = base44.entit
       (row) => row.project_status === 'execution',
     ).length,
     completedNeedsPolicyCount: groups.completedNeedsPolicy.length,
+    statusWorkflowMismatchesCount: groups.statusWorkflowMismatches.length,
   };
 
   const recommendations = buildRecommendations(groups, counts);

@@ -1,13 +1,20 @@
 /**
- * P2G — Project lifecycle reminder rules.
+ * P2G — Project lifecycle reminder rules (workflow-first).
  *
- * Aligns project reminders with the current Project.status:
- * - status !== pricing  → resolve stale project_needs_proposal
- * - waiting             → ensure project_waiting_followup
- * - signed/execution    → ensure project_needs_work_stages when no WorkStages,
- *                         resolve it when WorkStages exist; resolve waiting followup
- * - completed/rejected/cancelled/collection_completed
- *                       → resolve project_waiting_followup + project_needs_work_stages
+ * Truth order: workflow records are stronger than Project.status —
+ *   1. WorkStages exist            → project is in execution workflow
+ *   2. submitted SignedProposal    → project is at least at signed-proposal stage
+ *   3. Project.status              → fallback only when no workflow records
+ * When Project.status contradicts the workflow, valid reminders are NOT
+ * resolved — the conflict is reported as a statusWorkflowMismatch instead.
+ *
+ * Rules:
+ * - status !== pricing                          → resolve stale project_needs_proposal
+ * - waiting + no workflow records               → ensure project_waiting_followup
+ * - submitted SignedProposal OR signed/execution, without WorkStages
+ *                                               → ensure work-stage reminder (with dedup
+ *                                                 against signed_proposal_needs_work_stages)
+ * - WorkStages exist / no workflow source       → resolve project_needs_work_stages
  *
  * Default mode is dry-run (plan only, zero mutations). Mutations require
  * apply: true, dryRun: false AND the explicit confirmText.
@@ -23,7 +30,10 @@ import {
   REMINDER_STATUS,
   resolveReminderByConditionKey,
 } from '@/lib/reminderEngine';
-import { getProjectNeedsProposalConditionKey } from '@/lib/proposalReminderRules';
+import {
+  getProjectNeedsProposalConditionKey,
+  hasSignedProposalForProject,
+} from '@/lib/proposalReminderRules';
 import {
   hasNonCancelledWorkStageForProject,
   SIGNED_PROPOSAL_NEEDS_WORK_STAGES_PREFIX,
@@ -43,16 +53,49 @@ export function getProjectNeedsWorkStagesConditionKey(projectId) {
   return `${PROJECT_NEEDS_WORK_STAGES_PREFIX}${projectId}`;
 }
 
-const CLOSED_PROJECT_STATUSES = new Set([
-  'completed',
-  'rejected',
-  'cancelled',
-  'collection_completed',
-]);
+const WORK_STAGE_FALLBACK_STATUSES = new Set(['signed', 'execution']);
 
-const WORK_STAGE_REMINDER_STATUSES = new Set(['signed', 'execution']);
+const STATUS_BEHIND_WORKFLOW = new Set(['pricing', 'waiting']);
 
 const normalizeStatus = (project) => String(project?.status || '').trim();
+
+/**
+ * Workflow-first truth evaluation for one project.
+ * WorkStages > submitted SignedProposal > Project.status (fallback).
+ */
+export function evaluateProjectWorkflowState(project, { workStages = [], signedProposals = [] } = {}) {
+  const hasWorkStages = hasNonCancelledWorkStageForProject(project?.id, workStages);
+  const hasSubmittedSignedProposal = hasSignedProposalForProject(project, signedProposals);
+
+  let workflowState = 'none';
+  if (hasWorkStages) workflowState = 'work_stages_exist';
+  else if (hasSubmittedSignedProposal) workflowState = 'signed_proposal_exists';
+
+  return { hasWorkStages, hasSubmittedSignedProposal, workflowState };
+}
+
+/**
+ * Returns a mismatch row when Project.status lags behind the workflow records,
+ * or null when there is no contradiction. Report-only — never used to resolve.
+ */
+export function buildStatusWorkflowMismatch(project, workflow) {
+  const status = normalizeStatus(project);
+  if (!STATUS_BEHIND_WORKFLOW.has(status)) return null;
+  if (workflow.workflowState === 'none') return null;
+
+  const reason = workflow.workflowState === 'work_stages_exist'
+    ? `Project.status is ${status} but WorkStages exist`
+    : `Project.status is ${status} but submitted SignedProposal exists`;
+
+  return {
+    project_id: project.id,
+    project_name: project.name || project.project_name || '',
+    project_status: status,
+    workflow_state: workflow.workflowState,
+    reason,
+    recommended_action: 'Review whether Project.status should be updated manually',
+  };
+}
 
 const isOpenStatus = (status) => (
   status === REMINDER_STATUS.ACTIVE || status === REMINDER_STATUS.SNOOZED
@@ -185,6 +228,7 @@ export async function loadProjectLifecycleRuleContext({ entities = base44.entiti
     cache,
     projects,
     workStages,
+    signedProposals,
     signedProposalsById,
     clientsById,
     openSignedProposalWorkStageRemindersByProjectId:
@@ -205,18 +249,36 @@ function baseActionRow(project, bucket, reminderKind, conditionKey) {
 
 /**
  * Pure planner: returns the list of planned actions for one project.
- * Performs zero mutations.
+ * Workflow records win over Project.status. Performs zero mutations.
  */
 export function planProjectLifecycleReminderActions(project, context) {
   const actions = [];
   if (!project?.id) return actions;
 
   const status = normalizeStatus(project);
-  const { cache, workStages, clientsById } = context;
+  const { cache, workStages, signedProposals, clientsById } = context;
+
+  const workflow = evaluateProjectWorkflowState(project, { workStages, signedProposals });
+  const { hasWorkStages, hasSubmittedSignedProposal } = workflow;
 
   const proposalKey = getProjectNeedsProposalConditionKey(project.id);
   const followupKey = getProjectWaitingFollowupConditionKey(project.id);
   const workStagesKey = getProjectNeedsWorkStagesConditionKey(project.id);
+
+  const openSignedProposalReminders = context
+    .openSignedProposalWorkStageRemindersByProjectId.get(String(project.id)) || [];
+
+  // Status-vs-workflow contradiction → report only, never resolve because of it.
+  const mismatch = buildStatusWorkflowMismatch(project, workflow);
+  if (mismatch) {
+    actions.push({
+      ...baseActionRow(project, 'statusWorkflowMismatches', 'status_workflow_mismatch', ''),
+      action: 'report_only',
+      workflow_state: mismatch.workflow_state,
+      reason: mismatch.reason,
+      recommended_action: mismatch.recommended_action,
+    });
+  }
 
   // Rule A: stale project_needs_proposal — valid only for pricing.
   if (status !== 'pricing') {
@@ -231,76 +293,89 @@ export function planProjectLifecycleReminderActions(project, context) {
     }
   }
 
-  // Rule B: waiting → ensure follow-up reminder.
-  if (status === 'waiting') {
+  // Rule B: waiting follow-up is valid ONLY when there are no workflow records.
+  const waitingFollowupIsValid = (
+    status === 'waiting'
+    && !hasSubmittedSignedProposal
+    && !hasWorkStages
+    && openSignedProposalReminders.length === 0
+  );
+
+  if (waitingFollowupIsValid) {
     if (!hasOpenReminderForConditionKey(cache, followupKey)) {
       actions.push({
         ...baseActionRow(project, 'waitingFollowupRemindersToCreate', 'project_waiting_followup', followupKey),
         action: 'create',
-        reason: 'Waiting project has no follow-up reminder',
+        reason: 'Waiting project with no workflow records has no follow-up reminder',
         reminder_input: buildWaitingFollowupReminderInput(project, clientsById),
       });
     }
   } else {
-    // Any non-waiting status → the waiting follow-up reminder is no longer relevant.
     const existingFollowup = summarizeExistingReminder(cache, followupKey);
     if (existingFollowup) {
+      const followupReason = status === 'waiting'
+        ? 'Workflow records exist (signed proposal / work stages); follow-up reminder is superseded'
+        : `Project status is "${status}" (not waiting); follow-up reminder is no longer relevant`;
       actions.push({
         ...baseActionRow(project, 'projectWorkStageRemindersToResolve', 'project_waiting_followup', followupKey),
         action: 'resolve',
-        reason: `Project status is "${status}" (not waiting); follow-up reminder is no longer relevant`,
+        reason: followupReason,
         ...existingFollowup,
       });
     }
   }
 
-  // Rule C: signed/execution → work-stage setup reminder management.
-  if (WORK_STAGE_REMINDER_STATUSES.has(status)) {
-    const hasWorkStages = hasNonCancelledWorkStageForProject(project.id, workStages);
+  // Rule C: work-stage reminder is needed when the workflow says so —
+  // submitted SignedProposal (any status) OR signed/execution as status fallback.
+  const needsWorkStageReminder = !hasWorkStages
+    && (hasSubmittedSignedProposal || WORK_STAGE_FALLBACK_STATUSES.has(status));
 
-    if (hasWorkStages) {
-      const existing = summarizeExistingReminder(cache, workStagesKey);
-      if (existing) {
+  if (needsWorkStageReminder) {
+    if (openSignedProposalReminders.length > 0) {
+      actions.push({
+        ...baseActionRow(project, 'duplicatesPrevented', 'project_needs_work_stages', workStagesKey),
+        action: 'skip_duplicate',
+        reason: 'Active signed_proposal_needs_work_stages reminder already covers this project',
+        existing_signed_proposal_reminders: openSignedProposalReminders,
+      });
+    } else if (hasOpenReminderForConditionKey(cache, workStagesKey)) {
+      actions.push({
+        ...baseActionRow(project, 'duplicatesPrevented', 'project_needs_work_stages', workStagesKey),
+        action: 'skip_duplicate',
+        reason: 'Active project_needs_work_stages reminder already exists',
+      });
+    } else {
+      const createReason = hasSubmittedSignedProposal
+        ? 'Submitted signed proposal exists but no work stages and no work-stage reminder'
+        : `${status} project has no work stages and no work-stage reminder`;
+      actions.push({
+        ...baseActionRow(project, 'workStageRemindersToCreate', 'project_needs_work_stages', workStagesKey),
+        action: 'create',
+        reason: createReason,
+        reminder_input: buildWorkStagesReminderInput(project, clientsById),
+      });
+    }
+  } else {
+    // Resolve project_needs_work_stages ONLY when: work stages exist, or there
+    // is no workflow source AND no status fallback. Never because the status
+    // merely lags behind the workflow.
+    const existing = summarizeExistingReminder(cache, workStagesKey);
+    if (existing) {
+      if (hasWorkStages) {
         actions.push({
           ...baseActionRow(project, 'projectWorkStageRemindersToResolve', 'project_needs_work_stages', workStagesKey),
           action: 'resolve',
           reason: 'Work stages already exist for this project',
           ...existing,
         });
-      }
-    } else {
-      const signedProposalReminders = context
-        .openSignedProposalWorkStageRemindersByProjectId.get(String(project.id)) || [];
-
-      if (signedProposalReminders.length > 0) {
+      } else {
         actions.push({
-          ...baseActionRow(project, 'duplicatesPrevented', 'project_needs_work_stages', workStagesKey),
-          action: 'skip_duplicate',
-          reason: 'Active signed_proposal_needs_work_stages reminder already covers this project',
-          existing_signed_proposal_reminders: signedProposalReminders,
-        });
-      } else if (!hasOpenReminderForConditionKey(cache, workStagesKey)) {
-        actions.push({
-          ...baseActionRow(project, 'workStageRemindersToCreate', 'project_needs_work_stages', workStagesKey),
-          action: 'create',
-          reason: `${status} project has no work stages and no work-stage reminder`,
-          reminder_input: buildWorkStagesReminderInput(project, clientsById),
+          ...baseActionRow(project, 'projectWorkStageRemindersToResolve', 'project_needs_work_stages', workStagesKey),
+          action: 'resolve',
+          reason: `No submitted signed proposal and status "${status}" is not signed/execution; work-stage reminder has no workflow source`,
+          ...existing,
         });
       }
-    }
-  }
-
-  // Rule D: closed statuses → resolve project_needs_work_stages if still open.
-  // (waiting follow-up is already handled by the non-waiting branch above.)
-  if (CLOSED_PROJECT_STATUSES.has(status)) {
-    const existing = summarizeExistingReminder(cache, workStagesKey);
-    if (existing) {
-      actions.push({
-        ...baseActionRow(project, 'projectWorkStageRemindersToResolve', 'project_needs_work_stages', workStagesKey),
-        action: 'resolve',
-        reason: `Project status is "${status}"; work-stage reminder should be closed`,
-        ...existing,
-      });
     }
   }
 
@@ -330,6 +405,7 @@ function emptyGroups() {
     workStageRemindersToCreate: [],
     projectWorkStageRemindersToResolve: [],
     duplicatesPrevented: [],
+    statusWorkflowMismatches: [],
   };
 }
 
@@ -348,6 +424,7 @@ function buildCounts(groups) {
     workStageRemindersToCreate: groups.workStageRemindersToCreate.length,
     projectWorkStageRemindersToResolve: groups.projectWorkStageRemindersToResolve.length,
     duplicatesPrevented: groups.duplicatesPrevented.length,
+    statusWorkflowMismatches: groups.statusWorkflowMismatches.length,
   };
 }
 
@@ -421,7 +498,7 @@ export async function runProjectLifecycleReminderRulesForAll(options = {}) {
   if (!applying) return summary;
 
   for (const action of allActions) {
-    if (action.action === 'skip_duplicate') {
+    if (action.action === 'skip_duplicate' || action.action === 'report_only') {
       summary.executed.skipped += 1;
       continue;
     }

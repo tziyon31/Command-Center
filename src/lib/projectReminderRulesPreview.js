@@ -22,6 +22,7 @@ export async function runProjectReminderRulesPreview() {
       workStageRemindersToCreate: plan.counts.workStageRemindersToCreate,
       projectWorkStageRemindersToResolve: plan.counts.projectWorkStageRemindersToResolve,
       duplicatesPrevented: plan.counts.duplicatesPrevented,
+      statusWorkflowMismatches: plan.counts.statusWorkflowMismatches,
     },
     groups: {
       staleProposalRemindersToResolve: plan.groups.staleProposalRemindersToResolve,
@@ -29,6 +30,7 @@ export async function runProjectReminderRulesPreview() {
       workStageRemindersToCreate: plan.groups.workStageRemindersToCreate,
       projectWorkStageRemindersToResolve: plan.groups.projectWorkStageRemindersToResolve,
       duplicatesPrevented: plan.groups.duplicatesPrevented,
+      statusWorkflowMismatches: plan.groups.statusWorkflowMismatches,
     },
   };
 }

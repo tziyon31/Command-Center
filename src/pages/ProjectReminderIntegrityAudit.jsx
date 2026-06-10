@@ -18,6 +18,7 @@ import {
 
 const AUDIT_SECTIONS = [
   { key: 'staleProjectReminders', title: 'תזכורות חשודות / לא מתאימות לסטטוס' },
+  { key: 'statusWorkflowMismatches', title: 'Project.status לא תואם ל-Workflow (דיווח בלבד)' },
   { key: 'missingReminderCandidates', title: 'פרויקטים פעילים בלי תזכורת' },
   { key: 'missingTargetOrOrphan', title: 'תזכורות עם יעד חסר / לא פתיר' },
   { key: 'intakeReminders', title: 'תזכורות Intake / לידים שאינן שייכות לפרויקט' },
@@ -59,7 +60,7 @@ function ReminderTable({ rows = [] }) {
             <TableRow>
               <TableHead>פרויקט</TableHead>
               <TableHead>סטטוס</TableHead>
-              <TableHead>תזכורות</TableHead>
+              <TableHead>תזכורות / Workflow</TableHead>
               <TableHead>חומרה</TableHead>
               <TableHead>סיבה</TableHead>
               <TableHead>פעולה מומלצת</TableHead>
@@ -77,8 +78,8 @@ function ReminderTable({ rows = [] }) {
                   </Link>
                 </TableCell>
                 <TableCell>{row.project_status_label || row.project_status}</TableCell>
-                <TableCell>{row.active_reminders_count ?? '-'}</TableCell>
-                <TableCell>{SEVERITY_LABELS[row.severity] || row.severity}</TableCell>
+                <TableCell>{row.workflow_state || row.active_reminders_count || '-'}</TableCell>
+                <TableCell>{SEVERITY_LABELS[row.severity] || row.severity || '-'}</TableCell>
                 <TableCell className="text-xs">{row.reason}</TableCell>
                 <TableCell className="text-xs">{row.recommended_action}</TableCell>
               </TableRow>
@@ -213,6 +214,7 @@ export default function ProjectReminderIntegrityAudit() {
             <SummaryCard label="Intake" value={report.counts.intakeRemindersCount} />
             <SummaryCard label="חסרי תזכורת" value={report.counts.missingReminderCandidatesCount} />
             <SummaryCard label="דורשים policy" value={report.counts.completedNeedsPolicyCount} />
+            <SummaryCard label="סתירת status/workflow" value={report.counts.statusWorkflowMismatchesCount ?? 0} />
           </div>
 
           {report.entityAvailability ? (
