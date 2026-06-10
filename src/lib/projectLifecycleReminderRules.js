@@ -39,6 +39,10 @@ import {
   SIGNED_PROPOSAL_NEEDS_WORK_STAGES_PREFIX,
 } from '@/lib/workStageReminderRules';
 import { buildWorkStagesPageUrl } from '@/lib/workflowNavigation';
+import {
+  getProjectWorkflowExclusion,
+  isProjectExcludedFromWorkflowReminders,
+} from '@/lib/projectWorkflowExclusions';
 
 export const PROJECT_WAITING_FOLLOWUP_PREFIX = 'project_waiting_followup:';
 export const PROJECT_NEEDS_WORK_STAGES_PREFIX = 'project_needs_work_stages:';
@@ -268,6 +272,65 @@ export function planProjectLifecycleReminderActions(project, context) {
   const openSignedProposalReminders = context
     .openSignedProposalWorkStageRemindersByProjectId.get(String(project.id)) || [];
 
+  // Reminder-policy exclusion (Aharon approval): no workflow reminders for
+  // this project. Stale project_needs_proposal cleanup still applies, and any
+  // open workflow reminder is planned for resolve in a dedicated bucket.
+  if (isProjectExcludedFromWorkflowReminders(project)) {
+    const exclusion = getProjectWorkflowExclusion(project);
+
+    actions.push({
+      ...baseActionRow(project, 'workflowExcludedProjects', 'workflow_exclusion', ''),
+      action: 'report_only',
+      reason: exclusion.reason,
+      recommended_action: 'No workflow reminder needed unless Aharon changes the decision.',
+    });
+
+    if (status !== 'pricing') {
+      const existingProposal = summarizeExistingReminder(cache, proposalKey);
+      if (existingProposal) {
+        actions.push({
+          ...baseActionRow(project, 'staleProposalRemindersToResolve', 'project_needs_proposal', proposalKey),
+          action: 'resolve',
+          reason: `Project status is "${status}" (not pricing); proposal reminder is stale`,
+          ...existingProposal,
+        });
+      }
+    }
+
+    for (const [kind, key] of [
+      ['project_waiting_followup', followupKey],
+      ['project_needs_work_stages', workStagesKey],
+    ]) {
+      const existing = summarizeExistingReminder(cache, key);
+      if (existing) {
+        actions.push({
+          ...baseActionRow(project, 'excludedWorkflowRemindersToResolve', kind, key),
+          action: 'resolve',
+          reason: 'Project is excluded from workflow reminders by Aharon approval',
+          ...existing,
+        });
+      }
+    }
+
+    for (const signedProposalReminder of openSignedProposalReminders) {
+      actions.push({
+        ...baseActionRow(
+          project,
+          'excludedWorkflowRemindersToResolve',
+          'signed_proposal_needs_work_stages',
+          signedProposalReminder.condition_key,
+        ),
+        action: 'resolve',
+        reason: 'Project is excluded from workflow reminders by Aharon approval',
+        reminder_id: signedProposalReminder.reminder_id,
+        reminder_title: signedProposalReminder.reminder_title,
+        reminder_status: signedProposalReminder.reminder_status,
+      });
+    }
+
+    return actions;
+  }
+
   // Status-vs-workflow contradiction → report only, never resolve because of it.
   const mismatch = buildStatusWorkflowMismatch(project, workflow);
   if (mismatch) {
@@ -406,6 +469,8 @@ function emptyGroups() {
     projectWorkStageRemindersToResolve: [],
     duplicatesPrevented: [],
     statusWorkflowMismatches: [],
+    excludedWorkflowRemindersToResolve: [],
+    workflowExcludedProjects: [],
   };
 }
 
@@ -425,6 +490,8 @@ function buildCounts(groups) {
     projectWorkStageRemindersToResolve: groups.projectWorkStageRemindersToResolve.length,
     duplicatesPrevented: groups.duplicatesPrevented.length,
     statusWorkflowMismatches: groups.statusWorkflowMismatches.length,
+    excludedWorkflowRemindersToResolve: groups.excludedWorkflowRemindersToResolve.length,
+    workflowExcludedProjects: groups.workflowExcludedProjects.length,
   };
 }
 

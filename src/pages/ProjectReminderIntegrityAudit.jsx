@@ -25,6 +25,7 @@ const AUDIT_SECTIONS = [
   { key: 'unknownConditionKeys', title: 'condition_key לא מוכר' },
   { key: 'validProjectReminders', title: 'תזכורות תקינות' },
   { key: 'completedNeedsPolicy', title: 'פרויקטים שבוצעו ודורשים החלטת מדיניות להמשך מעקב בנייה / מתקן' },
+  { key: 'workflowExcludedProjects', title: 'פרויקטים מוחרגים מ-Workflow (אישור אהרון)' },
 ];
 
 const SEVERITY_LABELS = {
@@ -215,6 +216,7 @@ export default function ProjectReminderIntegrityAudit() {
             <SummaryCard label="חסרי תזכורת" value={report.counts.missingReminderCandidatesCount} />
             <SummaryCard label="דורשים policy" value={report.counts.completedNeedsPolicyCount} />
             <SummaryCard label="סתירת status/workflow" value={report.counts.statusWorkflowMismatchesCount ?? 0} />
+            <SummaryCard label="מוחרגים מ-Workflow" value={report.counts.workflowExcludedProjectsCount ?? 0} />
           </div>
 
           {report.entityAvailability ? (

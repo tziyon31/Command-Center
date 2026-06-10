@@ -22,6 +22,10 @@ import {
   PROJECT_NEEDS_WORK_STAGES_PREFIX,
   PROJECT_WAITING_FOLLOWUP_PREFIX,
 } from '@/lib/projectLifecycleReminderRules';
+import {
+  getProjectWorkflowExclusion,
+  isProjectExcludedFromWorkflowReminders,
+} from '@/lib/projectWorkflowExclusions';
 
 const INTAKE_CONDITION_PREFIXES = [
   CLIENT_NEEDS_PROJECT_CONDITION_PREFIX,
@@ -232,6 +236,16 @@ function resolveSignedProposalProjectId(reminder, signedProposalId, context) {
   return '';
 }
 
+/** Active workflow reminder on a project excluded by Aharon → never valid. */
+function classifyExcludedWorkflowReminder(row, projectContext) {
+  return finalizeReminderRow(row, 'stale_project_reminder', {
+    severity: 'warning',
+    reason: 'Project is excluded from workflow reminders by Aharon approval',
+    recommended_action: 'Close via P2G apply; no workflow reminder needed unless Aharon changes the decision',
+    projectContext,
+  });
+}
+
 /**
  * Workflow-first: a submitted SignedProposal without WorkStages keeps this
  * reminder VALID regardless of Project.status. Status contradictions are
@@ -254,6 +268,10 @@ function classifySignedProposalNeedsWorkStages(reminder, context) {
       recommended_action: 'Ask Aharon whether to close this reminder',
       projectContext,
     });
+  }
+
+  if (isProjectExcludedFromWorkflowReminders(projectContext.project)) {
+    return classifyExcludedWorkflowReminder(row, projectContext);
   }
 
   const hasWorkStages = hasNonCancelledWorkStageForProject(projectId, context.workStages);
@@ -331,6 +349,10 @@ function classifyProjectWaitingFollowup(reminder, context) {
     });
   }
 
+  if (isProjectExcludedFromWorkflowReminders(projectContext.project)) {
+    return classifyExcludedWorkflowReminder(row, projectContext);
+  }
+
   const workflow = context.workflowByProjectId.get(projectId)
     || evaluateProjectWorkflowState(projectContext.project, context);
   const status = projectContext.project_status;
@@ -373,6 +395,10 @@ function classifyProjectNeedsWorkStages(reminder, context) {
       recommended_action: 'Ask Aharon whether to close this reminder',
       projectContext,
     });
+  }
+
+  if (isProjectExcludedFromWorkflowReminders(projectContext.project)) {
+    return classifyExcludedWorkflowReminder(row, projectContext);
   }
 
   const workflow = context.workflowByProjectId.get(projectId)
@@ -687,9 +713,11 @@ export async function runProjectReminderIntegrityAudit({ entities = base44.entit
     validProjectReminders: classifiedRows.filter((row) => row.classification === 'valid_project_reminder'),
     completedNeedsPolicy: [],
     statusWorkflowMismatches: [],
+    workflowExcludedProjects: [],
   };
 
   for (const project of projects) {
+    if (isProjectExcludedFromWorkflowReminders(project)) continue;
     const workflow = workflowByProjectId.get(String(project.id));
     const mismatch = buildStatusWorkflowMismatch(project, workflow);
     if (mismatch) {
@@ -707,8 +735,21 @@ export async function runProjectReminderIntegrityAudit({ entities = base44.entit
     const mappedReminders = reminderMapResult.byProjectId[projectId] || [];
     const activeMappedCount = mappedReminders.length;
 
+    const exclusion = getProjectWorkflowExclusion(project);
+    if (exclusion) {
+      groups.workflowExcludedProjects.push({
+        ...exclusion,
+        project_status: status,
+        project_status_label: getProjectWorkStatusLabel(project),
+        classification: 'workflow_excluded_project',
+        severity: 'info',
+        recommended_action: 'No workflow reminder needed unless Aharon changes the decision.',
+      });
+    }
+
     if (
-      MISSING_REMINDER_CANDIDATE_STATUSES.has(status)
+      !exclusion
+      && MISSING_REMINDER_CANDIDATE_STATUSES.has(status)
       && activeMappedCount === 0
       && !EXCLUDED_MISSING_STATUSES.has(status)
     ) {
@@ -749,6 +790,7 @@ export async function runProjectReminderIntegrityAudit({ entities = base44.entit
     ).length,
     completedNeedsPolicyCount: groups.completedNeedsPolicy.length,
     statusWorkflowMismatchesCount: groups.statusWorkflowMismatches.length,
+    workflowExcludedProjectsCount: groups.workflowExcludedProjects.length,
   };
 
   const recommendations = buildRecommendations(groups, counts);

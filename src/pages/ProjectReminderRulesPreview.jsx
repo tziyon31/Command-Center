@@ -28,6 +28,8 @@ const PREVIEW_SECTIONS = [
   { key: 'projectWorkStageRemindersToResolve', title: 'תזכורות שייסגרו (יש WorkStages / אין מקור workflow)' },
   { key: 'duplicatesPrevented', title: 'כפילויות שנמנעו / כבר מכוסה' },
   { key: 'statusWorkflowMismatches', title: 'Project.status לא תואם ל-Workflow (דיווח בלבד — לא מבוצעת פעולה)' },
+  { key: 'excludedWorkflowRemindersToResolve', title: 'תזכורות workflow פעילות על פרויקטים מוחרגים (ייסגרו ב-Apply)' },
+  { key: 'workflowExcludedProjects', title: 'פרויקטים מוחרגים מ-Workflow (אישור אהרון — דיווח בלבד)' },
 ];
 
 function SummaryCard({ label, value }) {
@@ -222,6 +224,8 @@ export default function ProjectReminderRulesPreview() {
             <SummaryCard label="תזכורות שייסגרו" value={report.counts.projectWorkStageRemindersToResolve} />
             <SummaryCard label="כפילויות שנמנעו" value={report.counts.duplicatesPrevented} />
             <SummaryCard label="סתירת status/workflow" value={report.counts.statusWorkflowMismatches ?? 0} />
+            <SummaryCard label="מוחרגים מ-Workflow" value={report.counts.workflowExcludedProjectsCount ?? 0} />
+            <SummaryCard label="תזכורות מוחרגות לסגירה" value={report.counts.excludedWorkflowRemindersToResolve ?? 0} />
           </div>
 
           {PREVIEW_SECTIONS.map((section) => (
