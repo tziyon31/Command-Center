@@ -16,7 +16,13 @@ import {
   computeCollectionDueStatus,
   syncProjectLegacyCollectionFields,
 } from '@/lib/collectionDueUtils';
+import CollectionAmountPercentFields from '@/components/collection/CollectionAmountPercentFields';
 import CompleteCollectionDueDialog from '@/components/collection/CompleteCollectionDueDialog';
+import {
+  calculatePercentFromProjectAmount,
+  getProjectFeeAmount,
+} from '@/lib/invoiceProcessUtils';
+import { getProjectOutstandingAmount } from '@/lib/projectCollectionDue';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -132,6 +138,7 @@ export default function CollectionDueForm() {
   const [isActionBusy, setIsActionBusy] = useState(false);
   const [prefillApplied, setPrefillApplied] = useState(false);
   const [completeDialogOpen, setCompleteDialogOpen] = useState(false);
+  const [projectPercent, setProjectPercent] = useState('');
 
   const isEditMode = Boolean(recordId);
 
@@ -142,6 +149,24 @@ export default function CollectionDueForm() {
       return results?.[0] || null;
     },
     enabled: Boolean(recordId),
+  });
+
+  const { data: project } = useQuery({
+    queryKey: ['project', formData.project_id],
+    queryFn: async () => {
+      const results = await base44.entities.Project.filter({ id: formData.project_id });
+      return results?.[0] || null;
+    },
+    enabled: Boolean(formData.project_id),
+  });
+
+  const { data: linkedInvoice } = useQuery({
+    queryKey: ['invoice-process', 'collection-due', formData.invoice_process_id],
+    queryFn: async () => {
+      const results = await base44.entities.InvoiceProcess.filter({ id: formData.invoice_process_id });
+      return results?.[0] || null;
+    },
+    enabled: Boolean(formData.invoice_process_id),
   });
 
   const { data: sourceInvoice, isLoading: isLoadingInvoice } = useQuery({
@@ -161,8 +186,40 @@ export default function CollectionDueForm() {
   useEffect(() => {
     if (recordId || prefillApplied || !sourceInvoice) return;
     setFormData(recordToForm(buildCollectionDueFormPrefillFromInvoice(sourceInvoice)));
+    if (sourceInvoice.project_percent != null && sourceInvoice.project_percent !== '') {
+      setProjectPercent(String(sourceInvoice.project_percent));
+    }
     setPrefillApplied(true);
   }, [recordId, prefillApplied, sourceInvoice]);
+
+  useEffect(() => {
+    if (!formData.project_id) {
+      setProjectPercent('');
+      return;
+    }
+
+    const invoicePercent = linkedInvoice?.project_percent ?? sourceInvoice?.project_percent;
+    if (invoicePercent != null && invoicePercent !== '') {
+      setProjectPercent(String(invoicePercent));
+      return;
+    }
+
+    const amountDue = record?.amount_due ?? formData.amount_due;
+    if (project && amountDue) {
+      const percent = calculatePercentFromProjectAmount(project, amountDue);
+      setProjectPercent(percent != null ? String(percent) : '');
+    }
+  }, [
+    formData.project_id,
+    project?.id,
+    project?.total_amount,
+    linkedInvoice?.id,
+    linkedInvoice?.project_percent,
+    sourceInvoice?.id,
+    sourceInvoice?.project_percent,
+    record?.id,
+    record?.amount_due,
+  ]);
 
   const parsedAmountDue = useMemo(
     () => Number(String(formData.amount_due || '').trim() || 0),
@@ -192,6 +249,12 @@ export default function CollectionDueForm() {
       formData.status,
     ],
   );
+
+  const projectFeeAmount = getProjectFeeAmount(project);
+  const outstandingAmount = getProjectOutstandingAmount(project);
+  const maxCollectionAmount = isEditMode
+    ? outstandingAmount + parsedAmountDue
+    : outstandingAmount;
 
   const isClosed = formData.status === 'paid' || formData.status === 'cancelled';
   const canComplete = ACTIVE_COLLECTION_STATUSES.has(formData.status);
@@ -224,6 +287,16 @@ export default function CollectionDueForm() {
 
     if (parsedAmountDue <= 0) {
       alert('יש להזין סכום לגבייה');
+      return;
+    }
+
+    if (project?.id && projectFeeAmount > 0 && parsedAmountDue > maxCollectionAmount) {
+      alert('הסכום לגבייה לא יכול להיות גבוה מיתרת הגבייה הכוללת');
+      return;
+    }
+
+    if (project?.id && parsedAmountDue > 0 && projectFeeAmount <= 0) {
+      alert('לא הוגדר שכ״ט לפרויקט. יש לעדכן שכ״ט לפני עדכון הגבייה.');
       return;
     }
 
@@ -384,17 +457,24 @@ export default function CollectionDueForm() {
                       }))}
                     />
                   </div>
-                  <div className="space-y-2">
-                    <Label>סכום לגבייה</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      value={formData.amount_due}
-                      disabled={isClosed || Boolean(formData.invoice_process_id && isEditMode)}
-                      onChange={(event) => setFormData((prev) => ({
+                  <div className="md:col-span-2">
+                    <CollectionAmountPercentFields
+                      project={project}
+                      amountValue={formData.amount_due}
+                      percentValue={projectPercent}
+                      disabled={isClosed}
+                      amountId="collection-due-amount"
+                      percentId="collection-due-percent"
+                      outstandingHint={
+                        project?.id && projectFeeAmount > 0
+                          ? `יתרת גבייה זמינה: ${new Intl.NumberFormat('he-IL').format(maxCollectionAmount)} ₪`
+                          : ''
+                      }
+                      onAmountChange={(value) => setFormData((prev) => ({
                         ...prev,
-                        amount_due: event.target.value,
+                        amount_due: value,
                       }))}
+                      onPercentChange={setProjectPercent}
                     />
                   </div>
                   <div className="space-y-2">

@@ -34,7 +34,9 @@ import {
 import {
   PROJECT_DELETE_BUTTON_CLASS,
 } from '@/lib/projectDelete';
+import CollectionAmountPercentFields from '@/components/collection/CollectionAmountPercentFields';
 import DeleteProjectDialog from '@/components/deletion/DeleteProjectDialog';
+import { calculatePercentFromProjectAmount } from '@/lib/invoiceProcessUtils';
 import { invalidateQueriesAfterProjectDeletion } from '@/lib/projectDeletionUtils';
 import ProjectClientSection from '@/components/workflow/ProjectClientSection';
 import ProjectConstructionStatusSection from '@/components/workflow/ProjectConstructionStatusSection';
@@ -209,6 +211,7 @@ export default function ProjectDetails() {
   const [isDeletingProject, setIsDeletingProject] = useState(false);
   const [isCollectionDialogOpen, setIsCollectionDialogOpen] = useState(false);
   const [collectionAmount, setCollectionAmount] = useState('');
+  const [collectionPercent, setCollectionPercent] = useState('');
   const [collectionNote, setCollectionNote] = useState('');
   const [collectionTargetDate, setCollectionTargetDate] = useState('');
   const [isSavingCollection, setIsSavingCollection] = useState(false);
@@ -659,9 +662,10 @@ export default function ProjectDetails() {
   };
 
   const openCollectionDialog = () => {
-    setCollectionAmount(
-      project.collection_due_amount ? String(project.collection_due_amount) : ''
-    );
+    const amount = project.collection_due_amount ? String(project.collection_due_amount) : '';
+    setCollectionAmount(amount);
+    const percent = calculatePercentFromProjectAmount(project, amount);
+    setCollectionPercent(percent != null ? String(percent) : '');
     setCollectionNote(project.collection_due_note || '');
     setCollectionTargetDate(getCollectionTargetDateForInput(project));
     setIsCollectionDialogOpen(true);
@@ -1005,16 +1009,17 @@ export default function ProjectDetails() {
             </DialogHeader>
 
             <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="collection-amount">סכום לגבייה עכשיו</Label>
-                <Input
-                  id="collection-amount"
-                  type="number"
-                  value={collectionAmount}
-                  onChange={(event) => setCollectionAmount(event.target.value)}
-                  placeholder="לדוגמה: 5000"
-                />
-              </div>
+              <CollectionAmountPercentFields
+                project={project}
+                amountValue={collectionAmount}
+                percentValue={collectionPercent}
+                amountLabel="סכום לגבייה עכשיו"
+                amountId="collection-amount"
+                percentId="collection-percent"
+                outstandingHint={`יתרת הגבייה הכוללת כרגע: ${formatCurrency(outstandingAmount)}`}
+                onAmountChange={setCollectionAmount}
+                onPercentChange={setCollectionPercent}
+              />
 
               <div className="space-y-2">
                 <Label htmlFor="collection-note">סיבה / אבן דרך</Label>
@@ -1042,9 +1047,6 @@ export default function ProjectDetails() {
                 )}
               </div>
 
-              <p className="text-xs text-muted-foreground">
-                יתרת הגבייה הכוללת כרגע: {formatCurrency(outstandingAmount)}
-              </p>
             </div>
 
             <DialogFooter>

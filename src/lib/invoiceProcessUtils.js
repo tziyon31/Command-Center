@@ -67,6 +67,17 @@ export function calculateAmountFromProjectPercent(project, percentValue) {
   return Math.round(calculated * 100) / 100;
 }
 
+export function calculatePercentFromProjectAmount(project, amountValue) {
+  const amount = Number(amountValue);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+
+  const projectAmount = getProjectFeeAmount(project);
+  if (projectAmount <= 0) return null;
+
+  const calculated = (amount / projectAmount) * 100;
+  return Math.round(calculated * 100) / 100;
+}
+
 export function buildWorkStagePersistenceFields(invoiceScope, selectedStageIds = [], eligibleStages = []) {
   const selectedStages = eligibleStages.filter((stage) => selectedStageIds.includes(stage.id));
 
