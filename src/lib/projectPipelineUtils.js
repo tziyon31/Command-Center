@@ -134,6 +134,54 @@ const COLLECTION_REMINDER_CONDITION_PREFIXES = [
   COLLECTION_NEEDS_TAX_INVOICE_PREFIX,
 ];
 
+const PROJECT_NEEDS_WORK_STAGES_PREFIX = 'project_needs_work_stages:';
+const SIGNED_PROPOSAL_NEEDS_WORK_STAGES_PREFIX = 'signed_proposal_needs_work_stages:';
+
+function getReminderActionUrl(reminder) {
+  return String(reminder?.action_url || reminder?.target_url || '').trim();
+}
+
+function reminderMatchesProject(reminder, projectId) {
+  const normalizedProjectId = String(projectId || '').trim();
+  if (!normalizedProjectId) return false;
+
+  const reminderProjectId = String(reminder?.project_id || '').trim();
+  const conditionKey = String(reminder?.condition_key || '').trim();
+  const actionUrl = getReminderActionUrl(reminder);
+
+  return (
+    reminderProjectId === normalizedProjectId
+    || actionUrl.includes(`project_id=${normalizedProjectId}`)
+    || actionUrl.includes(`id=${normalizedProjectId}`)
+    || conditionKey.endsWith(`:${normalizedProjectId}`)
+  );
+}
+
+export function isWorkStagesReminder(reminder) {
+  const conditionKey = String(reminder?.condition_key || '').trim();
+  const actionUrl = getReminderActionUrl(reminder);
+
+  return (
+    conditionKey.startsWith(PROJECT_NEEDS_WORK_STAGES_PREFIX)
+    || conditionKey.startsWith(SIGNED_PROPOSAL_NEEDS_WORK_STAGES_PREFIX)
+    || actionUrl.includes('/WorkStages')
+  );
+}
+
+export function findWorkStagesReminderForProject(projectOrProjectId, activeReminders = []) {
+  const projectId = typeof projectOrProjectId === 'object'
+    ? String(projectOrProjectId?.id || projectOrProjectId?.project_id || '').trim()
+    : String(projectOrProjectId || '').trim();
+
+  if (!projectId) return null;
+
+  return (activeReminders || []).find((reminder) => {
+    if (reminder?.status && reminder.status !== 'active') return false;
+    if (!reminderMatchesProject(reminder, projectId)) return false;
+    return isWorkStagesReminder(reminder);
+  }) || null;
+}
+
 export function isPipelineGroupExpandedByDefault(groupKey) {
   return PIPELINE_GROUP_EXPANDED_BY_DEFAULT.has(groupKey);
 }
@@ -459,13 +507,18 @@ export function toReminderSummary(reminder, projectId) {
   return {
     id: reminder.id,
     title: reminder.title || '',
+    description: reminder.description || '',
     status: reminder.status,
     condition_key: reminder.condition_key || '',
     frequency: reminder.frequency || '',
     next_remind_at: reminder.next_remind_at || '',
     project_id: mappedProjectId,
+    project_name: reminder.project_name || '',
+    client_name: reminder.client_name || '',
+    action_url: actionUrl,
     target_url: actionUrl || fallbackProjectUrl,
     target_label: reminder.action_label || '',
+    action_label: reminder.action_label || '',
     source_type: reminder.source_type || '',
     has_navigation_target: Boolean(actionUrl || mappedProjectId),
   };

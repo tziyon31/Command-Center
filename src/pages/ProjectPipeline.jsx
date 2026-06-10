@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
 import { canAccessAdminPage } from '@/lib/adminAccess';
 import { createPageUrl } from '@/utils';
@@ -17,10 +17,8 @@ import {
   PIPELINE_QUICK_FILTER_KEYS,
   PROJECT_WORK_STATUS_LABELS,
 } from '@/lib/projectPipelineUtils';
-import {
-  buildCollectionDueFormPageUrl,
-  buildWorkStagesPageUrl,
-} from '@/lib/workflowNavigation';
+import { buildCollectionDueFormPageUrl } from '@/lib/workflowNavigation';
+import PipelineReminderDetailDialog from '@/components/pipeline/PipelineReminderDetailDialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -132,20 +130,13 @@ const formatReminderCountLabel = (count) => (
   count === 1 ? 'תזכורת אחת' : `${count} תזכורות`
 );
 
-function navigateToReminderTarget(navigate, reminder) {
-  const targetUrl = String(reminder?.target_url || '').trim();
-  if (!targetUrl) return;
-
-  if (/^https?:\/\//i.test(targetUrl)) {
-    window.location.href = targetUrl;
-    return;
-  }
-
-  navigate(targetUrl.startsWith('/') ? targetUrl : `/${targetUrl}`);
-}
-
-function PipelineRemindersCell({ reminders = [] }) {
-  const navigate = useNavigate();
+function PipelineRemindersCell({
+  reminders = [],
+  projectName = '',
+  clientName = '',
+}) {
+  const queryClient = useQueryClient();
+  const [selectedReminder, setSelectedReminder] = useState(null);
 
   if (!reminders.length) {
     return <span className="text-muted-foreground">-</span>;
@@ -154,49 +145,52 @@ function PipelineRemindersCell({ reminders = [] }) {
   const visibleReminders = reminders.slice(0, 2);
   const remainingCount = reminders.length - visibleReminders.length;
 
-  return (
-    <div className="space-y-1 min-w-[150px]">
-      <NeutralBadge>{formatReminderCountLabel(reminders.length)}</NeutralBadge>
-      <div className="space-y-1">
-        {visibleReminders.map((reminder) => {
-          const nextLabel = formatReminderDateTime(reminder.next_remind_at);
-          const title = reminder.title || 'תזכורת';
+  const handleSnoozed = () => {
+    queryClient.invalidateQueries({ queryKey: ['reminders', 'pipeline-visible'] });
+    setSelectedReminder(null);
+  };
 
-          if (!reminder.has_navigation_target) {
+  return (
+    <>
+      <div className="space-y-1 min-w-[150px]">
+        <NeutralBadge>{formatReminderCountLabel(reminders.length)}</NeutralBadge>
+        <div className="space-y-1">
+          {visibleReminders.map((reminder) => {
+            const nextLabel = formatReminderDateTime(reminder.next_remind_at);
+            const title = reminder.title || 'תזכורת';
+
             return (
-              <div
+              <button
                 key={reminder.id}
-                className="text-xs text-muted-foreground"
-                title="אין יעד פתיחה ברור"
+                type="button"
+                className="block text-right text-xs text-primary hover:underline"
+                title="לחץ לפרטי התזכורת"
+                onClick={() => setSelectedReminder(reminder)}
               >
                 {title}
                 {nextLabel ? ` · ${nextLabel}` : ''}
-              </div>
+              </button>
             );
-          }
-
-          return (
-            <button
-              key={reminder.id}
-              type="button"
-              className="block text-right text-xs text-primary hover:underline"
-              title="לחץ לפתיחת היעד של התזכורת"
-              onClick={() => navigateToReminderTarget(navigate, reminder)}
-            >
-              {title}
-              {nextLabel ? ` · ${nextLabel}` : ''}
-            </button>
-          );
-        })}
-        {remainingCount > 0 ? (
-          <div className="text-xs text-muted-foreground">
-            ועוד
-            {' '}
-            {remainingCount}
-          </div>
-        ) : null}
+          })}
+          {remainingCount > 0 ? (
+            <div className="text-xs text-muted-foreground">
+              ועוד
+              {' '}
+              {remainingCount}
+            </div>
+          ) : null}
+        </div>
       </div>
-    </div>
+
+      <PipelineReminderDetailDialog
+        reminder={selectedReminder}
+        open={Boolean(selectedReminder)}
+        onClose={() => setSelectedReminder(null)}
+        onSnoozed={handleSnoozed}
+        projectName={projectName}
+        clientName={clientName}
+      />
+    </>
   );
 }
 
@@ -249,9 +243,8 @@ function matchesSearch(row, searchTerm, clientName) {
   return haystack.includes(searchTerm);
 }
 
-function PipelineProjectRow({ row }) {
+function PipelineProjectRow({ row, clientName = '' }) {
   const projectUrl = createPageUrl(`ProjectDetails?id=${row.project_id}`);
-  const workStagesUrl = buildWorkStagesPageUrl({ projectId: row.project_id });
   const collectionUrl = row.primary_open_collection_due_id
     ? buildCollectionDueFormPageUrl({ collectionDueId: row.primary_open_collection_due_id })
     : null;
@@ -294,7 +287,11 @@ function PipelineProjectRow({ row }) {
       </TableCell>
       <TableCell>{row.construction_status_label}</TableCell>
       <TableCell>
-        <PipelineRemindersCell reminders={row.reminders} />
+        <PipelineRemindersCell
+          reminders={row.reminders}
+          projectName={row.project_name}
+          clientName={clientName}
+        />
       </TableCell>
       <TableCell>
         {row.has_open_collection_due ? (
@@ -312,11 +309,6 @@ function PipelineProjectRow({ row }) {
           <Button asChild variant="outline" size="sm" className="shrink-0">
             <Link to={projectUrl}>פתח פרויקט</Link>
           </Button>
-          <Button asChild variant="outline" size="sm" className="shrink-0">
-            <Link to={workStagesUrl}>
-              {row.work_stage_count > 0 ? 'נהל שלבי עבודה' : 'הגדר שלבי עבודה'}
-            </Link>
-          </Button>
           {collectionUrl ? (
             <Button asChild variant="outline" size="sm" className="shrink-0">
               <Link to={collectionUrl}>פתח גבייה</Link>
@@ -332,6 +324,7 @@ function PipelineGroupCard({
   group,
   forceExpanded = false,
   hasActiveFilters = false,
+  clientsById = new Map(),
 }) {
   const defaultCollapsed = forceExpanded
     ? false
@@ -388,7 +381,11 @@ function PipelineGroupCard({
             </TableHeader>
             <TableBody>
               {group.rows.map((row) => (
-                <PipelineProjectRow key={row.project_id} row={row} />
+                <PipelineProjectRow
+                  key={row.project_id}
+                  row={row}
+                  clientName={clientsById.get(row.client_id)?.name || ''}
+                />
               ))}
             </TableBody>
           </Table>
@@ -759,6 +756,7 @@ export default function ProjectPipeline() {
                   group={grouped[groupKey]}
                   forceExpanded={hasActiveFilters}
                   hasActiveFilters={hasActiveFilters}
+                  clientsById={clientsById}
                 />
               ))
             )}
