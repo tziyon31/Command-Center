@@ -17,6 +17,7 @@ import {
   buildWorkflowOnboardingPatch,
   formatHistoricalExemptions,
   HISTORICAL_EXEMPTION_KEY,
+  isCompletedNoRemindersEntry,
   isWorkflowManagedProject,
   WORKFLOW_ENTRY_STAGE,
   WORKFLOW_ORIGIN,
@@ -172,6 +173,25 @@ function planOnboardingForProject(project, cache, signedProposalsById) {
     };
   }
 
+  // Idempotent after Apply: completed_no_reminders is a terminal onboarding state
+  // (workflow_managed may be false).
+  if (isCompletedNoRemindersEntry(project)) {
+    return {
+      project_id: project.id,
+      project_name: project.name || '',
+      project_status: project.status || '',
+      bucket: WORKFLOW_ENTRY_STAGE.COMPLETED_NO_REMINDERS,
+      action: 'report_only',
+      reason: 'Project already marked as completed_no_reminders',
+      current_fields: {
+        workflow_managed: project.workflow_managed,
+        workflow_origin: project.workflow_origin,
+        workflow_entry_stage: project.workflow_entry_stage,
+        workflow_historical_exemptions: project.workflow_historical_exemptions || '',
+      },
+    };
+  }
+
   const activeReminders = listOpenWorkflowRemindersForProject(
     cache,
     project.id,
@@ -226,6 +246,22 @@ function emptyOnboardingGroups() {
   };
 }
 
+const SUGGESTION_BUCKETS = [
+  'proposal',
+  'proposal_followup',
+  'work_stages',
+  'completed_no_reminders',
+];
+
+function countOnboardingSuggestions(groups) {
+  return SUGGESTION_BUCKETS.reduce(
+    (total, bucket) => total + (groups[bucket] || []).filter(
+      (row) => row.action === 'suggest_onboarding',
+    ).length,
+    0,
+  );
+}
+
 function buildOnboardingCounts(groups) {
   return {
     proposal: groups.proposal.length,
@@ -235,12 +271,7 @@ function buildOnboardingCounts(groups) {
     alreadyOnboarded: groups.alreadyOnboarded.length,
     workflowExcludedProjects: groups.workflowExcludedProjects.length,
     unclassified: groups.unclassified.length,
-    totalSuggestions: (
-      groups.proposal.length
-      + groups.proposal_followup.length
-      + groups.work_stages.length
-      + groups.completed_no_reminders.length
-    ),
+    totalSuggestions: countOnboardingSuggestions(groups),
   };
 }
 
