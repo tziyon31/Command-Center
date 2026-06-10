@@ -171,6 +171,49 @@
       "type": "string",
       "default": "",
       "description": "\u05de\u05ea\u05d9 \u05e2\u05d5\u05d3\u05db\u05df \u05e1\u05d8\u05d8\u05d5\u05e1 \u05d4\u05d1\u05e0\u05d9\u05d9\u05d4 (ISO string)"
+    },
+    "workflow_managed": {
+      "type": "boolean",
+      "default": false,
+      "description": "\u05d4\u05d0\u05dd \u05d4\u05e4\u05e8\u05d5\u05d9\u05e7\u05d8 \u05de\u05e0\u05d5\u05d4\u05dc \u05e2\u05dc \u05d9\u05d3\u05d9 \u05de\u05e0\u05d2\u05e0\u05d5\u05df \u05d4\u05beWorkflow \u05d4\u05d7\u05d3\u05e9"
+    },
+    "workflow_origin": {
+      "type": "string",
+      "enum": [
+        "none",
+        "native",
+        "legacy_bootstrap",
+        "manual"
+      ],
+      "default": "none",
+      "description": "\u05d0\u05d9\u05da \u05d4\u05e4\u05e8\u05d5\u05d9\u05e7\u05d8 \u05e0\u05db\u05e0\u05e1 \u05dc\u05beWorkflow: none / native / legacy_bootstrap / manual"
+    },
+    "workflow_entry_stage": {
+      "type": "string",
+      "enum": [
+        "unmanaged",
+        "proposal",
+        "proposal_followup",
+        "work_stages",
+        "invoice",
+        "collection",
+        "completed_no_reminders",
+        "construction_policy"
+      ],
+      "default": "unmanaged",
+      "description": "\u05de\u05d0\u05d9\u05d6\u05d4 \u05e9\u05dc\u05d1 \u05d4\u05e4\u05e8\u05d5\u05d9\u05e7\u05d8 \u05de\u05ea\u05d7\u05d9\u05dc \u05dc\u05d4\u05d9\u05d5\u05ea \u05de\u05e0\u05d5\u05d4\u05dc \u05d1\u05beWorkflow"
+    },
+    "workflow_onboarded_at": {
+      "type": "string",
+      "description": "\u05de\u05ea\u05d9 \u05d4\u05e4\u05e8\u05d5\u05d9\u05e7\u05d8 \u05e2\u05d1\u05e8 onboarding \u05dc\u05beWorkflow (ISO datetime string)"
+    },
+    "workflow_onboarding_note": {
+      "type": "string",
+      "description": "\u05d4\u05e2\u05e8\u05d4 \u05e2\u05dc \u05ea\u05d4\u05dc\u05d9\u05da \u05d4\u05beonboarding"
+    },
+    "workflow_historical_exemptions": {
+      "type": "string",
+      "description": "\u05e9\u05dc\u05d1\u05d9\u05dd \u05d4\u05d9\u05e1\u05d8\u05d5\u05e8\u05d9\u05d9\u05dd \u05e9\u05dc\u05d0 \u05d3\u05d5\u05e8\u05e9\u05d9\u05dd \u05d4\u05e9\u05dc\u05de\u05d4 \u05d1\u05d3\u05d9\u05e2\u05d1\u05d3, \u05db\u05becomma-separated \u05d0\u05d5 JSON string. \u05dc\u05d3\u05d5\u05d2\u05de\u05d4: \"proposal,signed_proposal\""
     }
   },
   "required": [
