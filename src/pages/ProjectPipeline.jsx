@@ -571,6 +571,11 @@ export default function ProjectPipeline() {
                 בדוק תקינות תזכורות
               </Link>
             </Button>
+            <Button asChild variant="outline" size="sm">
+              <Link to={createPageUrl('ProjectReminderRulesPreview')}>
+                Preview התאמת חוקי תזכורות
+              </Link>
+            </Button>
           </div>
         </div>
 

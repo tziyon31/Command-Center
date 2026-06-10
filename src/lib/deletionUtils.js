@@ -5,6 +5,8 @@ export const DELETION_CONFIRM_WORD = 'מחק';
 const CONDITION_PREFIXES_BY_SOURCE_TYPE = {
   project: [
     'project_needs_proposal:',
+    'project_waiting_followup:',
+    'project_needs_work_stages:',
     'project_completed_needs_invoice_review:',
   ],
   proposal: [

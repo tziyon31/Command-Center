@@ -205,6 +205,8 @@ const REMINDER_CONDITION_PREFIX_BY_ENTITY_TYPE = {
   client: ['client_needs_project:'],
   project: [
     'project_needs_proposal:',
+    'project_waiting_followup:',
+    'project_needs_work_stages:',
     'project_completed_needs_invoice_review:',
   ],
   proposal: [
@@ -252,6 +254,8 @@ const CONDITION_KEY_PREFIX_COUNTS = [
   { label: 'inquiry_needs_proposal', prefix: 'inquiry_needs_proposal:' },
   { label: 'client_needs_project', prefix: 'client_needs_project:' },
   { label: 'project_needs_proposal', prefix: 'project_needs_proposal:' },
+  { label: 'project_waiting_followup', prefix: 'project_waiting_followup:' },
+  { label: 'project_needs_work_stages', prefix: 'project_needs_work_stages:' },
   { label: 'proposal_incomplete', prefix: 'proposal_incomplete:' },
   { label: 'proposal_not_sent', prefix: 'proposal_not_sent:' },
   { label: 'proposal_not_seen', prefix: 'proposal_not_seen:' },

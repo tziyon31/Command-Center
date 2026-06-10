@@ -20,7 +20,12 @@ export const PROJECT_NEEDS_PROPOSAL_CONDITION_PREFIX = 'project_needs_proposal:'
 export const INQUIRY_NEEDS_PROPOSAL_CONDITION_PREFIX = 'inquiry_needs_proposal:';
 export const PROPOSAL_NEEDS_SIGNED_PROPOSAL_CONDITION_PREFIX = 'proposal_needs_signed_proposal:';
 
-const INACTIVE_PROJECT_STATUSES = new Set(['cancelled']);
+/**
+ * P2G: project_needs_proposal is valid only while the project is still in
+ * pricing. Any other status (waiting/signed/execution/completed/rejected/
+ * cancelled/...) resolves the reminder when the rule runs.
+ */
+const P2_ELIGIBLE_PROJECT_STATUSES = new Set(['pricing']);
 
 export function getProposalIncompleteConditionKey(proposalId) {
   return `${PROPOSAL_INCOMPLETE_CONDITION_PREFIX}${proposalId}`;
@@ -140,7 +145,7 @@ const buildProposalReminderContextDescription = (proposal, fallback) => {
 const isProjectEligibleForP2 = (project) => (
   Boolean(project?.id)
   && Boolean(project?.client_id)
-  && !INACTIVE_PROJECT_STATUSES.has(project?.status)
+  && P2_ELIGIBLE_PROJECT_STATUSES.has(String(project?.status || '').trim())
 );
 
 const withReminderCache = (cache, options = {}) => (

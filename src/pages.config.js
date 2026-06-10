@@ -69,6 +69,7 @@ import ProjectPipeline from './pages/ProjectPipeline';
 import ProjectReminderCoverageAudit from './pages/ProjectReminderCoverageAudit';
 import ProjectReminderIntegrityAudit from './pages/ProjectReminderIntegrityAudit';
 import ProjectStatusTransitionAudit from './pages/ProjectStatusTransitionAudit';
+import ProjectReminderRulesPreview from './pages/ProjectReminderRulesPreview';
 import __Layout from './Layout.jsx';
 
 
@@ -95,6 +96,7 @@ export const PAGES = {
     "ProjectReminderCoverageAudit": ProjectReminderCoverageAudit,
     "ProjectReminderIntegrityAudit": ProjectReminderIntegrityAudit,
     "ProjectStatusTransitionAudit": ProjectStatusTransitionAudit,
+    "ProjectReminderRulesPreview": ProjectReminderRulesPreview,
 }
 
 export const pagesConfig = {
