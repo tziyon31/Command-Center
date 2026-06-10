@@ -5,6 +5,11 @@ import { base44 } from '@/api/base44Client';
 import { createPageUrl } from '@/utils';
 import { runProjectReminderRulesPreview } from '@/lib/projectReminderRulesPreview';
 import {
+  applyProjectWorkflowOnboarding,
+  runProjectWorkflowOnboardingPreview,
+} from '@/lib/projectWorkflowOnboardingPreview';
+import { APPLY_PROJECT_WORKFLOW_ONBOARDING_CONFIRM_TEXT } from '@/lib/projectWorkflowOnboarding';
+import {
   APPLY_PRICING_PROPOSAL_REMINDERS_CONFIRM_TEXT,
   APPLY_PROJECT_REMINDER_RULES_CONFIRM_TEXT,
   PLANNER_MODE_LEGACY_BOOTSTRAP,
@@ -36,6 +41,16 @@ const PREVIEW_SECTIONS = [
   { key: 'excludedWorkflowRemindersToResolve', title: 'תזכורות workflow פעילות על פרויקטים מוחרגים (ייסגרו ב-Apply)' },
   { key: 'workflowExcludedProjects', title: 'פרויקטים מוחרגים מ-Workflow (אישור אהרון — דיווח בלבד)' },
   { key: 'runtimeEvidenceGaps', title: 'פערי ראיות ב-runtime — status ללא records (דיווח בלבד)' },
+  { key: 'completedNoReminders', title: 'completed_no_reminders (דיווח בלבד)' },
+];
+
+const ONBOARDING_SECTIONS = [
+  { key: 'proposal', title: 'הצעת onboarding: entry_stage = proposal' },
+  { key: 'proposal_followup', title: 'הצעת onboarding: entry_stage = proposal_followup' },
+  { key: 'work_stages', title: 'הצעת onboarding: entry_stage = work_stages' },
+  { key: 'completed_no_reminders', title: 'הצעת onboarding: completed_no_reminders' },
+  { key: 'alreadyOnboarded', title: 'כבר onboarded' },
+  { key: 'workflowExcludedProjects', title: 'פרויקטים מוחרגים' },
 ];
 
 const MODE_LABELS = {
@@ -56,6 +71,50 @@ function SummaryCard({ label, value }) {
         <div className="text-2xl font-bold mt-1">{value}</div>
       </CardContent>
     </Card>
+  );
+}
+
+function OnboardingTable({ rows = [] }) {
+  if (!rows.length) {
+    return <p className="text-sm text-muted-foreground">אין הצעות onboarding בקבוצה זו.</p>;
+  }
+
+  return (
+    <div className="overflow-auto max-h-96 border rounded-md">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>פרויקט</TableHead>
+            <TableHead>סטטוס</TableHead>
+            <TableHead>entry_stage מוצע</TableHead>
+            <TableHead>exemptions מוצעות</TableHead>
+            <TableHead>סיבה</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((row) => (
+            <TableRow key={`${row.project_id}-${row.bucket}-${row.action}`}>
+              <TableCell>
+                <Link
+                  to={createPageUrl(`ProjectDetails?id=${row.project_id}`)}
+                  className="text-primary hover:underline"
+                >
+                  {row.project_name || row.project_id}
+                </Link>
+              </TableCell>
+              <TableCell className="text-xs">{row.project_status}</TableCell>
+              <TableCell className="text-xs font-mono" dir="ltr">
+                {row.suggested_patch?.workflow_entry_stage || row.current_fields?.workflow_entry_stage || '-'}
+              </TableCell>
+              <TableCell className="text-xs font-mono" dir="ltr">
+                {row.suggested_patch?.workflow_historical_exemptions || '-'}
+              </TableCell>
+              <TableCell className="text-xs">{row.reason}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
   );
 }
 
@@ -112,10 +171,15 @@ function PlannedActionsTable({ rows = [] }) {
 
 export default function ProjectReminderRulesPreview() {
   const [report, setReport] = useState(null);
+  const [onboardingReport, setOnboardingReport] = useState(null);
   const [applyResult, setApplyResult] = useState(null);
+  const [onboardingApplyResult, setOnboardingApplyResult] = useState(null);
   const [confirmText, setConfirmText] = useState('');
+  const [onboardingConfirmText, setOnboardingConfirmText] = useState('');
   const [running, setRunning] = useState(false);
+  const [onboardingRunning, setOnboardingRunning] = useState(false);
   const [applying, setApplying] = useState(false);
+  const [onboardingApplying, setOnboardingApplying] = useState(false);
   const [error, setError] = useState('');
 
   const { data: currentUser } = useQuery({
@@ -131,6 +195,7 @@ export default function ProjectReminderRulesPreview() {
     setRunning(true);
     setError('');
     setApplyResult(null);
+    setOnboardingReport(null);
     try {
       const previewOptions = mode === PLANNER_MODE_RUNTIME
         ? {}
@@ -146,8 +211,49 @@ export default function ProjectReminderRulesPreview() {
   };
 
   const handleCopyReport = async () => {
-    if (!report) return;
-    await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
+    const payload = onboardingReport || report;
+    if (!payload) return;
+    await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+  };
+
+  const handleRunOnboardingPreview = async () => {
+    setOnboardingRunning(true);
+    setError('');
+    setOnboardingApplyResult(null);
+    try {
+      const result = await runProjectWorkflowOnboardingPreview();
+      setOnboardingReport(result);
+      setReport(null);
+    } catch (previewError) {
+      console.error('[ProjectReminderRulesPreview] onboarding preview failed', previewError);
+      setError('ה-Onboarding Preview נכשל. בדוק את ה-console.');
+    } finally {
+      setOnboardingRunning(false);
+    }
+  };
+
+  const handleOnboardingApply = async () => {
+    if (onboardingConfirmText !== APPLY_PROJECT_WORKFLOW_ONBOARDING_CONFIRM_TEXT) {
+      setError(`יש להקליד בדיוק: ${APPLY_PROJECT_WORKFLOW_ONBOARDING_CONFIRM_TEXT}`);
+      return;
+    }
+
+    setOnboardingApplying(true);
+    setError('');
+    try {
+      const result = await applyProjectWorkflowOnboarding(onboardingReport, {
+        apply: true,
+        dryRun: false,
+        confirmText: onboardingConfirmText,
+      });
+      setOnboardingApplyResult(result);
+      setOnboardingConfirmText('');
+    } catch (applyError) {
+      console.error('[ProjectReminderRulesPreview] onboarding apply failed', applyError);
+      setError(applyError?.message || 'ה-Onboarding Apply נכשל. בדוק את ה-console.');
+    } finally {
+      setOnboardingApplying(false);
+    }
   };
 
   const confirmTextIsValid = ACCEPTED_CONFIRM_TEXTS.includes(confirmText);
@@ -217,11 +323,19 @@ export default function ProjectReminderRulesPreview() {
             type="button"
             variant="secondary"
             onClick={() => handleRunPreview()}
-            disabled={running}
+            disabled={running || onboardingRunning}
           >
             Preview — Runtime (ברירת מחדל)
           </Button>
-          <Button type="button" variant="outline" onClick={handleCopyReport} disabled={!report}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleRunOnboardingPreview}
+            disabled={running || onboardingRunning}
+          >
+            {onboardingRunning ? 'מריץ Onboarding...' : 'Preview — Workflow Onboarding'}
+          </Button>
+          <Button type="button" variant="outline" onClick={handleCopyReport} disabled={!report && !onboardingReport}>
             Copy JSON
           </Button>
         </div>
@@ -230,6 +344,19 @@ export default function ProjectReminderRulesPreview() {
       {error ? (
         <Card>
           <CardContent className="pt-6 text-red-600">{error}</CardContent>
+        </Card>
+      ) : null}
+
+      {onboardingApplyResult ? (
+        <Card className="border-emerald-300">
+          <CardHeader>
+            <CardTitle>תוצאת Onboarding Apply</CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm space-y-1">
+            <div>עודכנו: {onboardingApplyResult.updated}</div>
+            <div>דולגו: {onboardingApplyResult.skipped}</div>
+            <div>שגיאות: {onboardingApplyResult.errors.length}</div>
+          </CardContent>
         </Card>
       ) : null}
 
@@ -251,6 +378,76 @@ export default function ProjectReminderRulesPreview() {
             </div>
           </CardContent>
         </Card>
+      ) : null}
+
+      {onboardingReport ? (
+        <>
+          <Card>
+            <CardContent className="pt-6 text-sm">
+              מצב הרצה:
+              {' '}
+              <span className="font-semibold">Workflow Onboarding Preview (read-only)</span>
+            </CardContent>
+          </Card>
+
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            <SummaryCard label="פרויקטים נבדקו" value={onboardingReport.projectsChecked} />
+            <SummaryCard label="proposal" value={onboardingReport.counts.proposal} />
+            <SummaryCard label="proposal_followup" value={onboardingReport.counts.proposal_followup} />
+            <SummaryCard label="work_stages" value={onboardingReport.counts.work_stages} />
+            <SummaryCard label="completed_no_reminders" value={onboardingReport.counts.completed_no_reminders} />
+            <SummaryCard label="סה״כ הצעות" value={onboardingReport.counts.totalSuggestions} />
+          </div>
+
+          {ONBOARDING_SECTIONS.map((section) => (
+            <Card key={section.key}>
+              <CardHeader>
+                <CardTitle>
+                  {section.title}
+                  {' '}
+                  ({(onboardingReport.groups[section.key] || []).length})
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <OnboardingTable rows={onboardingReport.groups[section.key] || []} />
+              </CardContent>
+            </Card>
+          ))}
+
+          <Card className="border-amber-300">
+            <CardHeader>
+              <CardTitle>Onboarding Apply — עדכון שדות Project בלבד</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                מעדכן רק שדות workflow על Project. לא יוצר ולא סוגר Reminders.
+                יש להקליד במדויק:
+                {' '}
+                <span className="font-mono" dir="ltr">{APPLY_PROJECT_WORKFLOW_ONBOARDING_CONFIRM_TEXT}</span>
+              </p>
+              <div className="flex gap-2 items-center">
+                <Input
+                  dir="ltr"
+                  value={onboardingConfirmText}
+                  onChange={(event) => setOnboardingConfirmText(event.target.value)}
+                  placeholder={APPLY_PROJECT_WORKFLOW_ONBOARDING_CONFIRM_TEXT}
+                  className="max-w-md font-mono"
+                />
+                <Button
+                  type="button"
+                  variant="destructive"
+                  onClick={handleOnboardingApply}
+                  disabled={
+                    onboardingApplying
+                    || onboardingConfirmText !== APPLY_PROJECT_WORKFLOW_ONBOARDING_CONFIRM_TEXT
+                  }
+                >
+                  {onboardingApplying ? 'מבצע Onboarding Apply...' : 'Onboarding Apply'}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </>
       ) : null}
 
       {report ? (
@@ -276,6 +473,7 @@ export default function ProjectReminderRulesPreview() {
             <SummaryCard label="מוחרגים מ-Workflow" value={report.counts.workflowExcludedProjectsCount ?? 0} />
             <SummaryCard label="תזכורות מוחרגות לסגירה" value={report.counts.excludedWorkflowRemindersToResolve ?? 0} />
             <SummaryCard label="פערי ראיות runtime" value={report.counts.runtimeEvidenceGaps ?? 0} />
+            <SummaryCard label="completed_no_reminders" value={report.counts.completedNoReminders ?? 0} />
           </div>
 
           {PREVIEW_SECTIONS.map((section) => (

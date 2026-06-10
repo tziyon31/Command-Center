@@ -28,6 +28,7 @@ const REPORTED_GROUP_KEYS = [
   'excludedWorkflowRemindersToResolve',
   'workflowExcludedProjects',
   'runtimeEvidenceGaps',
+  'completedNoReminders',
 ];
 
 export async function runProjectReminderRulesPreview({ mode = PLANNER_MODE_RUNTIME } = {}) {

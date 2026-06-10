@@ -14,16 +14,15 @@
  *                                                 against signed_proposal_needs_work_stages)
  * - WorkStages exist / no workflow source       → resolve project_needs_work_stages
  *
- * runtime (records only — Proposal/SignedProposal/WorkStage; Project.status is
- * NEVER a creation trigger):
- * - proposal needed:   no non-cancelled Proposal + no submitted SignedProposal
- *                      + no WorkStages + project is workflow-managed
- * - follow-up:         submitted Proposal without SignedProposal/WorkStages
- *                      → proposal_waiting_followup:<proposal.id>
- * - work stages:       submitted SignedProposal without WorkStages
- *                      → signed_proposal_needs_work_stages:<sp.id>
- * - status-only evidence (e.g. signed/execution with no records)
- *                      → runtimeEvidenceGaps, report only.
+ * runtime (workflow_entry_stage + records; Project.status is NEVER a trigger):
+ * - workflow_managed === true required; onboarding via Project workflow fields.
+ * - proposal:          entry_stage=proposal only → project_needs_proposal
+ * - follow-up:         entry_stage=proposal_followup → proposal_waiting_followup
+ *                      or legacy bridge project_waiting_followup
+ * - work stages:       entry_stage=work_stages → signed_proposal_needs_work_stages
+ *                      or legacy bridge project_needs_work_stages (never closed
+ *                      solely for missing SignedProposal)
+ * - completed_no_reminders / unmanaged → report only, no creates/resolves.
  *
  * Truth order in both modes: workflow records outrank Project.status. When
  * status contradicts the records, valid reminders are NOT resolved — the
@@ -57,6 +56,17 @@ import {
   getProjectWorkflowExclusion,
   isProjectExcludedFromWorkflowReminders,
 } from '@/lib/projectWorkflowExclusions';
+import {
+  getWorkflowEntryStage,
+  hasHistoricalExemption,
+  HISTORICAL_EXEMPTION_KEY,
+  isCompletedNoRemindersEntry,
+  isProposalEntryStage,
+  isProposalFollowupEntryStage,
+  isWorkStagesEntryStage,
+  isWorkflowManagedProject,
+  WORKFLOW_ENTRY_STAGE,
+} from '@/lib/projectWorkflowOnboarding';
 
 export const PROJECT_WAITING_FOLLOWUP_PREFIX = 'project_waiting_followup:';
 export const PROJECT_NEEDS_WORK_STAGES_PREFIX = 'project_needs_work_stages:';
@@ -93,22 +103,6 @@ export function getProjectNeedsWorkStagesConditionKey(projectId) {
 
 export function getProposalWaitingFollowupConditionKey(proposalId) {
   return `${PROPOSAL_WAITING_FOLLOWUP_PREFIX}${proposalId}`;
-}
-
-/**
- * Heuristic: is this project born/managed inside the new workflow?
- * Every current create path writes form_status (projectCreatePayload.js), and
- * inquiry/signed-proposal born projects carry source ids. Legacy imported
- * projects have none of these. An explicit `workflow_managed: true` field on
- * Project would be safer — flagged in the P2I report.
- */
-export function isProjectWorkflowManaged(project) {
-  if (project?.workflow_managed === true) return true;
-  return Boolean(
-    String(project?.form_status || '').trim()
-    || String(project?.source_inquiry_id || '').trim()
-    || String(project?.source_signed_proposal_id || '').trim(),
-  );
 }
 
 const WORK_STAGE_FALLBACK_STATUSES = new Set(['signed', 'execution']);
@@ -407,9 +401,58 @@ function baseActionRow(project, bucket, reminderKind, conditionKey) {
   };
 }
 
+function hasActiveDownstreamWorkflowReminder(cache, {
+  followupKey,
+  workStagesKey,
+  openSignedProposalReminders = [],
+  projectProposals = [],
+}) {
+  if (hasOpenReminderForConditionKey(cache, followupKey)) return true;
+  if (hasOpenReminderForConditionKey(cache, workStagesKey)) return true;
+  if (openSignedProposalReminders.length > 0) return true;
+
+  return projectProposals.some(
+    (proposal) => hasOpenReminderForConditionKey(
+      cache,
+      getProposalWaitingFollowupConditionKey(proposal.id),
+    ),
+  );
+}
+
+function resolveFollowupRemindersWhenSuperseded(project, cache, shared, reason) {
+  const actions = [];
+  const { followupKey, projectProposals = [] } = shared;
+
+  for (const proposal of projectProposals) {
+    const proposalFollowupKey = getProposalWaitingFollowupConditionKey(proposal.id);
+    const existing = summarizeExistingReminder(cache, proposalFollowupKey);
+    if (existing) {
+      actions.push({
+        ...baseActionRow(project, 'projectWorkStageRemindersToResolve', 'proposal_waiting_followup', proposalFollowupKey),
+        action: 'resolve',
+        reason,
+        ...existing,
+      });
+    }
+  }
+
+  const existingLegacyFollowup = summarizeExistingReminder(cache, followupKey);
+  if (existingLegacyFollowup) {
+    actions.push({
+      ...baseActionRow(project, 'projectWorkStageRemindersToResolve', 'project_waiting_followup', followupKey),
+      action: 'resolve',
+      reason,
+      ...existingLegacyFollowup,
+    });
+  }
+
+  return actions;
+}
+
 /**
- * Runtime rules — records only. Project.status is NEVER a trigger here:
- * status-only evidence is reported in runtimeEvidenceGaps instead of acted on.
+ * Runtime rules — workflow_entry_stage + records. Project.status is NEVER a
+ * creation trigger; legacy bridge reminders are preserved until real records
+ * or explicit exemptions say otherwise.
  */
 function planRuntimeWorkflowActions(project, context, shared) {
   const actions = [];
@@ -419,104 +462,184 @@ function planRuntimeWorkflowActions(project, context, shared) {
   } = shared;
   const { hasWorkStages, hasSubmittedSignedProposal } = workflow;
   const status = normalizeStatus(project);
+  const entryStage = getWorkflowEntryStage(project);
+
+  if (isCompletedNoRemindersEntry(project)) {
+    actions.push({
+      ...baseActionRow(project, 'completedNoReminders', 'completed_no_reminders', ''),
+      action: 'report_only',
+      reason: 'workflow_entry_stage is completed_no_reminders — no workflow reminders',
+      workflow_entry_stage: entryStage,
+    });
+    return actions;
+  }
+
+  if (!isWorkflowManagedProject(project)) {
+    actions.push({
+      ...baseActionRow(project, 'runtimeEvidenceGaps', 'workflow_onboarding', ''),
+      action: 'report_only',
+      reason: 'Project is not workflow-managed (workflow_managed !== true)',
+      workflow_entry_stage: entryStage,
+      recommended_action: 'Run Workflow Onboarding Preview and apply onboarding before runtime reminders',
+    });
+    return actions;
+  }
 
   const projectProposals = getProposalsForProject(project.id, proposals);
   const nonCancelledProposals = projectProposals.filter(isNonCancelledProposal);
   const submittedProposals = projectProposals.filter(isSubmittedActiveProposal);
+  const exemptProposal = hasHistoricalExemption(project, HISTORICAL_EXEMPTION_KEY.PROPOSAL);
+  const exemptSignedProposal = hasHistoricalExemption(project, HISTORICAL_EXEMPTION_KEY.SIGNED_PROPOSAL);
 
-  // Runtime Rule 1 — proposal needed (records only, no Project.status):
-  // covered by any non-cancelled Proposal / submitted SignedProposal / WorkStages.
-  const proposalNeedIsCovered = (
-    nonCancelledProposals.length > 0 || hasSubmittedSignedProposal || hasWorkStages
-  );
+  const downstreamShared = {
+    followupKey,
+    workStagesKey,
+    openSignedProposalReminders,
+    projectProposals,
+  };
 
-  if (proposalNeedIsCovered) {
-    const existingProposalReminder = summarizeExistingReminder(cache, proposalKey);
-    if (existingProposalReminder) {
-      actions.push({
-        ...baseActionRow(project, 'staleProposalRemindersToResolve', 'project_needs_proposal', proposalKey),
-        action: 'resolve',
-        reason: 'Workflow records (proposal / signed proposal / work stages) already cover the proposal need',
-        ...existingProposalReminder,
-      });
-    }
-  } else if (!hasOpenReminderForConditionKey(cache, proposalKey)) {
-    if (isProjectWorkflowManaged(project)) {
+  // Runtime Rule 1 — project_needs_proposal only at entry_stage === proposal.
+  if (isProposalEntryStage(project)) {
+    const proposalNeedIsCovered = (
+      nonCancelledProposals.length > 0 || hasSubmittedSignedProposal || hasWorkStages
+    );
+
+    if (proposalNeedIsCovered) {
+      const existingProposalReminder = summarizeExistingReminder(cache, proposalKey);
+      if (existingProposalReminder) {
+        actions.push({
+          ...baseActionRow(project, 'staleProposalRemindersToResolve', 'project_needs_proposal', proposalKey),
+          action: 'resolve',
+          reason: 'Workflow records already cover the proposal need at proposal entry stage',
+          ...existingProposalReminder,
+        });
+      }
+    } else if (
+      !hasOpenReminderForConditionKey(cache, proposalKey)
+      && !hasActiveDownstreamWorkflowReminder(cache, downstreamShared)
+    ) {
       actions.push({
         ...baseActionRow(project, 'pricingProposalRemindersToCreate', 'project_needs_proposal', proposalKey),
         action: 'create',
-        reason: 'Workflow-managed project has no proposal records and no active proposal reminder (records-based)',
+        reason: 'workflow_entry_stage=proposal with no proposal records and no downstream reminder',
         reminder_input: buildPricingProposalReminderInput(project, clientsById),
       });
-    } else {
-      actions.push({
-        ...baseActionRow(project, 'runtimeEvidenceGaps', 'project_needs_proposal', proposalKey),
-        action: 'report_only',
-        reason: 'Project has no workflow records and is not identifiably workflow-managed (no form_status / source_inquiry_id / source_signed_proposal_id)',
-        recommended_action: 'Align via legacy bootstrap, or add an explicit workflow_managed field to Project',
-      });
     }
   }
 
-  // Runtime Rule 2 — proposal follow-up, based on submitted Proposal records
-  // (NOT Project.status === waiting). Key: proposal_waiting_followup:<proposal.id>.
-  const followupIsNeeded = (
-    submittedProposals.length > 0 && !hasSubmittedSignedProposal && !hasWorkStages
-  );
+  // Runtime Rule 2 — proposal follow-up at entry_stage === proposal_followup.
+  if (isProposalFollowupEntryStage(project)) {
+    const superseded = hasSubmittedSignedProposal || hasWorkStages;
 
-  if (followupIsNeeded) {
-    for (const proposal of submittedProposals) {
-      const proposalFollowupKey = getProposalWaitingFollowupConditionKey(proposal.id);
-      if (hasOpenReminderForConditionKey(cache, proposalFollowupKey)) continue;
+    if (superseded) {
+      actions.push(...resolveFollowupRemindersWhenSuperseded(
+        project,
+        cache,
+        { followupKey, projectProposals },
+        'Signed proposal or work stages supersede the follow-up reminder',
+      ));
+    } else if (submittedProposals.length > 0) {
+      for (const proposal of submittedProposals) {
+        const proposalFollowupKey = getProposalWaitingFollowupConditionKey(proposal.id);
+        if (hasOpenReminderForConditionKey(cache, proposalFollowupKey)) continue;
 
-      if (hasOpenReminderForConditionKey(cache, followupKey)) {
+        if (hasOpenReminderForConditionKey(cache, followupKey)) {
+          actions.push({
+            ...baseActionRow(project, 'duplicatesPrevented', 'proposal_waiting_followup', proposalFollowupKey),
+            action: 'skip_duplicate',
+            reason: 'Legacy project_waiting_followup bridge already covers this follow-up',
+          });
+          continue;
+        }
+
         actions.push({
-          ...baseActionRow(project, 'duplicatesPrevented', 'proposal_waiting_followup', proposalFollowupKey),
-          action: 'skip_duplicate',
-          reason: 'Legacy project_waiting_followup reminder already covers this follow-up',
+          ...baseActionRow(project, 'proposalFollowupRemindersToCreate', 'proposal_waiting_followup', proposalFollowupKey),
+          action: 'create',
+          reason: 'Submitted proposal awaits client response (proposal_followup entry stage)',
+          reminder_input: buildProposalFollowupReminderInput(proposal, project, clientsById),
         });
-        continue;
       }
-
+    } else if (!hasOpenReminderForConditionKey(cache, followupKey)) {
       actions.push({
-        ...baseActionRow(project, 'proposalFollowupRemindersToCreate', 'proposal_waiting_followup', proposalFollowupKey),
+        ...baseActionRow(project, 'waitingFollowupRemindersToCreate', 'project_waiting_followup', followupKey),
         action: 'create',
-        reason: 'Submitted proposal awaits client response (no signed proposal, no work stages)',
-        reminder_input: buildProposalFollowupReminderInput(proposal, project, clientsById),
+        reason: 'Legacy proposal_followup entry without Proposal record — bridge project_waiting_followup',
+        reminder_input: buildWaitingFollowupReminderInput(project, clientsById),
       });
     }
-  } else {
-    for (const proposal of projectProposals) {
-      const proposalFollowupKey = getProposalWaitingFollowupConditionKey(proposal.id);
-      const existing = summarizeExistingReminder(cache, proposalFollowupKey);
-      if (existing) {
-        actions.push({
-          ...baseActionRow(project, 'projectWorkStageRemindersToResolve', 'proposal_waiting_followup', proposalFollowupKey),
-          action: 'resolve',
-          reason: hasSubmittedSignedProposal || hasWorkStages
-            ? 'Workflow records (signed proposal / work stages) supersede the proposal follow-up'
-            : 'Proposal is no longer submitted; follow-up has no record source',
-          ...existing,
-        });
-      }
-    }
-
-    if (hasSubmittedSignedProposal || hasWorkStages) {
-      const existingLegacyFollowup = summarizeExistingReminder(cache, followupKey);
-      if (existingLegacyFollowup) {
-        actions.push({
-          ...baseActionRow(project, 'projectWorkStageRemindersToResolve', 'project_waiting_followup', followupKey),
-          action: 'resolve',
-          reason: 'Workflow records (signed proposal / work stages) supersede the legacy follow-up',
-          ...existingLegacyFollowup,
-        });
-      }
-    }
+  } else if (hasSubmittedSignedProposal || hasWorkStages) {
+    actions.push(...resolveFollowupRemindersWhenSuperseded(
+      project,
+      cache,
+      { followupKey, projectProposals },
+      'Signed proposal or work stages supersede the follow-up reminder',
+    ));
   }
 
-  // Runtime Rule 3 — work stages needed: ONLY submitted SignedProposal counts
-  // (no signed/execution status fallback). Key stays SP-based (R7).
-  if (hasSubmittedSignedProposal && !hasWorkStages) {
+  // Runtime Rule 3 — work stages at entry_stage === work_stages.
+  if (isWorkStagesEntryStage(project)) {
+    if (hasWorkStages) {
+      const existingBridge = summarizeExistingReminder(cache, workStagesKey);
+      if (existingBridge) {
+        actions.push({
+          ...baseActionRow(project, 'projectWorkStageRemindersToResolve', 'project_needs_work_stages', workStagesKey),
+          action: 'resolve',
+          reason: 'Work stages exist — legacy bridge reminder is fulfilled',
+          ...existingBridge,
+        });
+      }
+
+      for (const signedProposalReminder of openSignedProposalReminders) {
+        actions.push({
+          ...baseActionRow(
+            project,
+            'projectWorkStageRemindersToResolve',
+            'signed_proposal_needs_work_stages',
+            signedProposalReminder.condition_key,
+          ),
+          action: 'resolve',
+          reason: 'Work stages exist — signed-proposal work-stage reminder is fulfilled',
+          reminder_id: signedProposalReminder.reminder_id,
+          reminder_title: signedProposalReminder.reminder_title,
+          reminder_status: signedProposalReminder.reminder_status,
+        });
+      }
+    } else if (hasSubmittedSignedProposal && !exemptSignedProposal) {
+      if (openSignedProposalReminders.length > 0) {
+        actions.push({
+          ...baseActionRow(project, 'duplicatesPrevented', 'signed_proposal_needs_work_stages', ''),
+          action: 'skip_duplicate',
+          reason: 'Active signed_proposal_needs_work_stages reminder already covers this project',
+          existing_signed_proposal_reminders: openSignedProposalReminders,
+        });
+      } else if (hasOpenReminderForConditionKey(cache, workStagesKey)) {
+        actions.push({
+          ...baseActionRow(project, 'duplicatesPrevented', 'project_needs_work_stages', workStagesKey),
+          action: 'skip_duplicate',
+          reason: 'Active project_needs_work_stages bridge reminder already covers this project',
+        });
+      } else {
+        const signedProposal = findSubmittedSignedProposalForProject(project, signedProposals);
+        if (signedProposal?.id) {
+          const signedProposalKey = getSignedProposalNeedsWorkStagesConditionKey(signedProposal.id);
+          actions.push({
+            ...baseActionRow(project, 'workStageRemindersToCreate', 'signed_proposal_needs_work_stages', signedProposalKey),
+            action: 'create',
+            reason: 'Submitted signed proposal exists but no work stages (work_stages entry stage)',
+            reminder_input: buildSignedProposalWorkStagesReminderInput(signedProposal, project, clientsById),
+          });
+        }
+      }
+    } else if (!hasOpenReminderForConditionKey(cache, workStagesKey) && openSignedProposalReminders.length === 0) {
+      actions.push({
+        ...baseActionRow(project, 'workStageRemindersToCreate', 'project_needs_work_stages', workStagesKey),
+        action: 'create',
+        reason: 'work_stages entry stage without WorkStages — legacy bridge project_needs_work_stages',
+        reminder_input: buildWorkStagesReminderInput(project, clientsById),
+      });
+    }
+    // Never resolve project_needs_work_stages bridge solely because there is no SignedProposal.
+  } else if (hasSubmittedSignedProposal && !hasWorkStages) {
     if (openSignedProposalReminders.length > 0) {
       actions.push({
         ...baseActionRow(project, 'duplicatesPrevented', 'signed_proposal_needs_work_stages', ''),
@@ -524,46 +647,23 @@ function planRuntimeWorkflowActions(project, context, shared) {
         reason: 'Active signed_proposal_needs_work_stages reminder already covers this project',
         existing_signed_proposal_reminders: openSignedProposalReminders,
       });
-    } else if (hasOpenReminderForConditionKey(cache, workStagesKey)) {
-      actions.push({
-        ...baseActionRow(project, 'duplicatesPrevented', 'project_needs_work_stages', workStagesKey),
-        action: 'skip_duplicate',
-        reason: 'Active project_needs_work_stages reminder already covers this project',
-      });
-    } else {
-      const signedProposal = findSubmittedSignedProposalForProject(project, signedProposals);
-      if (signedProposal?.id) {
-        const signedProposalKey = getSignedProposalNeedsWorkStagesConditionKey(signedProposal.id);
-        actions.push({
-          ...baseActionRow(project, 'workStageRemindersToCreate', 'signed_proposal_needs_work_stages', signedProposalKey),
-          action: 'create',
-          reason: 'Submitted signed proposal exists but no work stages and no work-stage reminder (records-based)',
-          reminder_input: buildSignedProposalWorkStagesReminderInput(signedProposal, project, clientsById),
-        });
-      }
-    }
-  } else {
-    const existingWorkStagesReminder = summarizeExistingReminder(cache, workStagesKey);
-    if (existingWorkStagesReminder) {
-      actions.push({
-        ...baseActionRow(project, 'projectWorkStageRemindersToResolve', 'project_needs_work_stages', workStagesKey),
-        action: 'resolve',
-        reason: hasWorkStages
-          ? 'Work stages already exist for this project'
-          : 'No submitted signed proposal; work-stage reminder has no record source',
-        ...existingWorkStagesReminder,
-      });
     }
   }
 
-  // Evidence gap (report only): legacy status claims the project was accepted
-  // but there are no records to act on. Runtime never guesses from status.
-  if (!hasSubmittedSignedProposal && !hasWorkStages && WORK_STAGE_FALLBACK_STATUSES.has(status)) {
+  // Report-only: legacy status without records — never act on Project.status alone.
+  if (
+    !hasSubmittedSignedProposal
+    && !hasWorkStages
+    && WORK_STAGE_FALLBACK_STATUSES.has(status)
+    && !isWorkStagesEntryStage(project)
+    && !exemptSignedProposal
+  ) {
     actions.push({
       ...baseActionRow(project, 'runtimeEvidenceGaps', 'work_stages_needed', ''),
       action: 'report_only',
       reason: `Project.status is "${status}" but there is no submitted SignedProposal and no WorkStages record`,
-      recommended_action: 'Align via legacy bootstrap or attach workflow records; runtime does not act on Project.status',
+      workflow_entry_stage: entryStage,
+      recommended_action: 'Use Workflow Onboarding or legacy bootstrap; runtime does not act on Project.status',
     });
   }
 
@@ -615,23 +715,15 @@ export function planProjectLifecycleReminderActions(
       recommended_action: 'No workflow reminder needed unless Aharon changes the decision.',
     });
 
-    const proposalReminderIsStale = mode === PLANNER_MODE_RUNTIME
-      ? (
-        hasNonCancelledProposalForProject(project.id, proposals)
-        || hasSubmittedSignedProposal
-        || hasWorkStages
-      )
-      : status !== 'pricing';
-
-    if (proposalReminderIsStale) {
+    // Runtime does not resolve proposal reminders on excluded projects via records;
+    // only the dedicated excluded-workflow bucket applies.
+    if (mode !== PLANNER_MODE_RUNTIME && status !== 'pricing') {
       const existingProposal = summarizeExistingReminder(cache, proposalKey);
       if (existingProposal) {
         actions.push({
           ...baseActionRow(project, 'staleProposalRemindersToResolve', 'project_needs_proposal', proposalKey),
           action: 'resolve',
-          reason: mode === PLANNER_MODE_RUNTIME
-            ? 'Workflow records (proposal / signed proposal / work stages) already cover the proposal need'
-            : `Project status is "${status}" (not pricing); proposal reminder is stale`,
+          reason: `Project status is "${status}" (not pricing); proposal reminder is stale`,
           ...existingProposal,
         });
       }
@@ -844,6 +936,7 @@ function emptyGroups() {
     excludedWorkflowRemindersToResolve: [],
     workflowExcludedProjects: [],
     runtimeEvidenceGaps: [],
+    completedNoReminders: [],
   };
 }
 
@@ -868,6 +961,7 @@ function buildCounts(groups) {
     excludedWorkflowRemindersToResolve: groups.excludedWorkflowRemindersToResolve.length,
     workflowExcludedProjects: groups.workflowExcludedProjects.length,
     runtimeEvidenceGaps: groups.runtimeEvidenceGaps.length,
+    completedNoReminders: groups.completedNoReminders.length,
   };
 }
 
