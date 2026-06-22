@@ -2,15 +2,12 @@ import { base44 } from '@/api/base44Client';
 import {
   normalizeWorkStageStatuses,
 } from '@/lib/workStageLogic';
+import { fetchWorkStagesForProject } from '@/lib/workStageLoader';
 import { runWorkStageReminderRulesForProject } from '@/lib/workStageReminderRules';
 import { runWorkStageInvoiceReviewRulesForProject } from '@/lib/invoiceReminderRules';
 
 export async function loadWorkStagesForProject(projectId) {
-  const normalizedProjectId = String(projectId || '').trim();
-  if (!normalizedProjectId) return [];
-
-  const items = await base44.entities.WorkStage.list();
-  return items.filter((stage) => String(stage.project_id || '').trim() === normalizedProjectId);
+  return fetchWorkStagesForProject(projectId);
 }
 
 export async function persistNormalizedWorkStages(stages = []) {
@@ -68,10 +65,12 @@ export async function getNextWorkStageOrderIndex(projectId) {
 export async function invalidateWorkStageQueries(queryClient, projectId) {
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: ['work-stages'] }),
+    queryClient.invalidateQueries({ queryKey: ['work-stages', 'pipeline'] }),
     queryClient.invalidateQueries({ queryKey: ['work-stages', projectId] }),
     queryClient.invalidateQueries({ queryKey: ['project', projectId] }),
     queryClient.invalidateQueries({ queryKey: ['project-details', projectId] }),
     queryClient.invalidateQueries({ queryKey: ['reminders'] }),
     queryClient.invalidateQueries({ queryKey: ['reminders', 'visible'] }),
+    queryClient.invalidateQueries({ queryKey: ['reminders', 'pipeline-visible'] }),
   ]);
 }

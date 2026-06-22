@@ -1,10 +1,14 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
 import { canAccessAdminPage } from '@/lib/adminAccess';
 import { createPageUrl } from '@/utils';
 import CreateProjectDialog from '@/components/workflow/CreateProjectDialog';
+import {
+  fetchWorkStagesForProjects,
+  logPipelineWorkStageConsistencyDiagnostics,
+} from '@/lib/workStageLoader';
 import {
   buildPipelineSummary,
   buildProjectPipelineRows,
@@ -431,8 +435,9 @@ export default function ProjectPipeline() {
   });
 
   const { data: workStages = [], isLoading: isLoadingWorkStages } = useQuery({
-    queryKey: ['work-stages'],
-    queryFn: () => base44.entities.WorkStage.list(),
+    queryKey: ['work-stages', 'pipeline', projects.map((project) => project.id).join(',')],
+    queryFn: () => fetchWorkStagesForProjects(projects),
+    enabled: projects.length > 0,
   });
 
   const { data: collectionDues = [], isLoading: isLoadingCollectionDues } = useQuery({
@@ -467,6 +472,25 @@ export default function ProjectPipeline() {
     ),
     [projects, workStages, collectionDues, reminderMapResult],
   );
+
+  useEffect(() => {
+    if (isLoadingProjects || isLoadingWorkStages || isLoadingReminders) return;
+
+    logPipelineWorkStageConsistencyDiagnostics({
+      projects,
+      workStages,
+      pipelineRows,
+      reminders: visibleReminders,
+    });
+  }, [
+    projects,
+    workStages,
+    pipelineRows,
+    visibleReminders,
+    isLoadingProjects,
+    isLoadingWorkStages,
+    isLoadingReminders,
+  ]);
 
   const normalizedSearch = filters.searchTerm.trim().toLowerCase();
 

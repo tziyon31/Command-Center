@@ -49,6 +49,7 @@ import { buildProjectCreateFormFromSearchParams } from '@/lib/projectDefaults';
 import { buildProjectCreatePayloadFromForm } from '@/lib/projectCreatePayload';
 import { calculateProjectFinancialSummary } from '@/lib/projectFinancialUtils';
 import { getProjectWorkState } from '@/lib/workStageLogic';
+import { fetchWorkStagesForProject } from '@/lib/workStageLoader';
 import {
   buildInvoiceProcessFormPageUrl,
   buildProposalFormPageUrl,
@@ -261,10 +262,7 @@ export default function ProjectDetails() {
 
   const { data: projectWorkStages = [] } = useQuery({
     queryKey: ['work-stages', 'project', projectId],
-    queryFn: async () => {
-      const items = await base44.entities.WorkStage.filter({ project_id: projectId });
-      return items || [];
-    },
+    queryFn: async () => fetchWorkStagesForProject(projectId),
     enabled: Boolean(projectId),
   });
 

@@ -19,6 +19,7 @@ import {
 import { buildWorkStagesPageUrl } from '@/lib/workflowNavigation';
 
 export const SIGNED_PROPOSAL_NEEDS_WORK_STAGES_PREFIX = 'signed_proposal_needs_work_stages:';
+export const PROJECT_NEEDS_WORK_STAGES_PREFIX = 'project_needs_work_stages:';
 export const WORK_STAGE_NEEDS_CHECK_PREFIX = 'work_stage_needs_check:';
 export const WORK_STAGE_TARGET_DATE_PREFIX = 'work_stage_target_date:';
 
@@ -26,6 +27,10 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 export function getSignedProposalNeedsWorkStagesConditionKey(signedProposalId) {
   return `${SIGNED_PROPOSAL_NEEDS_WORK_STAGES_PREFIX}${signedProposalId}`;
+}
+
+export function getProjectNeedsWorkStagesConditionKey(projectId) {
+  return `${PROJECT_NEEDS_WORK_STAGES_PREFIX}${projectId}`;
 }
 
 export function getWorkStageNeedsCheckConditionKey(stageId) {
@@ -329,6 +334,30 @@ async function runR7ReminderRulesForProject(projectId, cache = {}) {
   return results;
 }
 
+async function resolveProjectNeedsWorkStagesReminderIfApplicable(projectId, cache = {}, workStages = []) {
+  const normalizedProjectId = String(projectId || '').trim();
+  if (!normalizedProjectId) {
+    return { action: 'skipped', rule: 'project_needs_work_stages' };
+  }
+
+  if (!hasNonCancelledWorkStageForProject(normalizedProjectId, workStages)) {
+    return { action: 'skipped', rule: 'project_needs_work_stages' };
+  }
+
+  const conditionKey = getProjectNeedsWorkStagesConditionKey(normalizedProjectId);
+  const result = await resolveReminderByConditionKey(
+    conditionKey,
+    'work_stages_defined',
+    withReminderCache(cache, {}),
+  );
+
+  return {
+    action: classifyRuleAction(result),
+    rule: 'project_needs_work_stages',
+    conditionKey,
+  };
+}
+
 export async function runWorkStageActiveReminderRulesForStage(stage, cache = {}, options = {}) {
   const activeStageId = options.activeStageId ?? null;
   const ws1Key = getWorkStageNeedsCheckConditionKey(stage?.id);
@@ -412,9 +441,17 @@ export async function runWorkStageActiveReminderRulesForProject(projectId, cache
 }
 
 export async function runWorkStageReminderRulesForProject(projectId, cache = {}) {
+  const normalizedProjectId = String(projectId || '').trim();
+  const workStages = cache.workStages ?? getProjectWorkStages(normalizedProjectId, cache);
+
+  const projectNeedsWorkStages = await resolveProjectNeedsWorkStagesReminderIfApplicable(
+    normalizedProjectId,
+    cache,
+    workStages,
+  );
   const r7 = await runR7ReminderRulesForProject(projectId, cache);
   const active = await runWorkStageActiveReminderRulesForProject(projectId, cache);
-  return { r7, ws: active.ws };
+  return { projectNeedsWorkStages, r7, ws: active.ws };
 }
 
 export async function runWorkStageReminderRulesForAll(cache = {}, options = {}) {
