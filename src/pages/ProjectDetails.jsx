@@ -48,7 +48,7 @@ import { syncProposalReminderRulesAfterProjectSave } from '@/lib/proposalReminde
 import { buildProjectCreateFormFromSearchParams } from '@/lib/projectDefaults';
 import { buildProjectCreatePayloadFromForm } from '@/lib/projectCreatePayload';
 import { calculateProjectFinancialSummary } from '@/lib/projectFinancialUtils';
-import { getProjectOperationalWorkStatus } from '@/lib/workStageLogic';
+import { getProjectWorkState } from '@/lib/workStageLogic';
 import {
   buildInvoiceProcessFormPageUrl,
   buildProposalFormPageUrl,
@@ -626,7 +626,7 @@ export default function ProjectDetails() {
   }
 
   const financialSummary = calculateProjectFinancialSummary(project, projectCollectionDues);
-  const operationalWorkStatus = getProjectOperationalWorkStatus(projectWorkStages);
+  const workState = getProjectWorkState(project, projectWorkStages);
   const totalAmount = financialSummary.projectTotalFee;
   const collectedAmount = financialSummary.collectedAmount;
   const outstandingAmount = financialSummary.outstandingAmount;
@@ -890,10 +890,10 @@ export default function ProjectDetails() {
           </CardHeader>
           <CardContent className="grid gap-4 md:grid-cols-2">
             <DetailField label="מצב עבודה">
-              {operationalWorkStatus.label}
+              {workState.operationalStatusLabel}
             </DetailField>
             <DetailField label="שלב נוכחי">
-              {operationalWorkStatus.current_stage_title || '-'}
+              {workState.currentStageTitle || '-'}
             </DetailField>
           </CardContent>
         </Card>

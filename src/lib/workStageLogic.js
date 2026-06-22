@@ -5,19 +5,27 @@ export const WORK_STAGE_STATUS = {
   CANCELLED: 'cancelled',
 };
 
-export const OPERATIONAL_WORK_STATUS = {
+export const PROJECT_WORK_STATE = {
   NO_STAGES: 'no_stages',
-  NOT_STARTED: 'not_started',
-  IN_PROGRESS: 'in_progress',
+  IN_WORK: 'in_work',
   COMPLETED: 'completed',
 };
 
-export const OPERATIONAL_WORK_STATUS_LABELS = {
-  [OPERATIONAL_WORK_STATUS.NO_STAGES]: 'לא הוגדרו שלבי עבודה',
-  [OPERATIONAL_WORK_STATUS.NOT_STARTED]: 'טרם התחיל',
-  [OPERATIONAL_WORK_STATUS.IN_PROGRESS]: 'בעבודה',
-  [OPERATIONAL_WORK_STATUS.COMPLETED]: 'הושלם',
+export const PROJECT_WORK_STATE_LABELS = {
+  [PROJECT_WORK_STATE.NO_STAGES]: 'לא הוגדרו שלבי עבודה',
+  [PROJECT_WORK_STATE.IN_WORK]: 'בעבודה',
+  [PROJECT_WORK_STATE.COMPLETED]: 'הושלם',
 };
+
+/** @deprecated Use PROJECT_WORK_STATE */
+export const OPERATIONAL_WORK_STATUS = PROJECT_WORK_STATE;
+
+/** @deprecated Use PROJECT_WORK_STATE_LABELS */
+export const OPERATIONAL_WORK_STATUS_LABELS = PROJECT_WORK_STATE_LABELS;
+
+const PROPOSAL_COMMERCIAL_STATUSES = new Set(['pricing', 'waiting', 'lead']);
+const IN_WORK_COMMERCIAL_STATUSES = new Set(['execution', 'planning', 'submission']);
+const COMPLETED_COMMERCIAL_STATUSES = new Set(['completed', 'collection_completed']);
 
 export function isWorkStageCompleted(stage) {
   return stage?.aaron_approved === true
@@ -77,53 +85,55 @@ export function getActiveWorkStage(stages = []) {
   return normalized.find((stage) => stage.status === WORK_STAGE_STATUS.ACTIVE) || null;
 }
 
-function hasStageWorkProgress(stage) {
-  if (!stage) return false;
+export function getProjectWorkState(project, workStages = []) {
+  const commercialStatus = String(project?.status || '').trim();
+  const nonCancelled = getNonCancelledWorkStages(workStages);
+  const totalStagesCount = nonCancelled.length;
+  const completedStagesCount = nonCancelled.filter((stage) => isWorkStageCompleted(stage)).length;
+  const hasWorkflowStages = totalStagesCount > 0;
+  const allStagesCompleted = hasWorkflowStages && completedStagesCount === totalStagesCount;
+  const activeStage = getActiveWorkStage(workStages);
+  const currentStageTitle = activeStage?.title
+    || (hasWorkflowStages ? nonCancelled[0]?.title || '' : '');
 
-  return isWorkStageCompleted(stage)
-    || Boolean(stage.aaron_approved || stage.client_approved || stage.draftsman_approved);
-}
+  let operationalStatus = PROJECT_WORK_STATE.NO_STAGES;
 
-export function getProjectOperationalWorkStatus(stages = []) {
-  const nonCancelled = getNonCancelledWorkStages(stages);
-
-  if (nonCancelled.length === 0) {
-    return {
-      key: OPERATIONAL_WORK_STATUS.NO_STAGES,
-      label: OPERATIONAL_WORK_STATUS_LABELS[OPERATIONAL_WORK_STATUS.NO_STAGES],
-      current_stage_title: '',
-      has_work_stages: false,
-    };
-  }
-
-  const allCompleted = nonCancelled.every((stage) => isWorkStageCompleted(stage));
-  if (allCompleted) {
-    return {
-      key: OPERATIONAL_WORK_STATUS.COMPLETED,
-      label: OPERATIONAL_WORK_STATUS_LABELS[OPERATIONAL_WORK_STATUS.COMPLETED],
-      current_stage_title: '',
-      has_work_stages: true,
-    };
-  }
-
-  const activeStage = getActiveWorkStage(stages);
-  const hasAnyProgress = nonCancelled.some(hasStageWorkProgress);
-
-  if (!hasAnyProgress) {
-    const nextStage = activeStage || nonCancelled[0] || null;
-    return {
-      key: OPERATIONAL_WORK_STATUS.NOT_STARTED,
-      label: OPERATIONAL_WORK_STATUS_LABELS[OPERATIONAL_WORK_STATUS.NOT_STARTED],
-      current_stage_title: nextStage?.title || '',
-      has_work_stages: true,
-    };
+  if (COMPLETED_COMMERCIAL_STATUSES.has(commercialStatus) || allStagesCompleted) {
+    operationalStatus = PROJECT_WORK_STATE.COMPLETED;
+  } else if (hasWorkflowStages) {
+    operationalStatus = PROJECT_WORK_STATE.IN_WORK;
+  } else if (
+    commercialStatus === 'signed'
+    || IN_WORK_COMMERCIAL_STATUSES.has(commercialStatus)
+  ) {
+    operationalStatus = commercialStatus === 'signed'
+      ? PROJECT_WORK_STATE.NO_STAGES
+      : PROJECT_WORK_STATE.IN_WORK;
+  } else if (!PROPOSAL_COMMERCIAL_STATUSES.has(commercialStatus)) {
+    operationalStatus = PROJECT_WORK_STATE.NO_STAGES;
   }
 
   return {
-    key: OPERATIONAL_WORK_STATUS.IN_PROGRESS,
-    label: OPERATIONAL_WORK_STATUS_LABELS[OPERATIONAL_WORK_STATUS.IN_PROGRESS],
-    current_stage_title: activeStage?.title || '',
-    has_work_stages: true,
+    commercialStatus,
+    operationalStatus,
+    operationalStatusLabel: PROJECT_WORK_STATE_LABELS[operationalStatus] || operationalStatus,
+    currentStageTitle,
+    completedStagesCount,
+    totalStagesCount,
+    hasWorkflowStages,
+    allStagesCompleted,
+  };
+}
+
+/** @deprecated Use getProjectWorkState(project, workStages) */
+export function getProjectOperationalWorkStatus(stages = [], project = {}) {
+  const workState = getProjectWorkState(project, stages);
+
+  return {
+    key: workState.operationalStatus,
+    label: workState.operationalStatusLabel,
+    current_stage_title: workState.currentStageTitle,
+    has_work_stages: workState.hasWorkflowStages,
   };
 }
 

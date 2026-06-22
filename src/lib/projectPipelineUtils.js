@@ -12,10 +12,12 @@ import {
 import {
   getActiveWorkStage,
   getNonCancelledWorkStages,
-  getProjectOperationalWorkStatus,
+  getProjectWorkState,
   isWorkStageCompleted,
-  OPERATIONAL_WORK_STATUS,
+  PROJECT_WORK_STATE,
 } from '@/lib/workStageLogic';
+
+export { getProjectWorkState, PROJECT_WORK_STATE } from '@/lib/workStageLogic';
 import {
   getVisibleReminders,
   sortVisibleReminders,
@@ -47,10 +49,8 @@ export const PIPELINE_GROUP_ORDER = [
   'proposal_pricing',
   'proposal_waiting',
   'accepted_without_workflow',
-  'accepted_with_workflow',
   'in_work_without_workflow',
   'in_work_with_active_stage',
-  'in_work_without_active_stage',
   'planning_completed',
   'rejected_cancelled',
   'other',
@@ -60,10 +60,8 @@ export const PIPELINE_GROUP_LABELS = {
   proposal_pricing: 'הצעות בתמחור',
   proposal_waiting: 'הצעות ממתינות לתגובה',
   accepted_without_workflow: 'התקבלה - דורש הגדרת שלבי עבודה',
-  accepted_with_workflow: 'התקבלה - עם שלבי עבודה',
   in_work_without_workflow: 'בעבודה - ללא שלבי עבודה',
   in_work_with_active_stage: 'בעבודה - עם שלב פעיל',
-  in_work_without_active_stage: 'בעבודה - עם שלבים אך בלי שלב פעיל',
   planning_completed: 'בוצע - תכנון הושלם',
   rejected_cancelled: 'לא התקבלו / בוטלו',
   other: 'אחר',
@@ -85,10 +83,8 @@ export const PIPELINE_GROUP_EMPTY_MESSAGES = {
   proposal_pricing: 'אין פרויקטים בקבוצה זו',
   proposal_waiting: 'אין פרויקטים בקבוצה זו',
   accepted_without_workflow: 'אין פרויקטים בקבוצה זו',
-  accepted_with_workflow: 'אין פרויקטים עם שלבי עבודה מוגדרים עדיין',
   in_work_without_workflow: 'אין פרויקטים בקבוצה זו',
   in_work_with_active_stage: 'אין פרויקטים עם שלב פעיל כרגע',
-  in_work_without_active_stage: 'אין פרויקטים עם שלבים ללא שלב פעיל',
   planning_completed: 'אין פרויקטים בקבוצה זו',
   rejected_cancelled: 'אין פרויקטים בקבוצה זו',
   other: 'אין פרויקטים בקבוצה זו',
@@ -294,67 +290,43 @@ export function getProjectCollectionSummary(project, collectionDues = []) {
   };
 }
 
-function analyzeWorkStages(stages = []) {
-  const nonCancelled = getNonCancelledWorkStages(stages);
-  const activeStage = getActiveWorkStage(stages);
-  const completedCount = nonCancelled.filter((stage) => isWorkStageCompleted(stage)).length;
-  const operationalWorkStatus = getProjectOperationalWorkStatus(stages);
+function buildWorkStageInfo(project, stages = []) {
+  const workState = getProjectWorkState(project, stages);
 
   return {
-    has_work_stages: nonCancelled.length > 0,
-    work_stage_count: nonCancelled.length,
-    completed_work_stage_count: completedCount,
-    active_work_stage_title: activeStage?.title || '',
-    has_active_work_stage: Boolean(activeStage),
-    work_progress_label: getProjectWorkProgressLabel({}, stages),
-    operational_work_status_key: operationalWorkStatus.key,
-    operational_work_status_label: operationalWorkStatus.label,
-    operational_current_stage_title: operationalWorkStatus.current_stage_title,
+    workState,
+    has_work_stages: workState.hasWorkflowStages,
+    work_stage_count: workState.totalStagesCount,
+    completed_work_stage_count: workState.completedStagesCount,
+    active_work_stage_title: workState.currentStageTitle,
+    has_active_work_stage: workState.hasWorkflowStages && Boolean(workState.currentStageTitle),
+    work_progress_label: getProjectWorkProgressLabel(project, stages),
+    operational_work_status_key: workState.operationalStatus,
+    operational_work_status_label: workState.operationalStatusLabel,
+    operational_current_stage_title: workState.currentStageTitle,
   };
 }
 
 export function resolvePipelineGroupKey(project, workStageInfo) {
-  const status = String(project?.status || '').trim();
-  const {
-    has_work_stages: hasWorkStages,
-    has_active_work_stage: hasActiveWorkStage,
-    operational_work_status_key: operationalKey,
-  } = workStageInfo;
+  const workState = workStageInfo?.workState || getProjectWorkState(project, []);
+  const status = workState.commercialStatus;
 
   if (status === 'pricing' || status === 'lead') return 'proposal_pricing';
   if (status === 'waiting') return 'proposal_waiting';
   if (status === 'rejected' || status === 'cancelled') return 'rejected_cancelled';
   if (status === 'completed' || status === 'collection_completed') return 'planning_completed';
+  if (workState.operationalStatus === PROJECT_WORK_STATE.COMPLETED) return 'planning_completed';
 
-  if (operationalKey === OPERATIONAL_WORK_STATUS.COMPLETED) {
-    return 'planning_completed';
-  }
-
-  if (operationalKey === OPERATIONAL_WORK_STATUS.NO_STAGES) {
+  if (workState.operationalStatus === PROJECT_WORK_STATE.NO_STAGES) {
+    if (status === 'signed') return 'accepted_without_workflow';
     if (['execution', 'planning', 'submission'].includes(status)) {
       return 'in_work_without_workflow';
     }
-    if (status === 'signed') return 'accepted_without_workflow';
   }
 
-  if (operationalKey === OPERATIONAL_WORK_STATUS.NOT_STARTED) {
-    return 'accepted_with_workflow';
-  }
-
-  if (operationalKey === OPERATIONAL_WORK_STATUS.IN_PROGRESS) {
-    if (hasWorkStages && hasActiveWorkStage) return 'in_work_with_active_stage';
-    if (hasWorkStages) return 'in_work_without_active_stage';
+  if (workState.operationalStatus === PROJECT_WORK_STATE.IN_WORK) {
+    if (workState.hasWorkflowStages) return 'in_work_with_active_stage';
     return 'in_work_without_workflow';
-  }
-
-  if (status === 'signed' && !hasWorkStages) return 'accepted_without_workflow';
-  if (status === 'signed' && hasWorkStages) return 'accepted_with_workflow';
-  if (status === 'execution' && !hasWorkStages) return 'in_work_without_workflow';
-  if (status === 'execution' && hasWorkStages && hasActiveWorkStage) {
-    return 'in_work_with_active_stage';
-  }
-  if (status === 'execution' && hasWorkStages && !hasActiveWorkStage) {
-    return 'in_work_without_active_stage';
   }
 
   return 'other';
@@ -404,8 +376,9 @@ export function getWorkStagesCompactDisplay(row) {
   }
 
   const primary = `בוצעו ${row.completed_work_stage_count}/${row.work_stage_count}`;
-  const secondary = row.active_work_stage_title
-    ? `פעיל: ${row.active_work_stage_title}`
+  const stageTitle = row.operational_current_stage_title || row.active_work_stage_title;
+  const secondary = stageTitle && row.operational_work_status_key === PROJECT_WORK_STATE.IN_WORK
+    ? `פעיל: ${stageTitle}`
     : '';
 
   return { primary, secondary };
@@ -426,15 +399,9 @@ export function matchesQuickFilter(row, quickFilter) {
     case PIPELINE_QUICK_FILTER_KEYS.PROPOSALS:
       return ['pricing', 'waiting'].includes(row.status);
     case PIPELINE_QUICK_FILTER_KEYS.ACCEPTED:
-      return row.status === 'signed'
-        && row.operational_work_status_key !== OPERATIONAL_WORK_STATUS.IN_PROGRESS
-        && row.operational_work_status_key !== OPERATIONAL_WORK_STATUS.COMPLETED;
+      return row.status === 'signed' && row.work_stage_count === 0;
     case PIPELINE_QUICK_FILTER_KEYS.IN_WORK:
-      return row.operational_work_status_key === OPERATIONAL_WORK_STATUS.IN_PROGRESS
-        || (
-          row.status === 'execution'
-          && row.operational_work_status_key !== OPERATIONAL_WORK_STATUS.COMPLETED
-        );
+      return row.operational_work_status_key === PROJECT_WORK_STATE.IN_WORK;
     case PIPELINE_QUICK_FILTER_KEYS.NO_WORK_STAGES:
       return row.work_stage_count === 0;
     case PIPELINE_QUICK_FILTER_KEYS.OPEN_COLLECTION:
@@ -443,7 +410,7 @@ export function matchesQuickFilter(row, quickFilter) {
       return row.construction_status === CONSTRUCTION_STATUS_NOT_UPDATED
         && ['signed', 'execution', 'completed'].includes(row.status);
     case PIPELINE_QUICK_FILTER_KEYS.COMPLETED:
-      return row.group_key === 'planning_completed';
+      return row.operational_work_status_key === PROJECT_WORK_STATE.COMPLETED;
     case PIPELINE_QUICK_FILTER_KEYS.PRICING:
       return row.group_key === 'proposal_pricing';
     case PIPELINE_QUICK_FILTER_KEYS.WAITING:
@@ -635,7 +602,7 @@ export function buildProjectPipelineRow(project, {
   stages = [],
   collectionDues = [],
 } = {}) {
-  const workStageInfo = analyzeWorkStages(stages);
+  const workStageInfo = buildWorkStageInfo(project, stages);
   const collectionSummary = getProjectCollectionSummary(project, collectionDues);
   const constructionSummary = getProjectConstructionStatusSummary(project);
   const groupKey = resolvePipelineGroupKey(project, workStageInfo);
@@ -756,9 +723,7 @@ export function buildPipelineSummary(rows = []) {
     ).length,
     completedCount: rows.filter((row) => row.group_key === 'planning_completed').length,
     withWorkflowCount: rows.filter(
-      (row) => row.group_key === 'accepted_with_workflow'
-        || row.group_key === 'in_work_with_active_stage'
-        || row.group_key === 'in_work_without_active_stage',
+      (row) => row.group_key === 'in_work_with_active_stage',
     ).length,
     openCollectionCount: rows.filter((row) => row.has_open_collection_due).length,
     constructionNotUpdatedCount: rows.filter(
