@@ -7,6 +7,7 @@ export const ADMIN_ACCESS_DENIED_MESSAGE = 'אין הרשאה לצפייה בד�
 
 const ADMIN_EMAIL_ALLOWLIST = [
   'tziyon31@gmail.com',
+  'tziyon31@hotmail.com',
   'aronaron81@gmail.com',
 ];
 
