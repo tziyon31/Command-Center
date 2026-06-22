@@ -46,11 +46,11 @@ export const PROJECT_WORK_STATUS_LABELS = {
 export const PROJECT_COMMERCIAL_STATUS_LABELS = PROJECT_WORK_STATUS_LABELS;
 
 export const PIPELINE_GROUP_ORDER = [
-  'proposal_pricing',
-  'proposal_waiting',
-  'accepted_without_workflow',
-  'in_work_without_workflow',
   'in_work_with_active_stage',
+  'in_work_without_workflow',
+  'accepted_without_workflow',
+  'proposal_waiting',
+  'proposal_pricing',
   'planning_completed',
   'rejected_cancelled',
   'other',
@@ -68,10 +68,9 @@ export const PIPELINE_GROUP_LABELS = {
 };
 
 export const PIPELINE_GROUP_EXPANDED_BY_DEFAULT = new Set([
-  'proposal_pricing',
-  'proposal_waiting',
-  'accepted_without_workflow',
+  'in_work_with_active_stage',
   'in_work_without_workflow',
+  'accepted_without_workflow',
 ]);
 
 export const PIPELINE_GROUP_COLLAPSED_BY_DEFAULT = new Set([

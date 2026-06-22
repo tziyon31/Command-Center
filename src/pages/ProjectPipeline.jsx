@@ -64,16 +64,16 @@ const QUICK_FILTER_BUTTONS = [
 
 const SUMMARY_CARDS = [
   {
-    label: 'בתמחור',
-    countKey: 'pricingCount',
-    quickFilter: PIPELINE_QUICK_FILTER_KEYS.PRICING,
-    groupKey: 'proposal_pricing',
+    label: 'בעבודה עם שלב פעיל',
+    countKey: 'inWorkWithActiveStageCount',
+    quickFilter: PIPELINE_QUICK_FILTER_KEYS.IN_WORK,
+    groupKey: 'in_work_with_active_stage',
   },
   {
-    label: 'ממתינות לתגובה',
-    countKey: 'waitingCount',
-    quickFilter: PIPELINE_QUICK_FILTER_KEYS.WAITING,
-    groupKey: 'proposal_waiting',
+    label: 'בעבודה ללא שלבים',
+    countKey: 'inWorkWithoutWorkflowCount',
+    quickFilter: PIPELINE_QUICK_FILTER_KEYS.IN_WORK_NO_STAGES,
+    groupKey: 'in_work_without_workflow',
   },
   {
     label: 'התקבלה ללא שלבים',
@@ -82,10 +82,16 @@ const SUMMARY_CARDS = [
     groupKey: 'accepted_without_workflow',
   },
   {
-    label: 'בעבודה ללא שלבים',
-    countKey: 'inWorkWithoutWorkflowCount',
-    quickFilter: PIPELINE_QUICK_FILTER_KEYS.IN_WORK_NO_STAGES,
-    groupKey: 'in_work_without_workflow',
+    label: 'ממתינות לתגובה',
+    countKey: 'waitingCount',
+    quickFilter: PIPELINE_QUICK_FILTER_KEYS.WAITING,
+    groupKey: 'proposal_waiting',
+  },
+  {
+    label: 'בתמחור',
+    countKey: 'pricingCount',
+    quickFilter: PIPELINE_QUICK_FILTER_KEYS.PRICING,
+    groupKey: 'proposal_pricing',
   },
   {
     label: 'גבייה פתוחה',
