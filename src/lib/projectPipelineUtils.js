@@ -168,6 +168,14 @@ export function isWorkStagesReminder(reminder) {
   );
 }
 
+export function shouldHideStaleWorkStagesSetupReminderForPipelineRow(reminder, row) {
+  const workStageCount = Number(row?.work_stage_count ?? 0);
+  if (workStageCount <= 0) return false;
+
+  const conditionKey = String(reminder?.condition_key || '').trim();
+  return conditionKey.startsWith(PROJECT_NEEDS_WORK_STAGES_PREFIX);
+}
+
 export function findWorkStagesReminderForProject(projectOrProjectId, activeReminders = []) {
   const projectId = typeof projectOrProjectId === 'object'
     ? String(projectOrProjectId?.id || projectOrProjectId?.project_id || '').trim()
@@ -588,7 +596,9 @@ export function enrichPipelineRowsWithReminders(rows = [], reminderMapResult = {
   const byProjectId = reminderMapResult.byProjectId || {};
 
   return rows.map((row) => {
-    const reminders = byProjectId[row.project_id] || [];
+    const reminders = (byProjectId[row.project_id] || []).filter(
+      (reminder) => !shouldHideStaleWorkStagesSetupReminderForPipelineRow(reminder, row),
+    );
 
     return {
       ...row,

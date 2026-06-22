@@ -2,13 +2,14 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
-import { canAccessAdminPage } from '@/lib/adminAccess';
+import { canAccessAdminPage, canRunAdminMutations } from '@/lib/adminAccess';
 import { createPageUrl } from '@/utils';
 import CreateProjectDialog from '@/components/workflow/CreateProjectDialog';
 import {
   fetchWorkStagesForProjects,
   logPipelineWorkStageConsistencyDiagnostics,
 } from '@/lib/workStageLoader';
+import { reconcileStaleWorkStagesSetupReminders } from '@/lib/workStagesSetupReminderReconciliation';
 import {
   buildPipelineSummary,
   buildProjectPipelineRows,
@@ -426,8 +427,11 @@ const INITIAL_FILTERS = {
 };
 
 export default function ProjectPipeline() {
+  const queryClient = useQueryClient();
   const [filters, setFilters] = useState(INITIAL_FILTERS);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [setupReminderReconcileReport, setSetupReminderReconcileReport] = useState(null);
+  const [isReconcilingSetupReminders, setIsReconcilingSetupReminders] = useState(false);
 
   const { data: projects = [], isLoading: isLoadingProjects } = useQuery({
     queryKey: ['projects'],
@@ -595,6 +599,44 @@ export default function ProjectPipeline() {
   });
 
   const showAdminAuditLinks = canAccessAdminPage(currentUser);
+  const canRunSetupReminderReconcile = canRunAdminMutations(currentUser);
+
+  const handleReconcileStaleSetupReminders = async () => {
+    const confirmed = window.confirm(
+      'להריץ ניקוי חד-פעמי לתזכורות "להגדיר שלבי עבודה" עבור פרויקטים שכבר יש להם שלבי עבודה?',
+    );
+    if (!confirmed) return;
+
+    setIsReconcilingSetupReminders(true);
+    setSetupReminderReconcileReport(null);
+
+    try {
+      const report = await reconcileStaleWorkStagesSetupReminders({
+        projects,
+        workStages,
+      });
+      setSetupReminderReconcileReport(report);
+
+      if (report.staleSetupRemindersResolved > 0) {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['reminders'] }),
+          queryClient.invalidateQueries({ queryKey: ['reminders', 'visible'] }),
+          queryClient.invalidateQueries({ queryKey: ['reminders', 'pipeline-visible'] }),
+        ]);
+      }
+    } catch (error) {
+      console.error('[ProjectPipeline] setup reminder reconciliation failed', error);
+      setSetupReminderReconcileReport({
+        projectsChecked: projects.length,
+        projectsWithWorkStages: 0,
+        staleSetupRemindersFound: 0,
+        staleSetupRemindersResolved: 0,
+        errors: [{ stage: 'reconcile', message: error?.message || String(error) }],
+      });
+    } finally {
+      setIsReconcilingSetupReminders(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6" dir="rtl">
@@ -628,10 +670,53 @@ export default function ProjectPipeline() {
                     Preview התאמת חוקי תזכורות
                   </Link>
                 </Button>
+                {canRunSetupReminderReconcile ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={isReconcilingSetupReminders || isLoading}
+                    onClick={handleReconcileStaleSetupReminders}
+                  >
+                    {isReconcilingSetupReminders
+                      ? 'מנקה תזכורות שלבים...'
+                      : 'נקה תזכורות שלבים ישנות'}
+                  </Button>
+                ) : null}
               </>
             ) : null}
           </div>
         </div>
+
+        {setupReminderReconcileReport ? (
+          <Card className="border-amber-200 bg-amber-50/60">
+            <CardContent className="pt-6">
+              <div className="text-sm font-medium mb-2">דוח ניקוי תזכורות שלבי עבודה</div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                <div>
+                  <div className="text-muted-foreground">פרויקטים שנבדקו</div>
+                  <div className="font-semibold">{setupReminderReconcileReport.projectsChecked}</div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground">פרויקטים עם שלבים</div>
+                  <div className="font-semibold">{setupReminderReconcileReport.projectsWithWorkStages}</div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground">תזכורות setup ישנות</div>
+                  <div className="font-semibold">{setupReminderReconcileReport.staleSetupRemindersFound}</div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground">תזכורות שנסגרו</div>
+                  <div className="font-semibold">{setupReminderReconcileReport.staleSetupRemindersResolved}</div>
+                </div>
+              </div>
+              {setupReminderReconcileReport.errors?.length ? (
+                <p className="text-sm text-destructive mt-3">
+                  שגיאות: {setupReminderReconcileReport.errors.length}
+                </p>
+              ) : null}
+            </CardContent>
+          </Card>
+        ) : null}
 
         <CreateProjectDialog
           open={createDialogOpen}
