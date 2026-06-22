@@ -2,12 +2,86 @@ import React, { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Badge } from '@/components/ui/badge';
 import {
-  buildPipelineReminderCompactSummary,
-} from '@/lib/pipelineReminderDisplay';
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from '@/components/ui/hover-card';
 import PipelineReminderDetailDialog from './PipelineReminderDetailDialog';
 
 function formatReminderCountLabel(count) {
   return count === 1 ? 'תזכורת אחת' : `${count} תזכורות`;
+}
+
+function formatReminderDateTime(value) {
+  if (!value) return '';
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+
+  return new Intl.DateTimeFormat('he-IL', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  }).format(date);
+}
+
+function ReminderCountBadge({ children, className = 'text-xs' }) {
+  return (
+    <Badge variant="secondary" className={`font-normal ${className}`}>
+      {children}
+    </Badge>
+  );
+}
+
+function ReminderListItems({
+  reminders = [],
+  onReminderClick,
+  size = 'inline',
+  showAll = false,
+}) {
+  const visibleReminders = showAll ? reminders : reminders.slice(0, 2);
+  const remainingCount = showAll ? 0 : Math.max(reminders.length - visibleReminders.length, 0);
+  const titleClassName = size === 'magnified'
+    ? 'block text-right text-base leading-snug text-primary hover:underline'
+    : 'block text-right text-xs text-primary hover:underline';
+  const metaClassName = size === 'magnified'
+    ? 'text-sm text-muted-foreground'
+    : 'text-xs text-muted-foreground';
+
+  return (
+    <div className={size === 'magnified' ? 'space-y-2' : 'space-y-1'}>
+      {visibleReminders.map((reminder) => {
+        const nextLabel = formatReminderDateTime(reminder.next_remind_at);
+        const title = reminder.title || 'תזכורת';
+
+        return (
+          <button
+            key={reminder.id}
+            type="button"
+            className={titleClassName}
+            title="לחץ לפרטי התזכורת"
+            onClick={() => onReminderClick(reminder)}
+          >
+            {title}
+            {nextLabel ? (
+              <span className={metaClassName}>
+                {' '}
+                ·
+                {' '}
+                {nextLabel}
+              </span>
+            ) : null}
+          </button>
+        );
+      })}
+      {remainingCount > 0 ? (
+        <div className={metaClassName}>
+          ועוד
+          {' '}
+          {remainingCount}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export default function PipelineRemindersCell({
@@ -19,10 +93,8 @@ export default function PipelineRemindersCell({
   const [selectedReminder, setSelectedReminder] = useState(null);
 
   if (!reminders.length) {
-    return <span className="text-muted-foreground text-xs">-</span>;
+    return <span className="text-muted-foreground">-</span>;
   }
-
-  const compactSummary = buildPipelineReminderCompactSummary(reminders, { maxLines: 2 });
 
   const handleSnoozed = () => {
     queryClient.invalidateQueries({ queryKey: ['reminders', 'pipeline-visible'] });
@@ -34,44 +106,50 @@ export default function PipelineRemindersCell({
     setSelectedReminder(reminder);
   };
 
+  const handleTouchFallbackClick = (event) => {
+    if (window.matchMedia('(hover: hover)').matches) return;
+    if (event.target !== event.currentTarget) return;
+    openReminder(reminders[0]);
+  };
+
   return (
     <>
-      <div className="min-w-[120px] max-w-[170px] space-y-0.5">
-        <button
-          type="button"
-          className="inline-flex"
-          title={compactSummary.combinedText || formatReminderCountLabel(reminders.length)}
-          onClick={() => openReminder(reminders[0])}
+      <HoverCard openDelay={150} closeDelay={100}>
+        <HoverCardTrigger asChild>
+          <div
+            className="min-w-[150px] space-y-1 text-right"
+            dir="rtl"
+            onClick={handleTouchFallbackClick}
+          >
+            <ReminderCountBadge>{formatReminderCountLabel(reminders.length)}</ReminderCountBadge>
+            <ReminderListItems
+              reminders={reminders}
+              onReminderClick={openReminder}
+              size="inline"
+            />
+          </div>
+        </HoverCardTrigger>
+        <HoverCardContent
+          side="left"
+          align="start"
+          sideOffset={8}
+          className="z-[100] w-auto min-w-[300px] max-w-[460px] border bg-popover p-4 shadow-lg"
+          dir="rtl"
         >
-          <Badge variant="secondary" className="font-normal text-[11px] px-1.5 py-0 h-5 hover:bg-secondary/80">
-            {formatReminderCountLabel(reminders.length)}
-          </Badge>
-        </button>
-
-        {compactSummary.lines.map((line) => (
-          <button
-            key={line.id}
-            type="button"
-            className="block w-full truncate text-right text-[11px] leading-tight text-primary hover:underline"
-            title={line.fullTitle}
-            onClick={() => openReminder(line.reminder)}
-          >
-            {line.displayText}
-          </button>
-        ))}
-
-        {compactSummary.hiddenCount > 0 ? (
-          <button
-            type="button"
-            className="block text-right text-[11px] leading-tight text-muted-foreground hover:underline"
-            onClick={() => openReminder(reminders[2] || reminders[0])}
-          >
-            ועוד
-            {' '}
-            {compactSummary.hiddenCount}
-          </button>
-        ) : null}
-      </div>
+          <div className="space-y-2 text-right">
+            <div className="text-sm font-medium text-muted-foreground">תזכורות לפרויקט</div>
+            <Badge variant="secondary" className="font-normal text-sm">
+              {formatReminderCountLabel(reminders.length)}
+            </Badge>
+            <ReminderListItems
+              reminders={reminders}
+              onReminderClick={openReminder}
+              size="magnified"
+              showAll
+            />
+          </div>
+        </HoverCardContent>
+      </HoverCard>
 
       <PipelineReminderDetailDialog
         reminder={selectedReminder}
