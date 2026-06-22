@@ -106,6 +106,13 @@ export default function PipelineRemindersCell({
     setSelectedReminder(reminder);
   };
 
+  const displayProjectName = String(
+    projectName || reminders[0]?.project_name || '',
+  ).trim();
+  const displayClientName = String(
+    clientName || reminders[0]?.client_name || '',
+  ).trim();
+
   const handleTouchFallbackClick = (event) => {
     if (window.matchMedia('(hover: hover)').matches) return;
     if (event.target !== event.currentTarget) return;
@@ -130,17 +137,31 @@ export default function PipelineRemindersCell({
           </div>
         </HoverCardTrigger>
         <HoverCardContent
-          side="left"
-          align="start"
-          sideOffset={8}
-          className="z-[100] w-auto min-w-[300px] max-w-[460px] border bg-popover p-4 shadow-lg"
+          side="top"
+          align="center"
+          sideOffset={10}
+          collisionPadding={16}
+          className="z-[100] w-auto min-w-[300px] max-w-[min(460px,calc(100vw-2rem))] border bg-popover p-4 shadow-lg"
           dir="rtl"
         >
-          <div className="space-y-2 text-right">
-            <div className="text-sm font-medium text-muted-foreground">תזכורות לפרויקט</div>
-            <Badge variant="secondary" className="font-normal text-sm">
+          <div className="space-y-3 text-right">
+            <div>
+              <div className="text-base font-semibold leading-snug">
+                תזכורות לפרויקט:
+                {' '}
+                {displayProjectName || 'לא צוין'}
+              </div>
+              {displayClientName ? (
+                <div className="text-sm text-muted-foreground mt-1">
+                  לקוח:
+                  {' '}
+                  {displayClientName}
+                </div>
+              ) : null}
+            </div>
+            <ReminderCountBadge className="text-sm">
               {formatReminderCountLabel(reminders.length)}
-            </Badge>
+            </ReminderCountBadge>
             <ReminderListItems
               reminders={reminders}
               onReminderClick={openReminder}
