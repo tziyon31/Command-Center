@@ -165,7 +165,7 @@ export default function ProjectReminderCoverageAudit() {
         </div>
         <div className="flex gap-2">
           <Button type="button" variant="outline" asChild>
-            <Link to={createPageUrl('ProjectPipeline')}>חזרה ל-Pipeline</Link>
+            <Link to={createPageUrl('Projects')}>חזרה לפרויקטים</Link>
           </Button>
           <Button type="button" variant="outline" asChild>
             <Link to={createPageUrl('ProjectReminderIntegrityAudit')}>בדוק תקינות תזכורות</Link>

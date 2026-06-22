@@ -53,7 +53,6 @@ import ClientForm from './pages/ClientForm';
 import Dashboard from './pages/Dashboard';
 import Inquiries from './pages/Inquiries';
 import InquiryForm from './pages/InquiryForm';
-import Projects from './pages/Projects';
 import Proposals from './pages/Proposals';
 import ProposalForm from './pages/ProposalForm';
 import SignedProposals from './pages/SignedProposals';
@@ -80,7 +79,7 @@ export const PAGES = {
     "Dashboard": Dashboard,
     "Inquiries": Inquiries,
     "InquiryForm": InquiryForm,
-    "Projects": Projects,
+    "Projects": ProjectPipeline,
     "Proposals": Proposals,
     "ProposalForm": ProposalForm,
     "SignedProposals": SignedProposals,
@@ -92,7 +91,6 @@ export const PAGES = {
     "CollectionDueForm": CollectionDueForm,
     "Users": Users,
     "ProjectLifecycleAudit": ProjectLifecycleAudit,
-    "ProjectPipeline": ProjectPipeline,
     "ProjectReminderCoverageAudit": ProjectReminderCoverageAudit,
     "ProjectReminderIntegrityAudit": ProjectReminderIntegrityAudit,
     "ProjectStatusTransitionAudit": ProjectStatusTransitionAudit,

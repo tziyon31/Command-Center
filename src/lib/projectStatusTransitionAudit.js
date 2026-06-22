@@ -39,9 +39,9 @@ const PROJECT_CREATE_LOCATIONS = [
     notes: 'Payload via buildProjectCreatePayloadFromForm; status comes from the form Select.',
   },
   {
-    file: 'src/pages/Projects.jsx',
-    line: 58,
-    caller: 'createMutation',
+    file: 'src/pages/ProjectPipeline.jsx',
+    line: 568,
+    caller: 'CreateProjectDialog',
     trigger: 'UI — דף פרויקטים, יצירה',
     statusWritten: "form value, default 'pricing'",
     automatic: false,

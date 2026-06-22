@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { base44 } from '@/api/base44Client';
 import { canAccessAdminPage } from '@/lib/adminAccess';
 import { createPageUrl } from '@/utils';
+import CreateProjectDialog from '@/components/workflow/CreateProjectDialog';
 import {
   buildPipelineSummary,
   buildProjectPipelineRows,
@@ -41,6 +42,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
+import { Plus } from 'lucide-react';
 
 const STATUS_FILTER_OPTIONS = Object.entries(PROJECT_WORK_STATUS_LABELS);
 
@@ -407,6 +409,7 @@ const INITIAL_FILTERS = {
 
 export default function ProjectPipeline() {
   const [filters, setFilters] = useState(INITIAL_FILTERS);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
 
   const { data: projects = [], isLoading: isLoadingProjects } = useQuery({
     queryKey: ['projects'],
@@ -560,31 +563,42 @@ export default function ProjectPipeline() {
       <div className="max-w-[1400px] mx-auto space-y-6">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h1 className="text-3xl font-bold">Pipeline פרויקטים</h1>
+            <h1 className="text-3xl font-bold">פרויקטים</h1>
             <p className="text-muted-foreground mt-2">
               תמונת מצב לפי סטטוס עבודה, שלבי עבודה, סטטוס בנייה וגבייה.
             </p>
           </div>
-          {showAdminAuditLinks ? (
-            <div className="flex flex-wrap gap-2 shrink-0 self-start">
-              <Button asChild variant="outline" size="sm">
-                <Link to={createPageUrl('ProjectReminderCoverageAudit')}>
-                  בדוק כיסוי תזכורות
-                </Link>
-              </Button>
-              <Button asChild variant="outline" size="sm">
-                <Link to={createPageUrl('ProjectReminderIntegrityAudit')}>
-                  בדוק תקינות תזכורות
-                </Link>
-              </Button>
-              <Button asChild variant="outline" size="sm">
-                <Link to={createPageUrl('ProjectReminderRulesPreview')}>
-                  Preview התאמת חוקי תזכורות
-                </Link>
-              </Button>
-            </div>
-          ) : null}
+          <div className="flex flex-wrap gap-2 shrink-0 self-start">
+            <Button size="lg" onClick={() => setCreateDialogOpen(true)}>
+              <Plus className="w-5 h-5 ml-2" />
+              פרויקט חדש
+            </Button>
+            {showAdminAuditLinks ? (
+              <>
+                <Button asChild variant="outline" size="sm">
+                  <Link to={createPageUrl('ProjectReminderCoverageAudit')}>
+                    בדוק כיסוי תזכורות
+                  </Link>
+                </Button>
+                <Button asChild variant="outline" size="sm">
+                  <Link to={createPageUrl('ProjectReminderIntegrityAudit')}>
+                    בדוק תקינות תזכורות
+                  </Link>
+                </Button>
+                <Button asChild variant="outline" size="sm">
+                  <Link to={createPageUrl('ProjectReminderRulesPreview')}>
+                    Preview התאמת חוקי תזכורות
+                  </Link>
+                </Button>
+              </>
+            ) : null}
+          </div>
         </div>
+
+        <CreateProjectDialog
+          open={createDialogOpen}
+          onOpenChange={setCreateDialogOpen}
+        />
 
         {isLoading ? (
           <div className="flex items-center justify-center min-h-[240px]">

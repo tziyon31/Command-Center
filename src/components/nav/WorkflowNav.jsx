@@ -10,7 +10,6 @@ const REGISTERED_PAGE_NAMES = new Set([
   'Inquiries',
   'Clients',
   'Projects',
-  'ProjectPipeline',
   'Proposals',
   'SignedProposals',
   'WorkStages',
@@ -22,7 +21,6 @@ const WORKFLOW_ITEMS = [
   { pageName: 'Inquiries', label: 'פניות', roles: ['admin', 'office_manager'] },
   { pageName: 'Clients', label: 'לקוחות', roles: ['admin', 'office_manager'] },
   { pageName: 'Projects', label: 'פרויקטים', roles: ['admin', 'office_manager', 'project_worker'] },
-  { pageName: 'ProjectPipeline', label: 'Pipeline פרויקטים', roles: ['admin', 'office_manager', 'project_worker'] },
   { pageName: 'Proposals', label: 'הצעות מחיר', roles: ['admin', 'office_manager'] },
   { pageName: 'SignedProposals', label: 'הצעות חתומות', roles: ['admin', 'office_manager'] },
   { pageName: 'WorkStages', label: 'שלבי עבודה', roles: ['admin', 'office_manager'] },
@@ -36,7 +34,6 @@ const WORKFLOW_ACTIVE_PAGES = new Set([
   'Clients',
   'ClientDetails',
   'Projects',
-  'ProjectPipeline',
   'ProjectDetails',
   'InvoiceUpload',
   'SignedProposals',
@@ -77,10 +74,6 @@ const isWorkflowItemActive = (pageName, currentPageName) => {
       currentPageName === 'ProjectDetails' ||
       currentPageName === 'InvoiceUpload'
     );
-  }
-
-  if (pageName === 'ProjectPipeline') {
-    return currentPageName === 'ProjectPipeline';
   }
 
   if (pageName === 'Proposals') {

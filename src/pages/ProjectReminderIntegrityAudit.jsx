@@ -187,7 +187,7 @@ export default function ProjectReminderIntegrityAudit() {
         </div>
         <div className="flex gap-2">
           <Button type="button" variant="outline" asChild>
-            <Link to={createPageUrl('ProjectPipeline')}>חזרה ל-Pipeline</Link>
+            <Link to={createPageUrl('Projects')}>חזרה לפרויקטים</Link>
           </Button>
           <Button type="button" onClick={handleRunAudit} disabled={running}>
             {running ? 'מריץ אבחון...' : 'הרץ אבחון'}

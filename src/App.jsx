@@ -2,7 +2,7 @@ import { Toaster } from "@/components/ui/toaster"
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/lib/query-client'
 import { pagesConfig } from './pages.config'
-import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
+import { BrowserRouter as Router, Navigate, Route, Routes } from 'react-router-dom';
 import PageNotFound from './lib/PageNotFound';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
 import UserNotRegisteredError from '@/components/UserNotRegisteredError';
@@ -65,6 +65,7 @@ const AuthenticatedApp = () => {
       <Route path="/ClientForm" element={<LayoutWrapper currentPageName="ClientForm"><ClientForm /></LayoutWrapper>} />
       <Route path="/InvoiceUpload" element={<LayoutWrapper currentPageName="InvoiceUpload"><InvoiceUpload /></LayoutWrapper>} />
       <Route path="/ProjectDetails" element={<LayoutWrapper currentPageName="ProjectDetails"><ProjectDetails /></LayoutWrapper>} />
+      <Route path="/ProjectPipeline" element={<Navigate to="/Projects" replace />} />
       <Route path="*" element={<PageNotFound />} />
     </Routes>
   );

@@ -268,7 +268,7 @@ export default function ProjectStatusTransitionAudit() {
         </div>
         <div className="flex gap-2">
           <Button type="button" variant="outline" asChild>
-            <Link to={createPageUrl('ProjectPipeline')}>חזרה ל-Pipeline</Link>
+            <Link to={createPageUrl('Projects')}>חזרה לפרויקטים</Link>
           </Button>
           <Button type="button" onClick={handleRunAudit}>הרץ אבחון</Button>
           <Button type="button" variant="outline" onClick={handleCopyReport} disabled={!report}>
