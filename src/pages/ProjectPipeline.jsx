@@ -280,7 +280,21 @@ function PipelineProjectRow({ row, clientName = '' }) {
         <div className="text-xs text-muted-foreground">{row.work_number || '-'}</div>
       </TableCell>
       <TableCell className="whitespace-nowrap">{formatCurrency(row.total_amount)}</TableCell>
-      <TableCell>{row.status_display_label}</TableCell>
+      <TableCell className="min-w-[150px]">
+        <div className="font-medium">{row.operational_work_status_label || row.status_display_label}</div>
+        <div className="text-xs text-muted-foreground mt-1">
+          סטטוס מסחרי:
+          {' '}
+          {row.commercial_status_label}
+        </div>
+        {row.operational_current_stage_title ? (
+          <div className="text-xs text-muted-foreground mt-1">
+            שלב נוכחי:
+            {' '}
+            {row.operational_current_stage_title}
+          </div>
+        ) : null}
+      </TableCell>
       <TableCell className="min-w-[140px]">
         <div className="text-sm">{workStagesDisplay.primary}</div>
         {workStagesDisplay.secondary ? (
@@ -373,7 +387,7 @@ function PipelineGroupCard({
                 <TableHead>פרויקט</TableHead>
                 <TableHead>BID / מס&apos; עבודה</TableHead>
                 <TableHead>שכ&quot;ט</TableHead>
-                <TableHead>סטטוס עבודה</TableHead>
+                <TableHead>מצב עבודה</TableHead>
                 <TableHead>שלבי עבודה</TableHead>
                 <TableHead>סטטוס בנייה</TableHead>
                 <TableHead>תזכורות</TableHead>

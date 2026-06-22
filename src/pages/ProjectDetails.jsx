@@ -48,6 +48,7 @@ import { syncProposalReminderRulesAfterProjectSave } from '@/lib/proposalReminde
 import { buildProjectCreateFormFromSearchParams } from '@/lib/projectDefaults';
 import { buildProjectCreatePayloadFromForm } from '@/lib/projectCreatePayload';
 import { calculateProjectFinancialSummary } from '@/lib/projectFinancialUtils';
+import { getProjectOperationalWorkStatus } from '@/lib/workStageLogic';
 import {
   buildInvoiceProcessFormPageUrl,
   buildProposalFormPageUrl,
@@ -253,6 +254,15 @@ export default function ProjectDetails() {
     queryKey: ['collection-dues', 'project', projectId],
     queryFn: async () => {
       const items = await base44.entities.CollectionDue.filter({ project_id: projectId });
+      return items || [];
+    },
+    enabled: Boolean(projectId),
+  });
+
+  const { data: projectWorkStages = [] } = useQuery({
+    queryKey: ['work-stages', 'project', projectId],
+    queryFn: async () => {
+      const items = await base44.entities.WorkStage.filter({ project_id: projectId });
       return items || [];
     },
     enabled: Boolean(projectId),
@@ -616,6 +626,7 @@ export default function ProjectDetails() {
   }
 
   const financialSummary = calculateProjectFinancialSummary(project, projectCollectionDues);
+  const operationalWorkStatus = getProjectOperationalWorkStatus(projectWorkStages);
   const totalAmount = financialSummary.projectTotalFee;
   const collectedAmount = financialSummary.collectedAmount;
   const outstandingAmount = financialSummary.outstandingAmount;
@@ -658,6 +669,7 @@ export default function ProjectDetails() {
       queryClient.invalidateQueries({ queryKey: ['projects'] }),
       queryClient.invalidateQueries({ queryKey: ['client-details'] }),
       queryClient.invalidateQueries({ queryKey: ['collection-dues', 'project', projectId] }),
+      queryClient.invalidateQueries({ queryKey: ['work-stages', 'project', projectId] }),
     ]);
   };
 
@@ -859,13 +871,30 @@ export default function ProjectDetails() {
           </CardHeader>
           <CardContent className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             <DetailField label="שם הפרויקט">{project.name || '-'}</DetailField>
-            <DetailField label="סטטוס">
+            <DetailField label="סטטוס מסחרי">
               <StatusBadge status={project.status || 'unknown'} />
             </DetailField>
             <DetailField label="מספר הצעה">{project.bid_number || '-'}</DetailField>
             <DetailField label="מספר עבודה">{project.work_number || '-'}</DetailField>
             <DetailField label="תאריך יצירה">{formatDate(project.created_date)}</DetailField>
             <DetailField label="תאריך עדכון">{formatDate(project.updated_date)}</DetailField>
+          </CardContent>
+        </Card>
+
+        <Card className="border-0 shadow-sm">
+          <CardHeader>
+            <CardTitle>מצב עבודה</CardTitle>
+            <CardDescription>
+              התקדמות תפעולית לפי שלבי העבודה — נפרד מסטטוס המסחרי של הפרויקט.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4 md:grid-cols-2">
+            <DetailField label="מצב עבודה">
+              {operationalWorkStatus.label}
+            </DetailField>
+            <DetailField label="שלב נוכחי">
+              {operationalWorkStatus.current_stage_title || '-'}
+            </DetailField>
           </CardContent>
         </Card>
 

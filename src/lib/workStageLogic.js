@@ -5,6 +5,20 @@ export const WORK_STAGE_STATUS = {
   CANCELLED: 'cancelled',
 };
 
+export const OPERATIONAL_WORK_STATUS = {
+  NO_STAGES: 'no_stages',
+  NOT_STARTED: 'not_started',
+  IN_PROGRESS: 'in_progress',
+  COMPLETED: 'completed',
+};
+
+export const OPERATIONAL_WORK_STATUS_LABELS = {
+  [OPERATIONAL_WORK_STATUS.NO_STAGES]: 'לא הוגדרו שלבי עבודה',
+  [OPERATIONAL_WORK_STATUS.NOT_STARTED]: 'טרם התחיל',
+  [OPERATIONAL_WORK_STATUS.IN_PROGRESS]: 'בעבודה',
+  [OPERATIONAL_WORK_STATUS.COMPLETED]: 'הושלם',
+};
+
 export function isWorkStageCompleted(stage) {
   return stage?.aaron_approved === true
     && stage?.client_approved === true
@@ -61,6 +75,56 @@ export function normalizeWorkStageStatuses(stages = []) {
 export function getActiveWorkStage(stages = []) {
   const normalized = normalizeWorkStageStatuses(stages);
   return normalized.find((stage) => stage.status === WORK_STAGE_STATUS.ACTIVE) || null;
+}
+
+function hasStageWorkProgress(stage) {
+  if (!stage) return false;
+
+  return isWorkStageCompleted(stage)
+    || Boolean(stage.aaron_approved || stage.client_approved || stage.draftsman_approved);
+}
+
+export function getProjectOperationalWorkStatus(stages = []) {
+  const nonCancelled = getNonCancelledWorkStages(stages);
+
+  if (nonCancelled.length === 0) {
+    return {
+      key: OPERATIONAL_WORK_STATUS.NO_STAGES,
+      label: OPERATIONAL_WORK_STATUS_LABELS[OPERATIONAL_WORK_STATUS.NO_STAGES],
+      current_stage_title: '',
+      has_work_stages: false,
+    };
+  }
+
+  const allCompleted = nonCancelled.every((stage) => isWorkStageCompleted(stage));
+  if (allCompleted) {
+    return {
+      key: OPERATIONAL_WORK_STATUS.COMPLETED,
+      label: OPERATIONAL_WORK_STATUS_LABELS[OPERATIONAL_WORK_STATUS.COMPLETED],
+      current_stage_title: '',
+      has_work_stages: true,
+    };
+  }
+
+  const activeStage = getActiveWorkStage(stages);
+  const hasAnyProgress = nonCancelled.some(hasStageWorkProgress);
+
+  if (!hasAnyProgress) {
+    const nextStage = activeStage || nonCancelled[0] || null;
+    return {
+      key: OPERATIONAL_WORK_STATUS.NOT_STARTED,
+      label: OPERATIONAL_WORK_STATUS_LABELS[OPERATIONAL_WORK_STATUS.NOT_STARTED],
+      current_stage_title: nextStage?.title || '',
+      has_work_stages: true,
+    };
+  }
+
+  return {
+    key: OPERATIONAL_WORK_STATUS.IN_PROGRESS,
+    label: OPERATIONAL_WORK_STATUS_LABELS[OPERATIONAL_WORK_STATUS.IN_PROGRESS],
+    current_stage_title: activeStage?.title || '',
+    has_work_stages: true,
+  };
 }
 
 export function buildWorkStagePayloadWithStatus(stageInput, allProjectStages = []) {

@@ -12,7 +12,9 @@ import {
 import {
   getActiveWorkStage,
   getNonCancelledWorkStages,
+  getProjectOperationalWorkStatus,
   isWorkStageCompleted,
+  OPERATIONAL_WORK_STATUS,
 } from '@/lib/workStageLogic';
 import {
   getVisibleReminders,
@@ -38,6 +40,8 @@ export const PROJECT_WORK_STATUS_LABELS = {
   cancelled: 'בוטלה',
   rejected: 'לא התקבלה',
 };
+
+export const PROJECT_COMMERCIAL_STATUS_LABELS = PROJECT_WORK_STATUS_LABELS;
 
 export const PIPELINE_GROUP_ORDER = [
   'proposal_pricing',
@@ -223,9 +227,13 @@ function groupCollectionDuesByProjectId(collectionDues = []) {
   return byProjectId;
 }
 
-export function getProjectWorkStatusLabel(project) {
+export function getProjectCommercialStatusLabel(project) {
   const status = String(project?.status || '').trim();
-  return PROJECT_WORK_STATUS_LABELS[status] || status || '-';
+  return PROJECT_COMMERCIAL_STATUS_LABELS[status] || status || '-';
+}
+
+export function getProjectWorkStatusLabel(project) {
+  return getProjectCommercialStatusLabel(project);
 }
 
 export function getProjectWorkProgressLabel(project, stages = []) {
@@ -290,6 +298,7 @@ function analyzeWorkStages(stages = []) {
   const nonCancelled = getNonCancelledWorkStages(stages);
   const activeStage = getActiveWorkStage(stages);
   const completedCount = nonCancelled.filter((stage) => isWorkStageCompleted(stage)).length;
+  const operationalWorkStatus = getProjectOperationalWorkStatus(stages);
 
   return {
     has_work_stages: nonCancelled.length > 0,
@@ -298,6 +307,9 @@ function analyzeWorkStages(stages = []) {
     active_work_stage_title: activeStage?.title || '',
     has_active_work_stage: Boolean(activeStage),
     work_progress_label: getProjectWorkProgressLabel({}, stages),
+    operational_work_status_key: operationalWorkStatus.key,
+    operational_work_status_label: operationalWorkStatus.label,
+    operational_current_stage_title: operationalWorkStatus.current_stage_title,
   };
 }
 
@@ -306,10 +318,35 @@ export function resolvePipelineGroupKey(project, workStageInfo) {
   const {
     has_work_stages: hasWorkStages,
     has_active_work_stage: hasActiveWorkStage,
+    operational_work_status_key: operationalKey,
   } = workStageInfo;
 
-  if (status === 'pricing') return 'proposal_pricing';
+  if (status === 'pricing' || status === 'lead') return 'proposal_pricing';
   if (status === 'waiting') return 'proposal_waiting';
+  if (status === 'rejected' || status === 'cancelled') return 'rejected_cancelled';
+  if (status === 'completed' || status === 'collection_completed') return 'planning_completed';
+
+  if (operationalKey === OPERATIONAL_WORK_STATUS.COMPLETED) {
+    return 'planning_completed';
+  }
+
+  if (operationalKey === OPERATIONAL_WORK_STATUS.NO_STAGES) {
+    if (['execution', 'planning', 'submission'].includes(status)) {
+      return 'in_work_without_workflow';
+    }
+    if (status === 'signed') return 'accepted_without_workflow';
+  }
+
+  if (operationalKey === OPERATIONAL_WORK_STATUS.NOT_STARTED) {
+    return 'accepted_with_workflow';
+  }
+
+  if (operationalKey === OPERATIONAL_WORK_STATUS.IN_PROGRESS) {
+    if (hasWorkStages && hasActiveWorkStage) return 'in_work_with_active_stage';
+    if (hasWorkStages) return 'in_work_without_active_stage';
+    return 'in_work_without_workflow';
+  }
+
   if (status === 'signed' && !hasWorkStages) return 'accepted_without_workflow';
   if (status === 'signed' && hasWorkStages) return 'accepted_with_workflow';
   if (status === 'execution' && !hasWorkStages) return 'in_work_without_workflow';
@@ -319,8 +356,6 @@ export function resolvePipelineGroupKey(project, workStageInfo) {
   if (status === 'execution' && hasWorkStages && !hasActiveWorkStage) {
     return 'in_work_without_active_stage';
   }
-  if (status === 'completed') return 'planning_completed';
-  if (status === 'rejected' || status === 'cancelled') return 'rejected_cancelled';
 
   return 'other';
 }
@@ -391,9 +426,15 @@ export function matchesQuickFilter(row, quickFilter) {
     case PIPELINE_QUICK_FILTER_KEYS.PROPOSALS:
       return ['pricing', 'waiting'].includes(row.status);
     case PIPELINE_QUICK_FILTER_KEYS.ACCEPTED:
-      return row.status === 'signed';
+      return row.status === 'signed'
+        && row.operational_work_status_key !== OPERATIONAL_WORK_STATUS.IN_PROGRESS
+        && row.operational_work_status_key !== OPERATIONAL_WORK_STATUS.COMPLETED;
     case PIPELINE_QUICK_FILTER_KEYS.IN_WORK:
-      return row.status === 'execution';
+      return row.operational_work_status_key === OPERATIONAL_WORK_STATUS.IN_PROGRESS
+        || (
+          row.status === 'execution'
+          && row.operational_work_status_key !== OPERATIONAL_WORK_STATUS.COMPLETED
+        );
     case PIPELINE_QUICK_FILTER_KEYS.NO_WORK_STAGES:
       return row.work_stage_count === 0;
     case PIPELINE_QUICK_FILTER_KEYS.OPEN_COLLECTION:
@@ -618,8 +659,12 @@ export function buildProjectPipelineRow(project, {
     year: toNumber(project.year),
     total_amount: toNumber(project.total_amount),
     status,
-    status_label: getProjectWorkStatusLabel(project),
-    status_display_label: getPipelineStatusDisplayLabel(status),
+    commercial_status_label: getProjectCommercialStatusLabel(project),
+    status_label: getProjectCommercialStatusLabel(project),
+    status_display_label: workStageInfo.operational_work_status_label,
+    operational_work_status_key: workStageInfo.operational_work_status_key,
+    operational_work_status_label: workStageInfo.operational_work_status_label,
+    operational_current_stage_title: workStageInfo.operational_current_stage_title,
 
     work_stage_count: workStageInfo.work_stage_count,
     completed_work_stage_count: workStageInfo.completed_work_stage_count,
@@ -705,6 +750,9 @@ export function buildPipelineSummary(rows = []) {
     ).length,
     inWorkWithoutWorkflowCount: rows.filter(
       (row) => row.group_key === 'in_work_without_workflow',
+    ).length,
+    inWorkWithActiveStageCount: rows.filter(
+      (row) => row.group_key === 'in_work_with_active_stage',
     ).length,
     completedCount: rows.filter((row) => row.group_key === 'planning_completed').length,
     withWorkflowCount: rows.filter(
