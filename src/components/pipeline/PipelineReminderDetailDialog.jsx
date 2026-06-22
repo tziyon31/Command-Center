@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import {
@@ -9,8 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { toast } from '@/components/ui/use-toast';
-import { snoozeReminder } from '@/lib/reminderEngine';
+import ReminderSnoozeActions from '@/components/reminders/ReminderSnoozeActions';
 
 const FREQUENCY_LABELS = {
   immediate: 'מיידי',
@@ -30,13 +29,6 @@ const formatReminderDateTime = (value) => {
     dateStyle: 'short',
     timeStyle: 'short',
   }).format(date);
-};
-
-const getTomorrowMorningIso = () => {
-  const date = new Date();
-  date.setDate(date.getDate() + 1);
-  date.setHours(7, 0, 0, 0);
-  return date.toISOString();
 };
 
 function navigateToReminderAction(navigate, reminder) {
@@ -60,7 +52,6 @@ export default function PipelineReminderDetailDialog({
   clientName = '',
 }) {
   const navigate = useNavigate();
-  const [isSnoozing, setIsSnoozing] = useState(false);
 
   if (!reminder) return null;
 
@@ -76,28 +67,9 @@ export default function PipelineReminderDetailDialog({
     onClose?.();
   };
 
-  const handleSnoozeUntilTomorrow = async () => {
-    if (!reminder?.id || isSnoozing) return;
-
-    setIsSnoozing(true);
-
-    try {
-      const snoozedUntil = getTomorrowMorningIso();
-      await snoozeReminder(reminder.id, snoozedUntil);
-
-      toast({
-        title: 'התזכורת נדחתה',
-        description: `מחר בבוקר · עד ${formatReminderDateTime(snoozedUntil)}`,
-      });
-
-      onSnoozed?.();
-      onClose?.();
-    } catch (error) {
-      console.error('[PipelineReminderDetailDialog] failed to snooze reminder', error);
-      alert('לא הצלחתי לדחות את התזכורת');
-    } finally {
-      setIsSnoozing(false);
-    }
+  const handleSnoozedComplete = () => {
+    onSnoozed?.();
+    onClose?.();
   };
 
   return (
@@ -145,14 +117,12 @@ export default function PipelineReminderDetailDialog({
               {actionLabel}
             </Button>
           ) : null}
-          <Button
-            type="button"
-            variant="outline"
-            onClick={handleSnoozeUntilTomorrow}
-            disabled={isSnoozing}
-          >
-            {isSnoozing ? 'מדחה...' : 'דחה למחר'}
-          </Button>
+          <ReminderSnoozeActions
+            reminder={reminder}
+            onSnoozed={onSnoozed}
+            onSnoozedComplete={handleSnoozedComplete}
+            layout="stack"
+          />
         </DialogFooter>
       </DialogContent>
     </Dialog>

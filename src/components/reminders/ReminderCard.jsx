@@ -2,31 +2,9 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { toast } from '@/components/ui/use-toast';
-import { snoozeReminder } from '@/lib/reminderEngine';
 import ReminderEditDialog from './ReminderEditDialog.jsx';
-import {
-  datetimeLocalToIso,
-  getDefaultFutureDatetimeValue,
-  isFutureDatetimeLocal,
-} from './reminderDateTime.js';
-import { Clock, ExternalLink, Pencil } from 'lucide-react';
+import ReminderSnoozeActions from './ReminderSnoozeActions.jsx';
+import { ExternalLink, Pencil } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const FREQUENCY_LABELS = {
@@ -36,37 +14,6 @@ const FREQUENCY_LABELS = {
   due_date_based: 'לפי תאריך יעד',
   custom: 'מותאם',
 };
-
-const SNOOZE_OPTIONS = [
-  {
-    id: 'later_today',
-    label: 'מאוחר יותר היום',
-    getSnoozedUntil: () => {
-      const date = new Date();
-      date.setHours(date.getHours() + 3);
-      return date;
-    },
-  },
-  {
-    id: 'tomorrow_morning',
-    label: 'מחר בבוקר',
-    getSnoozedUntil: () => {
-      const date = new Date();
-      date.setDate(date.getDate() + 1);
-      date.setHours(7, 0, 0, 0);
-      return date;
-    },
-  },
-  {
-    id: 'next_week',
-    label: 'בעוד שבוע',
-    getSnoozedUntil: () => {
-      const date = new Date();
-      date.setDate(date.getDate() + 7);
-      return date;
-    },
-  },
-];
 
 const formatShortDateTime = (value) => {
   if (!value) return null;
@@ -154,10 +101,7 @@ const buildReminderContextLine = (reminder) => {
 
 export default function ReminderCard({ reminder, onSnoozed, className }) {
   const navigate = useNavigate();
-  const [isSnoozing, setIsSnoozing] = useState(false);
-  const [customSnoozeOpen, setCustomSnoozeOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
-  const [customDateTimeValue, setCustomDateTimeValue] = useState(getDefaultFutureDatetimeValue);
   const activeDays = getActiveDays(reminder.active_since);
   const frequencyLabel = FREQUENCY_LABELS[reminder.frequency] || reminder.frequency || 'יומי';
   const nextRemindAtLabel = formatShortDateTime(reminder.next_remind_at);
@@ -173,57 +117,6 @@ export default function ReminderCard({ reminder, onSnoozed, className }) {
     }
 
     navigate(actionUrl.startsWith('/') ? actionUrl : `/${actionUrl}`);
-  };
-
-  const applySnooze = async (snoozedUntil, label) => {
-    if (!reminder?.id || isSnoozing) return;
-
-    setIsSnoozing(true);
-
-    try {
-      await snoozeReminder(reminder.id, snoozedUntil);
-
-      toast({
-        title: 'התזכורת נדחתה',
-        description: `${label} · עד ${formatShortDateTime(snoozedUntil)}`,
-      });
-
-      onSnoozed?.();
-    } catch (error) {
-      throw error;
-    } finally {
-      setIsSnoozing(false);
-    }
-  };
-
-  const handleSnooze = async (option) => {
-    try {
-      const snoozedUntil = option.getSnoozedUntil().toISOString();
-      await applySnooze(snoozedUntil, option.label);
-    } catch (error) {
-      console.error('[ReminderCard] failed to snooze reminder', error);
-      alert('לא הצלחתי לדחות את התזכורת');
-    }
-  };
-
-  const openCustomSnoozeDialog = () => {
-    setCustomDateTimeValue(getDefaultFutureDatetimeValue());
-    setCustomSnoozeOpen(true);
-  };
-
-  const handleCustomSnooze = async () => {
-    if (!isFutureDatetimeLocal(customDateTimeValue)) {
-      alert('יש לבחור זמן עתידי לתזכורת');
-      return;
-    }
-
-    try {
-      await applySnooze(datetimeLocalToIso(customDateTimeValue), 'בחר תאריך ושעה');
-      setCustomSnoozeOpen(false);
-    } catch (error) {
-      console.error('[ReminderCard] failed to custom snooze reminder', error);
-      alert('לא הצלחתי לדחות את התזכורת');
-    }
   };
 
   return (
@@ -267,40 +160,11 @@ export default function ReminderCard({ reminder, onSnoozed, className }) {
             {reminder.action_label || 'פתח'}
           </Button>
 
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={isSnoozing}
-                className="h-7 px-2 text-xs text-muted-foreground"
-              >
-                <Clock className="w-3 h-3 ml-1" />
-                {isSnoozing ? 'מדחה...' : 'דחה'}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="text-right">
-              {SNOOZE_OPTIONS.map((option) => (
-                <DropdownMenuItem
-                  key={option.id}
-                  disabled={isSnoozing}
-                  onClick={() => handleSnooze(option)}
-                >
-                  {option.label}
-                </DropdownMenuItem>
-              ))}
-              <DropdownMenuItem
-                disabled={isSnoozing}
-                onSelect={(event) => {
-                  event.preventDefault();
-                  openCustomSnoozeDialog();
-                }}
-              >
-                בחר תאריך ושעה
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <ReminderSnoozeActions
+            reminder={reminder}
+            onSnoozed={onSnoozed}
+            buttonClassName="h-7 px-2 text-xs text-muted-foreground"
+          />
 
           <Button
             type="button"
@@ -308,7 +172,6 @@ export default function ReminderCard({ reminder, onSnoozed, className }) {
             size="sm"
             className="h-7 px-2 text-xs text-muted-foreground"
             onClick={() => setEditOpen(true)}
-            disabled={isSnoozing}
           >
             <Pencil className="w-3 h-3 ml-1" />
             ערוך
@@ -322,48 +185,6 @@ export default function ReminderCard({ reminder, onSnoozed, className }) {
         onClose={() => setEditOpen(false)}
         onUpdated={onSnoozed}
       />
-
-      <Dialog open={customSnoozeOpen} onOpenChange={setCustomSnoozeOpen}>
-        <DialogContent className="max-w-sm text-right" dir="rtl">
-          <DialogHeader className="text-right sm:text-right">
-            <DialogTitle>דחיית תזכורת</DialogTitle>
-            <DialogDescription>
-              בחר מתי להציג שוב את התזכורת
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-2">
-            <Label htmlFor={`custom-snooze-${reminder.id}`}>תאריך ושעה</Label>
-            <Input
-              id={`custom-snooze-${reminder.id}`}
-              type="datetime-local"
-              value={customDateTimeValue}
-              onChange={(event) => setCustomDateTimeValue(event.target.value)}
-              dir="ltr"
-            />
-          </div>
-
-          <DialogFooter className="flex-row-reverse gap-2 sm:justify-start">
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleCustomSnooze}
-              disabled={isSnoozing}
-            >
-              {isSnoozing ? 'מדחה...' : 'אישור'}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setCustomSnoozeOpen(false)}
-              disabled={isSnoozing}
-            >
-              ביטול
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </>
   );
 }
