@@ -24,7 +24,8 @@ import {
   PROJECT_WORK_STATUS_LABELS,
 } from '@/lib/projectPipelineUtils';
 import { buildCollectionDueFormPageUrl } from '@/lib/workflowNavigation';
-import PipelineReminderDetailDialog from '@/components/pipeline/PipelineReminderDetailDialog';
+import { buildPipelineCompactSummaryText } from '@/lib/pipelineReminderDisplay';
+import PipelineRemindersCell from '@/components/pipeline/PipelineRemindersCell';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -47,6 +48,11 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible';
 import { Plus } from 'lucide-react';
 
 const STATUS_FILTER_OPTIONS = Object.entries(PROJECT_WORK_STATUS_LABELS);
@@ -127,86 +133,6 @@ const formatCurrency = (value) => (
   }).format(Number(value) || 0)
 );
 
-const formatReminderDateTime = (value) => {
-  if (!value) return '';
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-
-  return new Intl.DateTimeFormat('he-IL', {
-    dateStyle: 'short',
-    timeStyle: 'short',
-  }).format(date);
-};
-
-const formatReminderCountLabel = (count) => (
-  count === 1 ? 'תזכורת אחת' : `${count} תזכורות`
-);
-
-function PipelineRemindersCell({
-  reminders = [],
-  projectName = '',
-  clientName = '',
-}) {
-  const queryClient = useQueryClient();
-  const [selectedReminder, setSelectedReminder] = useState(null);
-
-  if (!reminders.length) {
-    return <span className="text-muted-foreground">-</span>;
-  }
-
-  const visibleReminders = reminders.slice(0, 2);
-  const remainingCount = reminders.length - visibleReminders.length;
-
-  const handleSnoozed = () => {
-    queryClient.invalidateQueries({ queryKey: ['reminders', 'pipeline-visible'] });
-    setSelectedReminder(null);
-  };
-
-  return (
-    <>
-      <div className="space-y-1 min-w-[150px]">
-        <NeutralBadge>{formatReminderCountLabel(reminders.length)}</NeutralBadge>
-        <div className="space-y-1">
-          {visibleReminders.map((reminder) => {
-            const nextLabel = formatReminderDateTime(reminder.next_remind_at);
-            const title = reminder.title || 'תזכורת';
-
-            return (
-              <button
-                key={reminder.id}
-                type="button"
-                className="block text-right text-xs text-primary hover:underline"
-                title="לחץ לפרטי התזכורת"
-                onClick={() => setSelectedReminder(reminder)}
-              >
-                {title}
-                {nextLabel ? ` · ${nextLabel}` : ''}
-              </button>
-            );
-          })}
-          {remainingCount > 0 ? (
-            <div className="text-xs text-muted-foreground">
-              ועוד
-              {' '}
-              {remainingCount}
-            </div>
-          ) : null}
-        </div>
-      </div>
-
-      <PipelineReminderDetailDialog
-        reminder={selectedReminder}
-        open={Boolean(selectedReminder)}
-        onClose={() => setSelectedReminder(null)}
-        onSnoozed={handleSnoozed}
-        projectName={projectName}
-        clientName={clientName}
-      />
-    </>
-  );
-}
-
 function scrollToGroup(groupKey) {
   if (!groupKey) return;
   const element = document.getElementById(`pipeline-group-${groupKey}`);
@@ -223,9 +149,9 @@ function SummaryCard({ label, value, active, onClick }) {
         active ? 'border-primary ring-1 ring-primary/30' : 'hover:bg-accent/40',
       )}
     >
-      <CardContent className="pt-6">
-        <div className="text-sm text-muted-foreground">{label}</div>
-        <div className="text-2xl font-bold mt-1">{value}</div>
+      <CardContent className="py-3 px-4">
+        <div className="text-xs text-muted-foreground">{label}</div>
+        <div className="text-xl font-bold mt-0.5">{value}</div>
       </CardContent>
     </button>
   );
@@ -438,6 +364,8 @@ export default function ProjectPipeline() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [setupReminderReconcileReport, setSetupReminderReconcileReport] = useState(null);
   const [isReconcilingSetupReminders, setIsReconcilingSetupReminders] = useState(false);
+  const [summaryExpanded, setSummaryExpanded] = useState(false);
+  const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
 
   const { data: projects = [], isLoading: isLoadingProjects } = useQuery({
     queryKey: ['projects'],
@@ -562,6 +490,11 @@ export default function ProjectPipeline() {
     [pipelineRows],
   );
 
+  const compactSummaryText = useMemo(
+    () => buildPipelineCompactSummaryText(summary),
+    [summary],
+  );
+
   const visibleGroupKeys = useMemo(() => (
     PIPELINE_GROUP_ORDER.filter((groupKey) => grouped[groupKey]?.count > 0)
   ), [grouped]);
@@ -646,12 +579,12 @@ export default function ProjectPipeline() {
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6" dir="rtl">
-      <div className="max-w-[1400px] mx-auto space-y-6">
+      <div className="max-w-[1400px] mx-auto space-y-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h1 className="text-3xl font-bold">פרויקטים</h1>
-            <p className="text-muted-foreground mt-2">
-              תמונת מצב לפי סטטוס עבודה, שלבי עבודה, סטטוס בנייה וגבייה.
+            <h1 className="text-2xl font-bold">פרויקטים</h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              מסך עבודה לפי סטטוס, שלבי עבודה וגבייה
             </p>
           </div>
           <div className="flex flex-wrap gap-2 shrink-0 self-start">
@@ -735,56 +668,42 @@ export default function ProjectPipeline() {
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
-              {SUMMARY_CARDS.map((card) => (
-                <SummaryCard
-                  key={card.label}
-                  label={card.label}
-                  value={summary[card.countKey]}
-                  active={filters.quickFilter === card.quickFilter}
-                  onClick={() => handleSummaryCardClick(card)}
-                />
-              ))}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+              <span className="text-muted-foreground">{compactSummaryText}</span>
+              <Button
+                type="button"
+                variant="link"
+                size="sm"
+                className="h-7 px-1 text-xs"
+                title={summaryExpanded ? 'הסתר כרטיסי תמונת מצב' : 'הצג כרטיסי תמונת מצב'}
+                onClick={() => setSummaryExpanded((prev) => !prev)}
+              >
+                {summaryExpanded ? 'הסתר תמונת מצב' : 'הצג תמונת מצב'}
+              </Button>
             </div>
 
-            <Card className="border-0 shadow-sm">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base">סינון מהיר</CardTitle>
-              </CardHeader>
-              <CardContent className="flex flex-wrap gap-2">
-                {QUICK_FILTER_BUTTONS.map((item) => (
-                  <Button
-                    key={item.key}
-                    type="button"
-                    size="sm"
-                    variant={filters.quickFilter === item.key ? 'default' : 'outline'}
-                    onClick={() => applyQuickFilter(item.key)}
-                  >
-                    {item.label}
-                  </Button>
+            {summaryExpanded ? (
+              <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-5 gap-2">
+                {SUMMARY_CARDS.map((card) => (
+                  <SummaryCard
+                    key={card.label}
+                    label={card.label}
+                    value={summary[card.countKey]}
+                    active={filters.quickFilter === card.quickFilter}
+                    onClick={() => handleSummaryCardClick(card)}
+                  />
                 ))}
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  onClick={clearFilters}
-                  disabled={!hasActiveFilters}
-                >
-                  נקה סינון
-                </Button>
-              </CardContent>
-            </Card>
+              </div>
+            ) : null}
 
             <Card className="border-0 shadow-sm">
-              <CardHeader>
-                <CardTitle>סינון מתקדם</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="pipeline-search">חיפוש</Label>
+              <CardContent className="py-3 space-y-3">
+                <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
+                  <div className="space-y-1">
+                    <Label htmlFor="pipeline-search" className="text-xs">חיפוש</Label>
                     <Input
                       id="pipeline-search"
+                      className="h-9"
                       value={filters.searchTerm}
                       onChange={(event) => setFilters((prev) => ({
                         ...prev,
@@ -793,8 +712,8 @@ export default function ProjectPipeline() {
                       placeholder="שם / BID / מספר עבודה / לקוח"
                     />
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="pipeline-status-filter">סטטוס פרויקט</Label>
+                  <div className="space-y-1">
+                    <Label htmlFor="pipeline-status-filter" className="text-xs">סטטוס פרויקט</Label>
                     <Select
                       value={filters.statusFilter}
                       onValueChange={(value) => setFilters((prev) => ({
@@ -802,7 +721,7 @@ export default function ProjectPipeline() {
                         statusFilter: value,
                       }))}
                     >
-                      <SelectTrigger id="pipeline-status-filter">
+                      <SelectTrigger id="pipeline-status-filter" className="h-9">
                         <SelectValue placeholder="כל הסטטוסים" />
                       </SelectTrigger>
                       <SelectContent>
@@ -815,69 +734,108 @@ export default function ProjectPipeline() {
                   </div>
                 </div>
 
-                <div className="grid gap-3 md:grid-cols-2">
-                  <label className="flex items-center gap-2 text-sm">
-                    <Checkbox
-                      checked={filters.showRejectedCancelled}
-                      onCheckedChange={(value) => setFilters((prev) => ({
-                        ...prev,
-                        showRejectedCancelled: value === true,
-                      }))}
-                    />
-                    הצג גם בוטלו / לא התקבלו
-                  </label>
-                  <label className="flex items-center gap-2 text-sm">
-                    <Checkbox
-                      checked={filters.onlyWithoutWorkStages}
-                      onCheckedChange={(value) => setFilters((prev) => ({
-                        ...prev,
-                        onlyWithoutWorkStages: value === true,
-                        quickFilter: value === true
-                          ? PIPELINE_QUICK_FILTER_KEYS.NO_WORK_STAGES
-                          : (
-                            prev.quickFilter === PIPELINE_QUICK_FILTER_KEYS.NO_WORK_STAGES
-                              ? null
-                              : prev.quickFilter
-                          ),
-                      }))}
-                    />
-                    הצג רק פרויקטים ללא WorkStages
-                  </label>
-                  <label className="flex items-center gap-2 text-sm">
-                    <Checkbox
-                      checked={filters.onlyOpenCollection}
-                      onCheckedChange={(value) => setFilters((prev) => ({
-                        ...prev,
-                        onlyOpenCollection: value === true,
-                        quickFilter: value === true
-                          ? PIPELINE_QUICK_FILTER_KEYS.OPEN_COLLECTION
-                          : (
-                            prev.quickFilter === PIPELINE_QUICK_FILTER_KEYS.OPEN_COLLECTION
-                              ? null
-                              : prev.quickFilter
-                          ),
-                      }))}
-                    />
-                    הצג רק פרויקטים עם גבייה פתוחה
-                  </label>
-                  <label className="flex items-center gap-2 text-sm">
-                    <Checkbox
-                      checked={filters.onlyConstructionNotUpdated}
-                      onCheckedChange={(value) => setFilters((prev) => ({
-                        ...prev,
-                        onlyConstructionNotUpdated: value === true,
-                        quickFilter: value === true
-                          ? PIPELINE_QUICK_FILTER_KEYS.CONSTRUCTION_NOT_UPDATED
-                          : (
-                            prev.quickFilter === PIPELINE_QUICK_FILTER_KEYS.CONSTRUCTION_NOT_UPDATED
-                              ? null
-                              : prev.quickFilter
-                          ),
-                      }))}
-                    />
-                    הצג רק סטטוס בנייה לא עודכן
-                  </label>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {QUICK_FILTER_BUTTONS.map((item) => (
+                    <Button
+                      key={item.key}
+                      type="button"
+                      size="sm"
+                      className="h-7 px-2.5 text-xs"
+                      variant={filters.quickFilter === item.key ? 'default' : 'outline'}
+                      onClick={() => applyQuickFilter(item.key)}
+                    >
+                      {item.label}
+                    </Button>
+                  ))}
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 px-2 text-xs"
+                    onClick={clearFilters}
+                    disabled={!hasActiveFilters}
+                  >
+                    נקה סינון
+                  </Button>
                 </div>
+
+                <Collapsible open={advancedFiltersOpen} onOpenChange={setAdvancedFiltersOpen}>
+                  <CollapsibleTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 text-xs text-muted-foreground"
+                    >
+                      {advancedFiltersOpen ? 'הסתר סינון מתקדם' : 'סינון מתקדם'}
+                    </Button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="pt-2">
+                    <div className="grid gap-2 md:grid-cols-2">
+                      <label className="flex items-center gap-2 text-sm">
+                        <Checkbox
+                          checked={filters.showRejectedCancelled}
+                          onCheckedChange={(value) => setFilters((prev) => ({
+                            ...prev,
+                            showRejectedCancelled: value === true,
+                          }))}
+                        />
+                        הצג גם בוטלו / לא התקבלו
+                      </label>
+                      <label className="flex items-center gap-2 text-sm">
+                        <Checkbox
+                          checked={filters.onlyWithoutWorkStages}
+                          onCheckedChange={(value) => setFilters((prev) => ({
+                            ...prev,
+                            onlyWithoutWorkStages: value === true,
+                            quickFilter: value === true
+                              ? PIPELINE_QUICK_FILTER_KEYS.NO_WORK_STAGES
+                              : (
+                                prev.quickFilter === PIPELINE_QUICK_FILTER_KEYS.NO_WORK_STAGES
+                                  ? null
+                                  : prev.quickFilter
+                              ),
+                          }))}
+                        />
+                        הצג רק פרויקטים ללא WorkStages
+                      </label>
+                      <label className="flex items-center gap-2 text-sm">
+                        <Checkbox
+                          checked={filters.onlyOpenCollection}
+                          onCheckedChange={(value) => setFilters((prev) => ({
+                            ...prev,
+                            onlyOpenCollection: value === true,
+                            quickFilter: value === true
+                              ? PIPELINE_QUICK_FILTER_KEYS.OPEN_COLLECTION
+                              : (
+                                prev.quickFilter === PIPELINE_QUICK_FILTER_KEYS.OPEN_COLLECTION
+                                  ? null
+                                  : prev.quickFilter
+                              ),
+                          }))}
+                        />
+                        הצג רק פרויקטים עם גבייה פתוחה
+                      </label>
+                      <label className="flex items-center gap-2 text-sm">
+                        <Checkbox
+                          checked={filters.onlyConstructionNotUpdated}
+                          onCheckedChange={(value) => setFilters((prev) => ({
+                            ...prev,
+                            onlyConstructionNotUpdated: value === true,
+                            quickFilter: value === true
+                              ? PIPELINE_QUICK_FILTER_KEYS.CONSTRUCTION_NOT_UPDATED
+                              : (
+                                prev.quickFilter === PIPELINE_QUICK_FILTER_KEYS.CONSTRUCTION_NOT_UPDATED
+                                  ? null
+                                  : prev.quickFilter
+                              ),
+                          }))}
+                        />
+                        הצג רק סטטוס בנייה לא עודכן
+                      </label>
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
               </CardContent>
             </Card>
 
