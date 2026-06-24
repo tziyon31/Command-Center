@@ -4,7 +4,7 @@ services:
     runtime: node
     rootDir: backend
     buildCommand: npm install && npm run build
-    startCommand: npm start
+    startCommand: bash start.sh
     healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
