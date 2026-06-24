@@ -46,13 +46,11 @@ import {
   REMINDER_TEST_DASHBOARD_RUN_GROUPS,
   TEST_GROUP_LABELS,
 } from '@/lib/reminderTestRunner';
-import { isLocalDevEnvironment } from '@/lib/isLocalDev';
 import { isAdminUser } from '@/lib/adminAccess';
 import { filterRealBusinessCollectionEvents } from '@/lib/testDataUtils';
 import { buildDashboardCollectionMetrics } from '@/lib/dashboardCollectionMetrics';
 import { buildCollectionDueFormPageUrl } from '@/lib/workflowNavigation';
 import { toast } from '@/components/ui/use-toast';
-import { useCollectionCelebration } from '@/context/CollectionCelebrationContext';
 
 const getActiveReminderTestRunningLabel = (groupKey) => {
   if (groupKey === 'all_slow') return 'Running All Slowly...';
@@ -181,8 +179,7 @@ export default function Dashboard() {
   const isTaskWorker = currentUser?.role === 'task_worker';
   const canSeeFullDashboard = !isTaskWorker;
   const canShowAdminTestMenu = currentUser?.role === 'admin' || isAdminUser(currentUser);
-  const canRunReminderTests = isAdminUser(currentUser) && isLocalDevEnvironment();
-  const { previewCollectionCelebration, isCelebrating } = useCollectionCelebration();
+  const canRunReminderTests = canShowAdminTestMenu;
 
   const {
     data: visibleReminders = [],
@@ -325,20 +322,6 @@ export default function Dashboard() {
       setReminderTestStatus('');
       refetchReminders();
       refetchCollectionEvents();
-    }
-  };
-
-  const handlePreviewCollectionCelebration = async () => {
-    if (isCelebrating) return;
-
-    try {
-      await previewCollectionCelebration();
-    } catch (error) {
-      console.error('[Dashboard] collection celebration preview failed', error);
-      toast({
-        title: 'לא הצלחנו להציג תצוגה מקדימה של החגיגה',
-        variant: 'destructive',
-      });
     }
   };
 
@@ -903,69 +886,55 @@ export default function Dashboard() {
           <div className="relative">
             {reminderTestDropupOpen ? (
               <div className="absolute bottom-full left-0 mb-1 flex min-w-[220px] flex-col gap-1 rounded-md border bg-background p-1 shadow-lg">
-                {canRunReminderTests ? (
-                  <>
-                    {REMINDER_TEST_DASHBOARD_RUN_GROUPS.map((groupKey) => {
-                      const groupDefinition = REMINDER_TEST_GROUP_DEFINITIONS[groupKey];
-                      if (!groupDefinition) return null;
+                {REMINDER_TEST_DASHBOARD_RUN_GROUPS.map((groupKey) => {
+                  const groupDefinition = REMINDER_TEST_GROUP_DEFINITIONS[groupKey];
+                  if (!groupDefinition) return null;
 
-                      return (
-                        <Button
-                          key={groupKey}
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 justify-start px-2 text-xs"
-                          disabled={reminderTestsBlocked}
-                          onClick={() => {
-                            void handleRunReminderTestGroup(groupKey, groupDefinition.label);
-                          }}
-                        >
-                          {`Run ${groupDefinition.label}`}
-                        </Button>
-                      );
-                    })}
+                  return (
                     <Button
+                      key={groupKey}
                       type="button"
                       variant="ghost"
                       size="sm"
                       className="h-8 justify-start px-2 text-xs"
                       disabled={reminderTestsBlocked}
-                      onClick={() => { void handleRunReminderTestGroup('all_slow', 'All Slowly'); }}
+                      onClick={() => {
+                        void handleRunReminderTestGroup(groupKey, groupDefinition.label);
+                      }}
                     >
-                      Run All Slowly
+                      {`Run ${groupDefinition.label}`}
                     </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 justify-start px-2 text-xs"
-                      disabled={reminderTestRunning || reminderCleanupRunning}
-                      onClick={() => { void handleCleanPendingTestData(); }}
-                    >
-                      Clean Pending Test Data
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 justify-start px-2 text-xs"
-                      disabled={reminderTestRunning || reminderCleanupRunning}
-                      onClick={() => { void handleDeepCleanTestData(); }}
-                    >
-                      Deep Clean TEST_REMINDER_FLOW Data
-                    </Button>
-                  </>
-                ) : null}
+                  );
+                })}
                 <Button
                   type="button"
                   variant="ghost"
                   size="sm"
                   className="h-8 justify-start px-2 text-xs"
-                  disabled={isCelebrating}
-                  onClick={() => { void handlePreviewCollectionCelebration(); }}
+                  disabled={reminderTestsBlocked}
+                  onClick={() => { void handleRunReminderTestGroup('all_slow', 'All Slowly'); }}
                 >
-                  Preview Collection Celebration
+                  Run All Slowly
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 justify-start px-2 text-xs"
+                  disabled={reminderTestRunning || reminderCleanupRunning}
+                  onClick={() => { void handleCleanPendingTestData(); }}
+                >
+                  Clean Pending Test Data
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 justify-start px-2 text-xs"
+                  disabled={reminderTestRunning || reminderCleanupRunning}
+                  onClick={() => { void handleDeepCleanTestData(); }}
+                >
+                  Deep Clean TEST_REMINDER_FLOW Data
                 </Button>
               </div>
             ) : null}

@@ -35,28 +35,10 @@ export function CollectionCelebrationProvider({ children }) {
     return result;
   }, [showCelebration]);
 
-  const previewCollectionCelebration = useCallback(async () => {
-    const current = await fetchCollectionCelebrationKpis();
-    const openAmount = current.openCollectionAmount;
-    const recorded = current.recordedCollection;
-    const delta = openAmount > 0
-      ? Math.min(Math.max(Math.round(openAmount * 0.08), 1500), 12000)
-      : 3500;
-
-    showCelebration({
-      before: current,
-      after: {
-        openCollectionAmount: Math.max(0, openAmount - delta),
-        recordedCollection: recorded + delta,
-      },
-    });
-  }, [showCelebration]);
-
   const value = useMemo(() => ({
     completeCollectionDueWithCelebration,
-    previewCollectionCelebration,
     isCelebrating: Boolean(celebration),
-  }), [completeCollectionDueWithCelebration, previewCollectionCelebration, celebration]);
+  }), [completeCollectionDueWithCelebration, celebration]);
 
   return (
     <CollectionCelebrationContext.Provider value={value}>
