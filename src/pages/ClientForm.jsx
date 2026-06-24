@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { base44 } from '@/api/base44Client';
+import { api as base44 } from '@/api/apiClient';
 import { createPageUrl } from '@/utils';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';

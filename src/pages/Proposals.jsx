@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import { api as base44 } from '@/api/apiClient';
 import { cancelRemindersForDeletedSource } from '@/lib/reminderEngine';
 import { createPageUrl } from '@/utils';
 import { Button } from '@/components/ui/button';

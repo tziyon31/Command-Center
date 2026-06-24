@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import { api as base44 } from '@/api/apiClient';
 import { canAccessAdminPage, canRunAdminMutations } from '@/lib/adminAccess';
 import { createPageUrl } from '@/utils';
 import CreateProjectDialog from '@/components/workflow/CreateProjectDialog';

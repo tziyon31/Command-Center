@@ -1,0 +1,522 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --- Enums ---
+
+enum UserRole {
+  admin
+  office_manager
+  project_worker
+  task_worker
+}
+
+enum ClientRating {
+  A
+  B
+  C
+}
+
+enum ClientStatus {
+  draft
+  completed
+  archived
+}
+
+enum InquiryFormStatus {
+  draft
+  submitted
+  cancelled
+}
+
+enum ProjectStatus {
+  lead
+  pricing
+  signed
+  planning
+  submission
+  execution
+  completed
+  collection_completed
+  cancelled
+  waiting
+  rejected
+}
+
+enum ProjectFormStatus {
+  draft
+  submitted
+}
+
+enum ConstructionStatus {
+  not_updated
+  licensing_and_permit_process
+  building_permit_received
+  execution_excavation_and_shoring
+  execution_walls_and_ceilings
+  execution_commissioning_and_activation
+  delivered_to_client
+}
+
+enum WorkflowOrigin {
+  none
+  native
+  legacy_bootstrap
+  manual
+}
+
+enum WorkflowEntryStage {
+  unmanaged
+  proposal
+  proposal_followup
+  work_stages
+  invoice
+  collection
+  completed_no_reminders
+  construction_policy
+}
+
+enum FormStatus {
+  draft
+  submitted
+  cancelled
+}
+
+enum WorkStageStatus {
+  pending
+  active
+  completed
+  cancelled
+}
+
+enum InvoiceScope {
+  general
+  stage
+  multiple_stages
+  final_project
+}
+
+enum InvoiceStatus {
+  created
+  sent
+  viewed
+  partial
+  paid
+}
+
+enum CollectionDueStatus {
+  open
+  partially_paid
+  awaiting_tax_invoice
+  paid
+  cancelled
+}
+
+enum ReminderStatus {
+  active
+  resolved
+  cancelled
+  snoozed
+}
+
+enum ReminderFrequency {
+  immediate
+  daily
+  weekly
+  due_date_based
+  custom
+}
+
+enum TaskStatus {
+  pending
+  in_progress
+  completed
+}
+
+enum TaskPriority {
+  low
+  medium
+  high
+}
+
+enum QuoteStatus {
+  draft
+  sent
+  pending
+  negotiation
+  signed
+  cancelled
+}
+
+enum DocumentType {
+  quote
+  contract
+  invoice
+  drawing
+  photo
+  other
+}
+
+// --- Models ---
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  fullName     String   @default("") @map("full_name")
+  role         UserRole @default(task_worker)
+  phone        String   @default("")
+  position     String   @default("")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("users")
+}
+
+model Client {
+  id               String        @id @default(uuid()) @db.Uuid
+  name             String
+  email            String?
+  phone            String?
+  company          String?
+  businessNumber   String?       @map("business_number")
+  address          String?
+  notes            String?
+  rating           ClientRating  @default(B)
+  documentCount    Int           @default(0) @map("document_count")
+  status           ClientStatus  @default(completed)
+  sourceInquiryId  String?       @map("source_inquiry_id") @db.Uuid
+  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("clients")
+}
+
+model Inquiry {
+  id            String             @id @default(uuid()) @db.Uuid
+  clientName    String?            @map("client_name")
+  buildingType  String?            @map("building_type")
+  area          Float?
+  coolingTons   Float?             @map("cooling_tons")
+  details       String?
+  formStatus    InquiryFormStatus  @default(draft) @map("form_status")
+  copiedToAiAt  String?            @map("copied_to_ai_at")
+  submittedAt   String?            @map("submitted_at")
+  createdAt     DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("inquiries")
+}
+
+model Project {
+  id                         String              @id @default(uuid()) @db.Uuid
+  clientId                   String?             @map("client_id") @db.Uuid
+  bidNumber                  String?             @map("bid_number")
+  workNumber                 String?             @map("work_number")
+  name                       String
+  city                       String?
+  projectType                String?             @map("project_type")
+  area                       String?
+  description                String?
+  status                     ProjectStatus       @default(lead)
+  formStatus                 ProjectFormStatus   @default(submitted) @map("form_status")
+  sourceInquiryId            String?             @map("source_inquiry_id") @db.Uuid
+  sourceSignedProposalId     String?             @map("source_signed_proposal_id") @db.Uuid
+  year                       Int?
+  totalAmount                Float               @default(0) @map("total_amount")
+  collectedAmount            Float               @default(0) @map("collected_amount")
+  startDate                  String?             @map("start_date")
+  endDate                    String?             @map("end_date")
+  notes                      String?
+  collectionDueNow           Boolean             @default(false) @map("collection_due_now")
+  collectionDueAmount        Float               @default(0) @map("collection_due_amount")
+  collectionDueNote          String?             @map("collection_due_note")
+  collectionDueDate          String?             @map("collection_due_date")
+  collectionDueTargetDate    String?             @map("collection_due_target_date")
+  lastCollectionPaidOn       String?             @map("last_collection_paid_on")
+  collectionEvents           Json                @default("[]") @map("collection_events")
+  constructionStatus         ConstructionStatus  @default(not_updated) @map("construction_status")
+  constructionStatusNote     String              @default("") @map("construction_status_note")
+  constructionStatusUpdatedAt String             @default("") @map("construction_status_updated_at")
+  workflowManaged            Boolean             @default(false) @map("workflow_managed")
+  workflowOrigin             WorkflowOrigin      @default(none) @map("workflow_origin")
+  workflowEntryStage         WorkflowEntryStage  @default(unmanaged) @map("workflow_entry_stage")
+  workflowOnboardedAt        String?             @map("workflow_onboarded_at")
+  workflowOnboardingNote     String?             @map("workflow_onboarding_note")
+  workflowHistoricalExemptions String?           @map("workflow_historical_exemptions")
+  createdAt                  DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                  DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("projects")
+}
+
+model Proposal {
+  id                  String      @id @default(uuid()) @db.Uuid
+  clientId            String?     @map("client_id") @db.Uuid
+  clientName          String?     @map("client_name")
+  projectId           String?     @map("project_id") @db.Uuid
+  projectName         String?     @map("project_name")
+  sourceInquiryId     String?     @map("source_inquiry_id") @db.Uuid
+  proposalSentToClient Boolean    @default(false) @map("proposal_sent_to_client")
+  proposalSentAt      String?     @map("proposal_sent_at")
+  clientSawProposal   Boolean     @default(false) @map("client_saw_proposal")
+  clientSawAt         String?     @map("client_saw_at")
+  documentNote        String?     @map("document_note")
+  formStatus          FormStatus  @default(draft) @map("form_status")
+  submittedAt         String?     @map("submitted_at")
+  createdAt           DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("proposals")
+}
+
+model SignedProposal {
+  id                      String     @id @default(uuid()) @db.Uuid
+  projectId               String?    @map("project_id") @db.Uuid
+  projectName             String?    @map("project_name")
+  clientId                String?    @map("client_id") @db.Uuid
+  clientName              String?    @map("client_name")
+  hasSignedOfferOrOrder   Boolean    @default(false) @map("has_signed_offer_or_order")
+  signedAt                String?    @map("signed_at")
+  documentNote            String?    @map("document_note")
+  formStatus              FormStatus @default(draft) @map("form_status")
+  submittedAt             String?    @map("submitted_at")
+  sourceInquiryId         String?    @map("source_inquiry_id") @db.Uuid
+  createdAt               DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("signed_proposals")
+}
+
+model WorkStage {
+  id                           String          @id @default(uuid()) @db.Uuid
+  projectId                    String          @map("project_id") @db.Uuid
+  projectName                  String?         @map("project_name")
+  clientId                     String?         @map("client_id") @db.Uuid
+  clientName                   String?         @map("client_name")
+  signedProposalId             String?         @map("signed_proposal_id") @db.Uuid
+  title                        String
+  orderIndex                   Int             @default(0) @map("order_index")
+  aaronApproved                Boolean         @default(false) @map("aaron_approved")
+  clientApproved               Boolean         @default(false) @map("client_approved")
+  draftsmanApproved            Boolean         @default(false) @map("draftsman_approved")
+  targetDate                   String?         @map("target_date")
+  invoiceRequiredOnCompletion  Boolean         @default(false) @map("invoice_required_on_completion")
+  status                       WorkStageStatus @default(pending)
+  notes                        String?
+  completedAt                  String?         @map("completed_at")
+  createdAt                    DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                    DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("work_stages")
+}
+
+model InvoiceProcess {
+  id                      String        @id @default(uuid()) @db.Uuid
+  projectId               String        @map("project_id") @db.Uuid
+  projectName             String?       @map("project_name")
+  clientId                String?       @map("client_id") @db.Uuid
+  clientName              String?       @map("client_name")
+  workStageIds            String?       @map("work_stage_ids")
+  workStageTitles         String?       @map("work_stage_titles")
+  invoiceScope            InvoiceScope  @default(general) @map("invoice_scope")
+  projectPercent          Float?        @map("project_percent")
+  invoiceCreatedInPaperless Boolean     @default(false) @map("invoice_created_in_paperless")
+  invoiceCreatedAt        String?       @map("invoice_created_at")
+  invoiceSentToClient     Boolean       @default(false) @map("invoice_sent_to_client")
+  invoiceSentAt           String?       @map("invoice_sent_at")
+  clientConfirmedReceived Boolean       @default(false) @map("client_confirmed_received")
+  clientConfirmedAt       String?       @map("client_confirmed_at")
+  invoiceReference        String?       @map("invoice_reference")
+  amount                  Float         @default(0)
+  notes                   String?
+  collectionDueId         String?       @map("collection_due_id") @db.Uuid
+  formStatus              FormStatus    @default(draft) @map("form_status")
+  submittedAt             String?       @map("submitted_at")
+  createdAt               DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("invoice_processes")
+}
+
+model Invoice {
+  id            String        @id @default(uuid()) @db.Uuid
+  projectId     String        @map("project_id") @db.Uuid
+  invoiceNumber String?       @map("invoice_number")
+  date          String
+  dueDate       String?       @map("due_date")
+  status        InvoiceStatus @default(created)
+  amount        Float
+  paidAmount    Float         @default(0) @map("paid_amount")
+  milestone     String?
+  fileUrl       String?       @map("file_url")
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("invoices")
+}
+
+model CollectionDue {
+  id                    String              @id @default(uuid()) @db.Uuid
+  invoiceProcessId      String?             @map("invoice_process_id") @db.Uuid
+  invoiceReference      String?             @map("invoice_reference")
+  projectId             String              @map("project_id") @db.Uuid
+  projectName           String?             @map("project_name")
+  clientId              String?             @map("client_id") @db.Uuid
+  clientName            String?             @map("client_name")
+  amountDue             Float               @default(0) @map("amount_due")
+  amountPaid            Float               @default(0) @map("amount_paid")
+  remainingAmount       Float               @default(0) @map("remaining_amount")
+  dueDate               String?             @map("due_date")
+  openedAt              String?             @map("opened_at")
+  paidAt                String?             @map("paid_at")
+  paymentReceived       Boolean             @default(false) @map("payment_received")
+  paymentReceivedAt     String?             @map("payment_received_at")
+  taxInvoiceSentToClient Boolean            @default(false) @map("tax_invoice_sent_to_client")
+  taxInvoiceSentAt      String?             @map("tax_invoice_sent_at")
+  taxInvoiceReference   String?             @map("tax_invoice_reference")
+  status                CollectionDueStatus @default(open)
+  sourceType            String?             @map("source_type")
+  sourceEntityType      String?             @map("source_entity_type")
+  sourceEntityId        String?             @map("source_entity_id") @db.Uuid
+  migratedAt            String?             @map("migrated_at")
+  migrationNote         String?             @map("migration_note")
+  workStageIds          String?             @map("work_stage_ids")
+  workStageTitles       String?             @map("work_stage_titles")
+  notes                 String?
+  formStatus            FormStatus          @default(submitted) @map("form_status")
+  createdAt             DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("collection_dues")
+}
+
+model CollectionEvent {
+  id            String   @id @default(uuid()) @db.Uuid
+  projectId     String   @map("project_id") @db.Uuid
+  projectName   String?  @map("project_name")
+  amount        Float
+  note          String?
+  openedAt      String?  @map("opened_at")
+  paidAt        String?  @map("paid_at")
+  type          String   @default("collection_paid")
+  isLegacy      Boolean  @default(false) @map("is_legacy")
+  datePrecision String?  @map("date_precision")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("collection_events")
+}
+
+model Reminder {
+  id                  String            @id @default(uuid()) @db.Uuid
+  title               String
+  description         String?
+  clientName          String            @map("client_name")
+  clientId            String?           @map("client_id") @db.Uuid
+  projectName         String?           @map("project_name")
+  projectId           String?           @map("project_id") @db.Uuid
+  assignedToUserId    String?           @map("assigned_to_user_id") @db.Uuid
+  assignedToName      String?           @map("assigned_to_name")
+  sourceType          String            @map("source_type")
+  sourceId            String            @map("source_id")
+  conditionKey        String            @map("condition_key")
+  actionUrl           String            @map("action_url")
+  actionLabel         String?           @map("action_label")
+  status              ReminderStatus    @default(active)
+  frequency           ReminderFrequency @default(daily)
+  defaultTime         String            @default("07:00") @map("default_time")
+  nextRemindAt        String?           @map("next_remind_at")
+  lastRemindedAt      String?           @map("last_reminded_at")
+  activeSince         String?           @map("active_since")
+  isSnoozed           Boolean           @default(false) @map("is_snoozed")
+  snoozedUntil        String?           @map("snoozed_until")
+  reactivatedAt       String?           @map("reactivated_at")
+  reactivationCount   Int               @default(0) @map("reactivation_count")
+  futureEmailEnabled  Boolean           @default(false) @map("future_email_enabled")
+  resolvedAt          String?           @map("resolved_at")
+  resolvedReason      String?           @map("resolved_reason")
+  createdAt           DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("reminders")
+}
+
+model ReminderSettings {
+  id                    String   @id @default(uuid()) @db.Uuid
+  userId                String?  @map("user_id") @db.Uuid
+  dailyReminderTime     String   @default("07:00") @map("daily_reminder_time")
+  dailyRemindersEnabled Boolean  @default(true) @map("daily_reminders_enabled")
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("reminder_settings")
+}
+
+model Task {
+  id                  String       @id @default(uuid()) @db.Uuid
+  projectId           String?      @map("project_id") @db.Uuid
+  relatedProjectName  String?      @map("related_project_name")
+  title               String
+  description         String?
+  dueDate             String?      @map("due_date")
+  status              TaskStatus   @default(pending)
+  priority            TaskPriority @default(medium)
+  assignedTo          String?      @map("assigned_to")
+  isCompleted         Boolean      @default(false) @map("is_completed")
+  completedAt         String?      @map("completed_at")
+  createdAt           DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("tasks")
+}
+
+model Quote {
+  id                String      @id @default(uuid()) @db.Uuid
+  projectId         String      @map("project_id") @db.Uuid
+  quoteNumber       String?     @map("quote_number")
+  date              String
+  status            QuoteStatus @default(draft)
+  items             Json        @default("[]")
+  totalAmount       Float       @default(0) @map("total_amount")
+  paymentMilestones Json        @default("[]") @map("payment_milestones")
+  validityDays      Int         @default(30) @map("validity_days")
+  notes             String?
+  fileUrl           String?     @map("file_url")
+  createdAt         DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("quotes")
+}
+
+model Document {
+  id         String       @id @default(uuid()) @db.Uuid
+  projectId  String       @map("project_id") @db.Uuid
+  name       String
+  type       DocumentType @default(other)
+  fileUrl    String       @map("file_url")
+  uploadDate String?      @map("upload_date")
+  createdAt  DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("documents")
+}
+
+model Conversation {
+  id            String   @id @default(uuid()) @db.Uuid
+  projectId     String   @map("project_id") @db.Uuid
+  date          String
+  withWhom      String?  @map("with_whom")
+  summary       String?
+  decisions     String?
+  tasksCreated  String?  @map("tasks_created")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("conversations")
+}

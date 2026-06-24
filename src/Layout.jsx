@@ -6,12 +6,11 @@ import {
   LayoutDashboard, 
   Users, 
   FolderKanban,
-  Sparkles,
   UserCog,
   LogOut,
   ClipboardList,
 } from 'lucide-react';
-import { base44 } from '@/api/base44Client';
+import { api as base44 } from '@/api/apiClient';
 import { useQuery } from '@tanstack/react-query';
 import WorkflowNav from '@/components/nav/WorkflowNav';
 
@@ -53,7 +52,8 @@ export default function Layout({ children, currentPageName }) {
     { name: 'Clients', label: 'לקוחות', icon: Users, roles: ['admin', 'office_manager'] },
     { name: 'Inquiries', label: 'פניות', icon: ClipboardList, roles: ['admin', 'office_manager'] },
     { name: 'Projects', label: 'פרויקטים', icon: FolderKanban, roles: ['admin', 'office_manager', 'project_worker'] },
-    { name: 'Assistant', label: 'עוזר AI', icon: Sparkles, roles: ['admin', 'office_manager'] },
+    // Migration 0.2: Assistant disabled during Base44 → self-hosted migration
+    // { name: 'Assistant', label: 'עוזר AI', icon: Sparkles, roles: ['admin', 'office_manager'] },
     { name: 'Users', label: 'משתמשים', icon: UserCog, roles: ['admin', 'office_manager'] },
   ];
 

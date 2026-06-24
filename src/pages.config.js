@@ -47,7 +47,8 @@
  *
  * The mainPage value must match a key in the PAGES object exactly.
  */
-import Assistant from './pages/Assistant';
+// Migration 0.2: Assistant disabled during Base44 → self-hosted migration
+// import Assistant from './pages/Assistant';
 import Clients from './pages/Clients';
 import ClientForm from './pages/ClientForm';
 import Dashboard from './pages/Dashboard';
@@ -73,7 +74,7 @@ import __Layout from './Layout.jsx';
 
 
 export const PAGES = {
-    "Assistant": Assistant,
+    // "Assistant": Assistant,
     "Clients": Clients,
     "ClientForm": ClientForm,
     "Dashboard": Dashboard,

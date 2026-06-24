@@ -1,4 +1,4 @@
-import { base44 } from '@/api/base44Client';
+import { api as base44 } from '@/api/apiClient';
 import {
   normalizeWorkStageStatuses,
 } from '@/lib/workStageLogic';

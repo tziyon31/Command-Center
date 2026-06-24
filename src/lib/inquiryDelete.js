@@ -1,4 +1,4 @@
-import { base44 } from '@/api/base44Client';
+import { api as base44 } from '@/api/apiClient';
 import { cancelRemindersForDeletedSource } from '@/lib/reminderEngine';
 
 export const INQUIRY_DELETE_CONFIRM_MESSAGE =

@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import { api as base44 } from '@/api/apiClient';
 import { createPageUrl } from '@/utils';
 import { runProjectReminderIntegrityAudit } from '@/lib/projectReminderIntegrityAudit';
 import { canAccessAdminPage } from '@/lib/adminAccess';

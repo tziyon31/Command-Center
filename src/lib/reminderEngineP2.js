@@ -2,7 +2,7 @@
  * P2 reminder business validity check — extracted to keep reminderEngine.js small.
  * Checks: project exists, has no active Proposal, has no active SignedProposal.
  */
-import { base44 } from '@/api/base44Client';
+import { api as base44 } from '@/api/apiClient';
 import { isValidSignedProposal } from '@/lib/signedProposalValidation';
 
 const toTrimmedValue = (value) => String(value || '').trim();

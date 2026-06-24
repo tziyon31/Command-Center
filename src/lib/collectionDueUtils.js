@@ -1,4 +1,4 @@
-import { base44 } from '@/api/base44Client';
+import { api as base44 } from '@/api/apiClient';
 import { buildInvoiceCollectionNote, getTodayDateString } from '@/lib/projectCollectionDue';
 
 export const PAPERLESS_INVOICE_URL = 'https://www.paperless.tax/admin/invoice';

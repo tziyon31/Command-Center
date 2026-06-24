@@ -1,4 +1,4 @@
-import { base44 } from '@/api/base44Client';
+import { api as base44 } from '@/api/apiClient';
 import { CONSTRUCTION_STATUS_LABELS } from '@/lib/constructionStatusUtils';
 import {
   getActiveWorkStage,

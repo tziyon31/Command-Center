@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api as base44 } from '@/api/apiClient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
@@ -30,8 +30,9 @@ export default function Clients() {
   const [searchTerm, setSearchTerm] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [savedClientId, setSavedClientId] = useState(null);
-  const [importDialogOpen, setImportDialogOpen] = useState(false);
-  const [importing, setImporting] = useState(false);
+  // Migration 0.3: file import disabled — restore with importDialogOpen/importing when backend supports upload
+  // const [importDialogOpen, setImportDialogOpen] = useState(false);
+  // const [importing, setImporting] = useState(false);
   const [formData, setFormData] = useState(EMPTY_CLIENT_FORM);
 
   const queryClient = useQueryClient();
@@ -79,6 +80,7 @@ export default function Clients() {
     });
   };
 
+  /* Migration 0.3: file import via base44.integrations.Core — disabled until self-hosted backend
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -86,10 +88,7 @@ export default function Clients() {
     setImporting(true);
 
     try {
-      // Upload the file
       const { file_url } = await base44.integrations.Core.UploadFile({ file });
-
-      // Extract data from the file
       const result = await base44.integrations.Core.ExtractDataFromUploadedFile({
         file_url,
         json_schema: {
@@ -111,7 +110,6 @@ export default function Clients() {
       });
 
       if (result.status === 'success' && Array.isArray(result.output)) {
-        // Map the data to match Client entity structure and handle extra fields in notes
         const clientsData = result.output.map(item => {
           const client = {
             name: item["שם איש הקשר"] || '',
@@ -124,29 +122,22 @@ export default function Clients() {
             rating: 'B',
             notes: ''
           };
-
-          // Add extra fields to notes
           const knownFields = new Set([
             "שם העסק", "שם איש הקשר", "דואל", "נייד", "מספר עסק", "כתובת", "כמות מסמכים"
           ]);
-
           const extraNotes = [];
           for (const key in item) {
             if (item.hasOwnProperty(key) && !knownFields.has(key) && item[key]) {
               extraNotes.push(`${key}: ${item[key]}`);
             }
           }
-
           if (extraNotes.length > 0) {
             client.notes = extraNotes.join('\n');
           }
-
           return client;
-        }).filter(client => client.name); // Only import clients with a name
+        }).filter(client => client.name);
 
-        // Bulk create clients
         await base44.entities.Client.bulkCreate(clientsData);
-
         queryClient.invalidateQueries(['clients']);
         setImportDialogOpen(false);
         alert(`יובאו בהצלחה ${clientsData.length} לקוחות!`);
@@ -159,6 +150,7 @@ export default function Clients() {
       setImporting(false);
     }
   };
+  */
 
   return (
     <div className="min-h-screen bg-background p-6">
@@ -167,35 +159,15 @@ export default function Clients() {
         <div className="flex items-center justify-between">
           <h1 className="text-3xl font-bold">לקוחות</h1>
           <div className="flex gap-3">
+            <Button size="lg" variant="outline" disabled title="בקרוב">
+              <Upload className="w-5 h-5 ml-2" />
+              ייבוא מקובץ
+            </Button>
+            {/* Migration 0.3: original import dialog — see handleFileUpload comment above
             <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
-              <DialogTrigger asChild>
-                <Button size="lg" variant="outline">
-                  <Upload className="w-5 h-5 ml-2" />
-                  ייבוא מקובץ
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>ייבוא לקוחות מקובץ</DialogTitle>
-                </DialogHeader>
-                <div className="space-y-4">
-                  <p className="text-sm text-muted-foreground">
-                    העלה קובץ Excel או CSV המכיל את העמודות הבאות:
-                    <br />
-                    שם העסק, שם איש הקשר, דואל, נייד, מספר עסק, כתובת, כמות מסמכים
-                  </p>
-                  <Input
-                    type="file"
-                    accept=".xlsx,.xls,.csv"
-                    onChange={handleFileUpload}
-                    disabled={importing}
-                  />
-                  {importing && (
-                    <p className="text-sm text-muted-foreground">מייבא נתונים...</p>
-                  )}
-                </div>
-              </DialogContent>
+              ...
             </Dialog>
+            */}
             <Dialog open={dialogOpen} onOpenChange={handleDialogOpenChange}>
               <DialogTrigger asChild>
                 <Button size="lg">

@@ -5,7 +5,7 @@
  * projects based on active workflow reminders or completed status.
  * Does NOT create or close reminders.
  */
-import { base44 } from '@/api/base44Client';
+import { api as base44 } from '@/api/apiClient';
 import {
   loadReminderEngineCache,
   REMINDER_STATUS,

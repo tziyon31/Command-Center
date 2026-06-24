@@ -31,7 +31,7 @@
  * Default is dry-run (plan only, zero mutations). Mutations require
  * apply: true, dryRun: false AND the plan-matching explicit confirmText.
  */
-import { base44 } from '@/api/base44Client';
+import { api as base44 } from '@/api/apiClient';
 import { createPageUrl } from '@/utils';
 import {
   ensureReminderForCondition,

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api as base44 } from '@/api/apiClient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import StatusBadge from '../components/StatusBadge.jsx';
 import { Card, CardContent } from "@/components/ui/card";

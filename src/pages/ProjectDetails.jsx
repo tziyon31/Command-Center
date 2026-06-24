@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
-import { base44 } from '@/api/base44Client';
+import { api as base44 } from '@/api/apiClient';
 import { createPageUrl } from '@/utils';
 import StatusBadge from '@/components/StatusBadge';
 import { Button } from "@/components/ui/button";

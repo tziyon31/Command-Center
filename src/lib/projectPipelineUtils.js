@@ -1,4 +1,4 @@
-import { base44 } from '@/api/base44Client';
+import { api as base44 } from '@/api/apiClient';
 import { MONETARY_OPEN_COLLECTION_STATUSES } from '@/lib/collectionDueUtils';
 import {
   COLLECTION_NEEDS_TAX_INVOICE_PREFIX,
