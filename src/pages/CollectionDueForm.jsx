@@ -12,12 +12,12 @@ import {
   buildGmailSearchUrl,
   buildCollectionDueFormPrefillFromInvoice,
   cancelCollectionDue,
-  completeCollectionDue,
   computeCollectionDueStatus,
   syncProjectLegacyCollectionFields,
 } from '@/lib/collectionDueUtils';
 import CollectionAmountPercentFields from '@/components/collection/CollectionAmountPercentFields';
 import CompleteCollectionDueDialog from '@/components/collection/CompleteCollectionDueDialog';
+import { useCollectionCelebration } from '@/context/CollectionCelebrationContext';
 import {
   calculatePercentFromProjectAmount,
   getProjectFeeAmount,
@@ -176,6 +176,7 @@ const buildPayload = (formData, { historical = false } = {}) => {
 export default function CollectionDueForm() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { completeCollectionDueWithCelebration } = useCollectionCelebration();
   const { id: initialId, invoiceProcessId, mode: initialMode } = readSearchParams();
 
   const [recordId, setRecordId] = useState(initialId);
@@ -465,7 +466,7 @@ export default function CollectionDueForm() {
 
     try {
       const current = record || { ...formData, id: recordId, amount_due: parsedAmountDue };
-      const updated = await completeCollectionDue(current, {
+      const updated = await completeCollectionDueWithCelebration(current, {
         paymentReceived,
         taxInvoiceSent,
         taxInvoiceReference,

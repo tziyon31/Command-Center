@@ -5,6 +5,7 @@ import { pagesConfig } from './pages.config'
 import { BrowserRouter as Router, Navigate, Route, Routes } from 'react-router-dom';
 import PageNotFound from './lib/PageNotFound';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
+import { CollectionCelebrationProvider } from '@/context/CollectionCelebrationContext';
 import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 import ClientDetails from './pages/ClientDetails';
 import ClientForm from './pages/ClientForm';
@@ -77,10 +78,12 @@ function App() {
   return (
     <AuthProvider>
       <QueryClientProvider client={queryClientInstance}>
-        <Router>
-          <AuthenticatedApp />
-        </Router>
-        <Toaster />
+        <CollectionCelebrationProvider>
+          <Router>
+            <AuthenticatedApp />
+          </Router>
+          <Toaster />
+        </CollectionCelebrationProvider>
       </QueryClientProvider>
     </AuthProvider>
   )

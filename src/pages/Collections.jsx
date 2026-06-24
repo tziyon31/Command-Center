@@ -11,9 +11,9 @@ import {
   ACTIVE_COLLECTION_STATUSES,
   COLLECTION_DUE_STATUS_LABELS,
   cancelCollectionDue,
-  completeCollectionDue,
 } from '@/lib/collectionDueUtils';
 import CompleteCollectionDueDialog from '@/components/collection/CompleteCollectionDueDialog';
+import { useCollectionCelebration } from '@/context/CollectionCelebrationContext';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
@@ -81,6 +81,7 @@ const formatTaxInvoiceSent = (record) => {
 
 export default function Collections() {
   const queryClient = useQueryClient();
+  const { completeCollectionDueWithCelebration } = useCollectionCelebration();
   const [showClosed, setShowClosed] = useState(false);
   const [actionId, setActionId] = useState(null);
   const [completeTarget, setCompleteTarget] = useState(null);
@@ -114,7 +115,7 @@ export default function Collections() {
 
     setActionId(completeTarget.id);
     try {
-      await completeCollectionDue(completeTarget, {
+      await completeCollectionDueWithCelebration(completeTarget, {
         paymentReceived,
         taxInvoiceSent,
         taxInvoiceReference,
