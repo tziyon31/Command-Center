@@ -29,7 +29,7 @@ PostgreSQL (Aiven) + Node/Express + Prisma. DB ריק — אין מיגרציי�
 
 ## שלב 4 — בדיקות מודול (ידני + תיקוני API)
 
-- [ ] 4.1 — Auth + Users
+- [x] 4.1 — Auth + Users (API verified; invite allows admin + office_manager)
 - [ ] 4.2 — Clients
 - [ ] 4.3 — Inquiries
 - [ ] 4.4 — Projects

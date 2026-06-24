@@ -30,7 +30,8 @@ export async function requireAuth(req, res, next) {
 }
 
 export function requireAdmin(req, res, next) {
-  if (req.user?.role !== 'admin') {
+  const role = req.user?.role;
+  if (role !== 'admin' && role !== 'office_manager') {
     return res.status(403).json({ error: 'Forbidden' });
   }
   return next();
