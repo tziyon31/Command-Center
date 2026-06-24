@@ -27,6 +27,6 @@ app.use((error, _req, res, _next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-app.listen(port, () => {
-  console.log(`API listening on http://localhost:${port}`);
+app.listen(port, '0.0.0.0', () => {
+  console.log(`API listening on port ${port}`);
 });
