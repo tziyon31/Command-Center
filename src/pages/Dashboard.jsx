@@ -180,8 +180,8 @@ export default function Dashboard() {
 
   const isTaskWorker = currentUser?.role === 'task_worker';
   const canSeeFullDashboard = !isTaskWorker;
-  const canShowAdminTestMenu = isAdminUser(currentUser);
-  const canRunReminderTests = canShowAdminTestMenu && isLocalDevEnvironment();
+  const canShowAdminTestMenu = currentUser?.role === 'admin' || isAdminUser(currentUser);
+  const canRunReminderTests = isAdminUser(currentUser) && isLocalDevEnvironment();
   const { previewCollectionCelebration, isCelebrating } = useCollectionCelebration();
 
   const {
@@ -900,11 +900,7 @@ export default function Dashboard() {
               {reminderTestStatus}
             </span>
           ) : null}
-          <div
-            className="relative"
-            onMouseEnter={() => setReminderTestDropupOpen(true)}
-            onMouseLeave={() => setReminderTestDropupOpen(false)}
-          >
+          <div className="relative">
             {reminderTestDropupOpen ? (
               <div className="absolute bottom-full left-0 mb-1 flex min-w-[220px] flex-col gap-1 rounded-md border bg-background p-1 shadow-lg">
                 {canRunReminderTests ? (
@@ -977,8 +973,9 @@ export default function Dashboard() {
               type="button"
               variant="outline"
               size="sm"
-              className="h-8 px-3 text-xs opacity-70 hover:opacity-100 shadow-sm"
+              className="h-8 px-3 text-xs shadow-sm"
               disabled={reminderCleanupRunning}
+              onClick={() => setReminderTestDropupOpen((open) => !open)}
             >
               {reminderTestRunning
                 ? getActiveReminderTestRunningLabel(activeReminderTestGroup)
