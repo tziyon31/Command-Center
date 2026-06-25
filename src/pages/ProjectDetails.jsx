@@ -35,6 +35,13 @@ import {
   PROJECT_DELETE_BUTTON_CLASS,
 } from '@/lib/projectDelete';
 import CollectionAmountPercentFields from '@/components/collection/CollectionAmountPercentFields';
+import {
+  cancelCollectionDue,
+  findActiveManualCollectionDue,
+  markCollectionDuePaid,
+  openManualCollectionDue,
+  updateManualCollectionDue,
+} from '@/lib/collectionDueUtils';
 import DeleteProjectDialog from '@/components/deletion/DeleteProjectDialog';
 import { calculatePercentFromProjectAmount } from '@/lib/invoiceProcessUtils';
 import { invalidateQueriesAfterProjectDeletion } from '@/lib/projectDeletionUtils';
@@ -707,17 +714,24 @@ export default function ProjectDetails() {
     setIsSavingCollection(true);
 
     try {
-      const isEditingExistingCollection = hasCollectionDueNow;
-      const payload = {
-        collection_due_now: true,
-        collection_due_amount: amount,
-        collection_due_note: collectionNote,
-        collection_due_target_date: collectionTargetDate.split('T')[0],
-        collection_due_date: isEditingExistingCollection
-          ? project.collection_due_date
-          : new Date().toISOString(),
-      };
-      await base44.entities.Project.update(project.id, payload);
+      const dueDate = collectionTargetDate.split('T')[0];
+      const existingManualDue = findActiveManualCollectionDue(projectCollectionDues);
+
+      if (existingManualDue) {
+        await updateManualCollectionDue(existingManualDue, {
+          amount,
+          note: collectionNote,
+          dueDate,
+        });
+      } else {
+        await openManualCollectionDue({
+          project,
+          client: linkedClient || null,
+          amount,
+          note: collectionNote,
+          dueDate,
+        });
+      }
 
       handleCollectionDialogOpenChange(false);
 
@@ -745,27 +759,35 @@ export default function ProjectDetails() {
     setIsSavingCollection(true);
 
     try {
-      const projectPayload = {
-        collected_amount: currentCollected + dueAmount,
-        last_collection_paid_on: now,
-        collection_due_now: false,
-        collection_due_amount: 0,
-        collection_due_note: '',
-        collection_due_date: '',
-        collection_due_target_date: '',
-      };
-      await base44.entities.Project.update(project.id, projectPayload);
+      const existingManualDue = findActiveManualCollectionDue(projectCollectionDues);
 
-      const collectionEventPayload = {
-        project_id: project.id,
-        project_name: project.name || '',
-        amount: dueAmount,
-        note: dueNote,
-        opened_at: openedAt,
-        paid_at: now,
-        type: 'collection_paid',
-      };
-      await base44.entities.CollectionEvent.create(collectionEventPayload);
+      if (existingManualDue) {
+        // CollectionDue is the source of truth: this updates status, records the
+        // business activity event and re-syncs the project's derived fields.
+        await markCollectionDuePaid(existingManualDue);
+      } else {
+        // Backward compatibility for legacy collections stored only on the project.
+        const projectPayload = {
+          collected_amount: currentCollected + dueAmount,
+          last_collection_paid_on: now,
+          collection_due_now: false,
+          collection_due_amount: 0,
+          collection_due_note: '',
+          collection_due_date: '',
+          collection_due_target_date: '',
+        };
+        await base44.entities.Project.update(project.id, projectPayload);
+
+        await base44.entities.CollectionEvent.create({
+          project_id: project.id,
+          project_name: project.name || '',
+          amount: dueAmount,
+          note: dueNote,
+          opened_at: openedAt,
+          paid_at: now,
+          type: 'collection_paid',
+        });
+      }
 
       await refreshProjectData();
     } catch (err) {
@@ -780,14 +802,20 @@ export default function ProjectDetails() {
     setIsSavingCollection(true);
 
     try {
-      const payload = {
-        collection_due_now: false,
-        collection_due_amount: 0,
-        collection_due_note: '',
-        collection_due_date: '',
-        collection_due_target_date: '',
-      };
-      await base44.entities.Project.update(project.id, payload);
+      const existingManualDue = findActiveManualCollectionDue(projectCollectionDues);
+
+      if (existingManualDue) {
+        await cancelCollectionDue(existingManualDue);
+      } else {
+        // Backward compatibility for legacy collections stored only on the project.
+        await base44.entities.Project.update(project.id, {
+          collection_due_now: false,
+          collection_due_amount: 0,
+          collection_due_note: '',
+          collection_due_date: '',
+          collection_due_target_date: '',
+        });
+      }
 
       await refreshProjectData();
     } catch (err) {

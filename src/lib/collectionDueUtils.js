@@ -228,6 +228,7 @@ export function buildProjectLegacyCollectionPayload(collections, { lastPaidAt = 
     collection_due_amount: totalRemaining,
     collection_due_note: note,
     collection_due_date: dueDate,
+    collection_due_target_date: dueDate,
   };
 }
 
@@ -335,6 +336,96 @@ export async function openCollectionDueFromInvoice({ invoice, entities = base44.
   await runCollectionRulesSafe(collectionDue, { entities, cache });
 
   return { collectionDue, created: true, invoiceId: invoice.id };
+}
+
+export function buildManualCollectionDuePayload({
+  project,
+  client = null,
+  amount,
+  note = '',
+  dueDate = '',
+  now = new Date(),
+}) {
+  const amountDue = toNumber(amount);
+  const nowIso = now.toISOString();
+
+  return {
+    project_id: project.id,
+    project_name: project.name || '',
+    client_id: project.client_id || client?.id || '',
+    client_name: client?.name || project.client_name || '',
+    amount_due: amountDue,
+    amount_paid: 0,
+    remaining_amount: amountDue,
+    due_date: dueDate || getTodayDateString(),
+    opened_at: nowIso,
+    paid_at: '',
+    status: 'open',
+    source_type: 'project_manual',
+    notes: note || '',
+    form_status: 'submitted',
+    ...defaultCollectionPaymentFields(),
+  };
+}
+
+// Active CollectionDue opened directly from a project stage (no invoice). Used so
+// the project page and the Collections page share a single source of truth.
+export function findActiveManualCollectionDue(collectionDues = []) {
+  return (collectionDues || [])
+    .filter((item) => ACTIVE_COLLECTION_STATUSES.has(item?.status) && item?.source_type === 'project_manual')
+    .sort((left, right) => (
+      new Date(right.opened_at || right.created_date || 0).getTime()
+      - new Date(left.opened_at || left.created_date || 0).getTime()
+    ))[0] || null;
+}
+
+export async function openManualCollectionDue({
+  project,
+  client = null,
+  amount,
+  note = '',
+  dueDate = '',
+  entities = base44.entities,
+  cache = null,
+} = {}) {
+  if (!project?.id) throw new Error('INVALID_PROJECT');
+
+  const payload = buildManualCollectionDuePayload({ project, client, amount, note, dueDate });
+  const collectionDue = await entities.CollectionDue.create(payload);
+
+  await syncProjectLegacyCollectionFields(project.id, {
+    entities,
+    freshCollections: [collectionDue],
+  });
+  await runCollectionRulesSafe(collectionDue, { entities, cache });
+
+  return collectionDue;
+}
+
+export async function updateManualCollectionDue(
+  collectionDue,
+  { amount, note = '', dueDate = '', entities = base44.entities, cache = null } = {},
+) {
+  if (!collectionDue?.id) throw new Error('COLLECTION_NOT_FOUND');
+
+  const amountDue = toNumber(amount);
+  const updatePayload = {
+    amount_due: amountDue,
+    remaining_amount: Math.max(amountDue - toNumber(collectionDue.amount_paid), 0),
+    due_date: dueDate || collectionDue.due_date || getTodayDateString(),
+    notes: note || '',
+  };
+
+  const updated = await entities.CollectionDue.update(collectionDue.id, updatePayload);
+  const result = { ...collectionDue, ...updated, ...updatePayload };
+
+  await syncProjectLegacyCollectionFields(collectionDue.project_id, {
+    entities,
+    freshCollections: [result],
+  });
+  await runCollectionRulesSafe(result, { entities, cache });
+
+  return result;
 }
 
 export async function createCollectionEventForPayment(collectionDue, entities = base44.entities) {

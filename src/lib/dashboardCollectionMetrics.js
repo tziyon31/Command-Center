@@ -415,18 +415,31 @@ export function buildDashboardCollectionMetrics({
     ...legacyOverdueItems,
   ];
 
-  // Activity feed still uses CollectionEvent; financial KPIs use CollectionDue to avoid double counting.
-  const businessCollectionActivityItems = realCollectionEvents
-    .filter((event) => event.type === 'collection_paid' && hasValidPaidAt(event.paid_at))
-    .sort((left, right) => new Date(right.paid_at).getTime() - new Date(left.paid_at).getTime())
-    .slice(0, 10)
-    .map((event) => ({
-      type: 'collection_paid',
-      title: 'גבייה בוצעה',
-      description: `${event.project_name || 'פרויקט ללא שם'} · ₪${toNumber(event.amount).toLocaleString()}`,
-      date: event.paid_at,
-      projectId: event.project_id,
-    }));
+  // Activity feed mirrors the financial KPIs: CollectionDue is the primary source
+  // (post-migration), with legacy CollectionEvent used only as a fallback so we
+  // never show paid collections twice.
+  const businessCollectionActivityItems = (hasPaidCollectionDueRecords
+    ? realCollectionDues
+      .filter((record) => record.status !== 'cancelled' && toNumber(record.amount_paid) > 0)
+      .map((record) => ({
+        type: 'collection_paid',
+        title: 'גבייה בוצעה',
+        description: `${record.project_name || 'פרויקט ללא שם'} · ₪${toNumber(record.amount_paid).toLocaleString()}`,
+        date: getCollectionDuePaidTimestamp(record),
+        projectId: record.project_id,
+      }))
+      .filter((item) => hasValidPaidAt(item.date))
+    : realCollectionEvents
+      .filter((event) => event.type === 'collection_paid' && hasValidPaidAt(event.paid_at))
+      .map((event) => ({
+        type: 'collection_paid',
+        title: 'גבייה בוצעה',
+        description: `${event.project_name || 'פרויקט ללא שם'} · ₪${toNumber(event.amount).toLocaleString()}`,
+        date: event.paid_at,
+        projectId: event.project_id,
+      })))
+    .sort((left, right) => new Date(right.date).getTime() - new Date(left.date).getTime())
+    .slice(0, 10);
 
   return {
     openCollectionDues,
