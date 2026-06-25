@@ -3592,7 +3592,7 @@ async function runTest52(ctx) {
     ctx,
     'create_test_collection_event_ba52',
     () => base44.entities.CollectionEvent.create({
-      project_id: 'test-project-event-52',
+      project_id: crypto.randomUUID(),
       project_name: `${TEST_REMINDER_FLOW_PREFIX} business-activity cleanup`,
       amount: 1234,
       note: 'test collection event cleanup',
