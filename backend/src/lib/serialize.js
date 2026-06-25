@@ -44,6 +44,29 @@ export function toApiRecord(record, { omit = [] } = {}) {
   return result;
 }
 
+// snake_case fields mapped to Postgres `uuid` columns. The legacy SDK accepted
+// empty strings to mean "no value"; Postgres rejects '' as invalid uuid syntax,
+// so we coerce blank uuid inputs to null before they reach Prisma.
+const UUID_FIELDS = new Set([
+  'client_id',
+  'project_id',
+  'source_inquiry_id',
+  'source_signed_proposal_id',
+  'signed_proposal_id',
+  'collection_due_id',
+  'invoice_process_id',
+  'source_entity_id',
+  'assigned_to_user_id',
+  'user_id',
+]);
+
+const coerceFieldValue = (snakeKey, value) => {
+  if (UUID_FIELDS.has(snakeKey) && typeof value === 'string' && value.trim() === '') {
+    return null;
+  }
+  return value;
+};
+
 export function toDbData(body, { omit = [] } = {}) {
   const omitted = new Set([
     ...omit,
@@ -59,7 +82,7 @@ export function toDbData(body, { omit = [] } = {}) {
 
   for (const [key, value] of Object.entries(body ?? {})) {
     if (omitted.has(key)) continue;
-    data[snakeToCamel(key)] = value;
+    data[snakeToCamel(key)] = coerceFieldValue(key, value);
   }
 
   return data;

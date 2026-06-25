@@ -6,6 +6,12 @@ import { toApiRecord, toDbData } from '../lib/serialize.js';
 
 const router = Router();
 
+// Forwards rejected promises to the Express error middleware so a failed query
+// returns a clean 500 instead of an unhandled rejection that drops the socket.
+const asyncHandler = (handler) => (req, res, next) => {
+  Promise.resolve(handler(req, res, next)).catch(next);
+};
+
 function getDelegate(entityName) {
   const config = resolveEntity(entityName);
   if (!config) return null;
@@ -22,7 +28,7 @@ function parseFilterQuery(filterParam) {
   }
 }
 
-router.get('/:entityName', async (req, res) => {
+router.get('/:entityName', asyncHandler(async (req, res) => {
   const resolved = getDelegate(req.params.entityName);
   if (!resolved) return res.status(404).json({ error: 'Unknown entity' });
 
@@ -33,9 +39,9 @@ router.get('/:entityName', async (req, res) => {
 
   const items = await resolved.delegate.findMany({ where, orderBy, take: limit, skip });
   res.json(items.map((item) => toApiRecord(item, { omit: resolved.config.sensitive ?? [] })));
-});
+}));
 
-router.get('/:entityName/:id', async (req, res) => {
+router.get('/:entityName/:id', asyncHandler(async (req, res) => {
   const resolved = getDelegate(req.params.entityName);
   if (!resolved) return res.status(404).json({ error: 'Unknown entity' });
 
@@ -43,9 +49,9 @@ router.get('/:entityName/:id', async (req, res) => {
   if (!item) return res.status(404).json({ error: 'Not found' });
 
   res.json(toApiRecord(item, { omit: resolved.config.sensitive ?? [] }));
-});
+}));
 
-router.post('/:entityName/bulk', async (req, res) => {
+router.post('/:entityName/bulk', asyncHandler(async (req, res) => {
   if (req.params.entityName !== 'clients') {
     return res.status(404).json({ error: 'Bulk create not supported for this entity' });
   }
@@ -60,18 +66,18 @@ router.post('/:entityName/bulk', async (req, res) => {
   );
 
   res.status(201).json(created.map((item) => toApiRecord(item)));
-});
+}));
 
-router.post('/:entityName', async (req, res) => {
+router.post('/:entityName', asyncHandler(async (req, res) => {
   const resolved = getDelegate(req.params.entityName);
   if (!resolved) return res.status(404).json({ error: 'Unknown entity' });
 
   const data = toDbData(req.body, { omit: resolved.config.sensitive ?? [] });
   const item = await resolved.delegate.create({ data });
   res.status(201).json(toApiRecord(item, { omit: resolved.config.sensitive ?? [] }));
-});
+}));
 
-router.put('/:entityName/:id', async (req, res) => {
+router.put('/:entityName/:id', asyncHandler(async (req, res) => {
   const resolved = getDelegate(req.params.entityName);
   if (!resolved) return res.status(404).json({ error: 'Unknown entity' });
 
@@ -79,21 +85,23 @@ router.put('/:entityName/:id', async (req, res) => {
   try {
     const item = await resolved.delegate.update({ where: { id: req.params.id }, data });
     res.json(toApiRecord(item, { omit: resolved.config.sensitive ?? [] }));
-  } catch {
-    res.status(404).json({ error: 'Not found' });
+  } catch (error) {
+    if (error?.code === 'P2025') return res.status(404).json({ error: 'Not found' });
+    throw error;
   }
-});
+}));
 
-router.delete('/:entityName/:id', async (req, res) => {
+router.delete('/:entityName/:id', asyncHandler(async (req, res) => {
   const resolved = getDelegate(req.params.entityName);
   if (!resolved) return res.status(404).json({ error: 'Unknown entity' });
 
   try {
     await resolved.delegate.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
-  } catch {
-    res.status(404).json({ error: 'Not found' });
+  } catch (error) {
+    if (error?.code === 'P2025') return res.status(404).json({ error: 'Not found' });
+    throw error;
   }
-});
+}));
 
 export default router;
