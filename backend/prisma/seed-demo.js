@@ -189,6 +189,15 @@ async function main() {
       hasSignedOfferOrOrder: true, signedAt: iso(-70), documentNote: 'חוזה חתום', formStatus: 'submitted', submittedAt: iso(-70),
     },
   });
+  // Planning project is signed but has no work stages yet, so the engine's R7
+  // rule raises a "define work stages" reminder. Without this record the project
+  // would sit in planning with no reminder anchor and look stuck.
+  await prisma.signedProposal.create({
+    data: {
+      projectId: projPlanning.id, projectName: projPlanning.name, clientId: aklim.id, clientName: aklim.company,
+      hasSignedOfferOrOrder: true, signedAt: iso(-8), documentNote: 'הזמנת עבודה חתומה', formStatus: 'submitted', submittedAt: iso(-8),
+    },
+  });
 
   // --- Work stages (for execution + signed projects) ---
   const stages = [
