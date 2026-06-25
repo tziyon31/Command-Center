@@ -277,6 +277,7 @@ model Proposal {
 
 model SignedProposal {
   id                      String     @id @default(uuid()) @db.Uuid
+  proposalId              String?    @map("proposal_id") @db.Uuid
   projectId               String?    @map("project_id") @db.Uuid
   projectName             String?    @map("project_name")
   clientId                String?    @map("client_id") @db.Uuid

@@ -50,6 +50,7 @@ export function toApiRecord(record, { omit = [] } = {}) {
 const UUID_FIELDS = new Set([
   'client_id',
   'project_id',
+  'proposal_id',
   'source_inquiry_id',
   'source_signed_proposal_id',
   'signed_proposal_id',
