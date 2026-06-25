@@ -11,7 +11,8 @@
     "build": "prisma generate",
     "start": "prisma migrate deploy && node src/index.js",
     "db:migrate": "prisma migrate dev",
-    "db:seed": "node prisma/seed.js"
+    "db:seed": "node prisma/seed.js",
+    "test:smoke": "bash scripts/smoke-test.sh"
   },
   "dependencies": {
     "@prisma/client": "^6.19.0",

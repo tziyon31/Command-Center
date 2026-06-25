@@ -27,37 +27,39 @@ PostgreSQL (Aiven) + Node/Express + Prisma. DB ריק — אין מיגרציי�
 - [x] 3.3 — AuthContext + `Login.jsx`
 - [x] 3.4 — Vite proxy, הסרת חבילות Base44
 
-## שלב 4 — בדיקות מודול (ידני + תיקוני API)
+## שלב 4 — בדיקות מודול (API smoke test ✅)
 
-- [x] 4.1 — Auth + Users (API verified; invite allows admin + office_manager)
-- [ ] 4.2 — Clients
-- [ ] 4.3 — Inquiries
-- [ ] 4.4 — Projects
-- [ ] 4.5 — Proposals
-- [ ] 4.6 — Signed Proposals
-- [ ] 4.7 — Work Stages
-- [ ] 4.8 — Invoices
-- [ ] 4.9 — Collections
-- [ ] 4.10 — Dashboard
-- [ ] 4.11 — Reminders
+- [x] 4.1 — Auth + Users
+- [x] 4.2 — Clients
+- [x] 4.3 — Inquiries
+- [x] 4.4 — Projects
+- [x] 4.5 — Proposals
+- [x] 4.6 — Signed Proposals
+- [x] 4.7 — Work Stages
+- [x] 4.8 — Invoices
+- [x] 4.9 — Collections
+- [x] 4.10 — Dashboard (tasks, quotes)
+- [x] 4.11 — Reminders + ReminderSettings
+
+> הרצה: `backend/scripts/smoke-test.sh`
 
 ## שלב 5 — תכונות מיוחדות
 
-- [ ] 5.1 — inviteUser
-- [ ] 5.2 — bulkCreate (אופציונלי)
+- [x] 5.1 — inviteUser
+- [x] 5.2 — bulkCreate
 
 ## שלב 6 — Audit + Reminders
 
-- [ ] 6.1 — דפי audit על DB ריק
-- [ ] 6.2 — reminder engine עם נתונים ידניים
+- [x] 6.1 — דפי audit (API lists OK; UI לא נבדק בדפדפן)
+- [ ] 6.2 — reminder engine end-to-end (דורש flow ידני: inquiry→project→status)
 
 ## שלב 7 — ניקוי Base44
 
-- [ ] 7.1 — הסרת Base44 מהפרונט
+- [x] 7.1 — הסרת Base44 מהפרונט (`base44Client.js`, `app-params.js`, packages)
 
 ## שלב 8 — Production (אופציונלי)
 
-- [ ] 8.x — Deploy backend + frontend (Vercel + Railway/Render)
+- [x] 8.x — Deploy backend (Render) + frontend (Vercel) + `VITE_API_URL`
 
 ---
 
