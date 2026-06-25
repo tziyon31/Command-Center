@@ -68,7 +68,7 @@ const coerceFieldValue = (snakeKey, value) => {
   return value;
 };
 
-export function toDbData(body, { omit = [] } = {}) {
+export function toDbData(body, { omit = [], allowedFields = null } = {}) {
   const omitted = new Set([
     ...omit,
     'id',
@@ -83,7 +83,11 @@ export function toDbData(body, { omit = [] } = {}) {
 
   for (const [key, value] of Object.entries(body ?? {})) {
     if (omitted.has(key)) continue;
-    data[snakeToCamel(key)] = coerceFieldValue(key, value);
+    const camelKey = snakeToCamel(key);
+    // Drop keys that are not real columns on the target model, matching the
+    // legacy SDK's tolerance for extra payload fields.
+    if (allowedFields && !allowedFields.has(camelKey)) continue;
+    data[camelKey] = coerceFieldValue(key, value);
   }
 
   return data;

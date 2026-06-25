@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma.js';
 import { resolveEntity } from '../lib/entityRegistry.js';
 import { buildOrderBy, buildWhereFromFilters } from '../lib/filters.js';
 import { toApiRecord, toDbData } from '../lib/serialize.js';
+import { getModelScalarFields } from '../lib/modelFields.js';
 
 const router = Router();
 
@@ -61,8 +62,9 @@ router.post('/:entityName/bulk', asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'Expected array body' });
   }
 
+  const allowedFields = getModelScalarFields('client');
   const created = await prisma.$transaction(
-    rows.map((row) => prisma.client.create({ data: toDbData(row) })),
+    rows.map((row) => prisma.client.create({ data: toDbData(row, { allowedFields }) })),
   );
 
   res.status(201).json(created.map((item) => toApiRecord(item)));
@@ -72,7 +74,10 @@ router.post('/:entityName', asyncHandler(async (req, res) => {
   const resolved = getDelegate(req.params.entityName);
   if (!resolved) return res.status(404).json({ error: 'Unknown entity' });
 
-  const data = toDbData(req.body, { omit: resolved.config.sensitive ?? [] });
+  const data = toDbData(req.body, {
+    omit: resolved.config.sensitive ?? [],
+    allowedFields: getModelScalarFields(resolved.config.model),
+  });
   const item = await resolved.delegate.create({ data });
   res.status(201).json(toApiRecord(item, { omit: resolved.config.sensitive ?? [] }));
 }));
@@ -81,7 +86,10 @@ router.put('/:entityName/:id', asyncHandler(async (req, res) => {
   const resolved = getDelegate(req.params.entityName);
   if (!resolved) return res.status(404).json({ error: 'Unknown entity' });
 
-  const data = toDbData(req.body, { omit: resolved.config.sensitive ?? [] });
+  const data = toDbData(req.body, {
+    omit: resolved.config.sensitive ?? [],
+    allowedFields: getModelScalarFields(resolved.config.model),
+  });
   try {
     const item = await resolved.delegate.update({ where: { id: req.params.id }, data });
     res.json(toApiRecord(item, { omit: resolved.config.sensitive ?? [] }));
