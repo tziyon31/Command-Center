@@ -259,11 +259,25 @@ async function main() {
       notes: 'יתרת תשלום עם סיום ההתקנה',
     },
   });
-  await prisma.collectionEvent.create({
-    data: { projectId: projCollected.id, projectName: projCollected.name, amount: 320000, note: 'תשלום סופי', paidAt: iso(-15), type: 'collection_paid' },
+  // Completed projects: record collection via paid collection_dues (the model the
+  // dashboard's "recorded collection" reads) so totals stay coherent across periods.
+  await prisma.collectionDue.create({
+    data: {
+      projectId: projCollected.id, projectName: projCollected.name, clientId: tzafon.id, clientName: tzafon.company,
+      amountDue: 320000, amountPaid: 320000, remainingAmount: 0, dueDate: dateOnly(-20),
+      openedAt: iso(-40), paidAt: iso(-15), paymentReceived: true, paymentReceivedAt: iso(-15),
+      taxInvoiceSentToClient: true, taxInvoiceSentAt: iso(-14), status: 'paid',
+      sourceType: 'invoice_process', formStatus: 'submitted', notes: 'תשלום סופי',
+    },
   });
-  await prisma.collectionEvent.create({
-    data: { projectId: projCompleted.id, projectName: projCompleted.name, amount: 890000, note: 'תשלום סופי שלב א', paidAt: iso(-85), type: 'collection_paid' },
+  await prisma.collectionDue.create({
+    data: {
+      projectId: projCompleted.id, projectName: projCompleted.name, clientId: aklim.id, clientName: aklim.company,
+      amountDue: 890000, amountPaid: 890000, remainingAmount: 0, dueDate: dateOnly(-90),
+      openedAt: iso(-110), paidAt: iso(-85), paymentReceived: true, paymentReceivedAt: iso(-85),
+      taxInvoiceSentToClient: true, taxInvoiceSentAt: iso(-84), status: 'paid',
+      sourceType: 'invoice_process', formStatus: 'submitted', notes: 'תשלום סופי שלב א',
+    },
   });
 
   // --- Quotes ---
