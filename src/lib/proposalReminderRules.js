@@ -21,11 +21,11 @@ export const INQUIRY_NEEDS_PROPOSAL_CONDITION_PREFIX = 'inquiry_needs_proposal:'
 export const PROPOSAL_NEEDS_SIGNED_PROPOSAL_CONDITION_PREFIX = 'proposal_needs_signed_proposal:';
 
 /**
- * P2G: project_needs_proposal is valid only while the project is still in
- * pricing. Any other status (waiting/signed/execution/completed/rejected/
- * cancelled/...) resolves the reminder when the rule runs.
+ * P2G: project_needs_proposal is valid while the project is in the quote-intake
+ * lane. The pipeline groups lead + pricing together as "הצעות בתמחור", so a lead
+ * project without proposal coverage must not sit there without an action.
  */
-const P2_ELIGIBLE_PROJECT_STATUSES = new Set(['pricing']);
+const P2_ELIGIBLE_PROJECT_STATUSES = new Set(['lead', 'pricing']);
 
 export function getProposalIncompleteConditionKey(proposalId) {
   return `${PROPOSAL_INCOMPLETE_CONDITION_PREFIX}${proposalId}`;

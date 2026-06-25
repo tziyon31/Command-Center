@@ -754,13 +754,13 @@ export function planProjectLifecycleReminderActions(
 
     // Runtime does not resolve proposal reminders on excluded projects via records;
     // only the dedicated excluded-workflow bucket applies.
-    if (mode !== PLANNER_MODE_RUNTIME && status !== 'pricing') {
+    if (mode !== PLANNER_MODE_RUNTIME && !['lead', 'pricing'].includes(status)) {
       const existingProposal = summarizeExistingReminder(cache, proposalKey);
       if (existingProposal) {
         actions.push({
           ...baseActionRow(project, 'staleProposalRemindersToResolve', 'project_needs_proposal', proposalKey),
           action: 'resolve',
-          reason: `Project status is "${status}" (not pricing); proposal reminder is stale`,
+          reason: `Project status is "${status}" (not lead/pricing); proposal reminder is stale`,
           ...existingProposal,
         });
       }
@@ -824,24 +824,25 @@ export function planProjectLifecycleReminderActions(
   }
 
   // ---- Legacy bootstrap rules below: Project.status is allowed ONLY here ----
+  const proposalReminderValidStatuses = new Set(['lead', 'pricing']);
 
-  // Rule A: stale project_needs_proposal — valid only for pricing.
-  if (status !== 'pricing') {
+  // Rule A: stale project_needs_proposal — valid only for quote-intake statuses.
+  if (!proposalReminderValidStatuses.has(status)) {
     const existing = summarizeExistingReminder(cache, proposalKey);
     if (existing) {
       actions.push({
         ...baseActionRow(project, 'staleProposalRemindersToResolve', 'project_needs_proposal', proposalKey),
         action: 'resolve',
-        reason: `Project status is "${status}" (not pricing); proposal reminder is stale`,
+        reason: `Project status is "${status}" (not lead/pricing); proposal reminder is stale`,
         ...existing,
       });
     }
   }
 
-  // Rule E (P2H): pricing project with no proposal coverage → create
+  // Rule E (P2H): lead/pricing project with no proposal coverage → create
   // project_needs_proposal. Missing client_id does NOT block creation.
   if (
-    status === 'pricing'
+    proposalReminderValidStatuses.has(status)
     && !hasOpenReminderForConditionKey(cache, proposalKey)
     && !hasSubmittedSignedProposal
     && !hasWorkStages
@@ -850,7 +851,7 @@ export function planProjectLifecycleReminderActions(
     actions.push({
       ...baseActionRow(project, 'pricingProposalRemindersToCreate', 'project_needs_proposal', proposalKey),
       action: 'create',
-      reason: 'Pricing project has no proposal, no signed proposal, no work stages and no active proposal reminder',
+      reason: 'Lead/pricing project has no proposal, no signed proposal, no work stages and no active proposal reminder',
       reminder_input: buildPricingProposalReminderInput(project, clientsById),
     });
   }

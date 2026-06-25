@@ -13,13 +13,25 @@ npm run db:seed
 npm run dev
 ```
 
-## Seed admin
+## Seed users
+
+### Admin (פיתוח)
 
 | Field | Value |
 |-------|-------|
 | Email | `admin@local.test` |
 | Password | `Admin123!` |
 | Role | `admin` |
+
+### Demo client preview (תצוגה ללקוחות)
+
+| Field | Value |
+|-------|-------|
+| Email | `demo@local.test` |
+| Password | `Demo!2026` |
+| Role | `office_manager` |
+
+גישה מלאה לדשבורד ולתהליך העסקי (לקוחות, פרויקטים, הצעות, גבייה וכו') — בלי כלי admin, בלי Test Reminders. להצגת המערכת ללקוחות, הרץ גם `npm run db:seed-demo` לנתוני דמו.
 
 ## API
 

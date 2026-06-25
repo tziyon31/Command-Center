@@ -46,7 +46,7 @@ import {
   REMINDER_TEST_DASHBOARD_RUN_GROUPS,
   TEST_GROUP_LABELS,
 } from '@/lib/reminderTestRunner';
-import { isAdminUser } from '@/lib/adminAccess';
+import { canRunReminderTests } from '@/lib/adminAccess';
 import { filterRealBusinessCollectionEvents } from '@/lib/testDataUtils';
 import { buildDashboardCollectionMetrics } from '@/lib/dashboardCollectionMetrics';
 import { buildCollectionDueFormPageUrl } from '@/lib/workflowNavigation';
@@ -178,8 +178,7 @@ export default function Dashboard() {
 
   const isTaskWorker = currentUser?.role === 'task_worker';
   const canSeeFullDashboard = !isTaskWorker;
-  const canShowAdminTestMenu = currentUser?.role === 'admin' || isAdminUser(currentUser);
-  const canRunReminderTests = canShowAdminTestMenu;
+  const canShowAdminTestMenu = canRunReminderTests(currentUser);
 
   const {
     data: visibleReminders = [],

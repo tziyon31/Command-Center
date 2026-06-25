@@ -6,23 +6,42 @@ const prisma = new PrismaClient();
 const SEED_EMAIL = 'admin@local.test';
 const SEED_PASSWORD = 'Admin123!';
 
-async function main() {
-  const passwordHash = await bcrypt.hash(SEED_PASSWORD, 10);
+const DEMO_EMAIL = 'demo@local.test';
+const DEMO_PASSWORD = 'Demo!2026';
+
+async function upsertUser({ email, password, fullName, role }) {
+  const passwordHash = await bcrypt.hash(password, 10);
 
   await prisma.user.upsert({
-    where: { email: SEED_EMAIL },
-    update: {},
+    where: { email },
+    update: { fullName, role, passwordHash },
     create: {
-      email: SEED_EMAIL,
+      email,
       passwordHash,
-      fullName: 'Admin',
-      role: 'admin',
+      fullName,
+      role,
       phone: '',
       position: '',
     },
   });
 
-  console.log(`Seeded admin: ${SEED_EMAIL} / ${SEED_PASSWORD}`);
+  console.log(`Seeded user: ${email} / ${password} (${role})`);
+}
+
+async function main() {
+  await upsertUser({
+    email: SEED_EMAIL,
+    password: SEED_PASSWORD,
+    fullName: 'Admin',
+    role: 'admin',
+  });
+
+  await upsertUser({
+    email: DEMO_EMAIL,
+    password: DEMO_PASSWORD,
+    fullName: 'תצוגה ללקוח',
+    role: 'office_manager',
+  });
 }
 
 main()
