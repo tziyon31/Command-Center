@@ -12,6 +12,8 @@
     "start": "prisma migrate deploy && node src/index.js",
     "db:migrate": "prisma migrate dev",
     "db:seed": "node prisma/seed.js",
+    "db:seed-demo": "node prisma/seed-demo.js",
+    "db:clean-demo": "node prisma/clean-demo.js",
     "test:smoke": "bash scripts/smoke-test.sh"
   },
   "dependencies": {
