@@ -321,40 +321,9 @@ async function main() {
   }
 
   // --- Reminders ---
-  const reminders = [
-    {
-      title: 'גבייה פתוחה - מרכז לוגיסטי', description: 'יתרת תשלום 240,000 ₪ ממתינה', project: projExecution,
-      client: cohen, sourceType: 'collection_due', conditionKey: `collection_open:${projExecution.id}`,
-      url: '/Collections', label: 'פתח גבייה', freq: 'due_date_based', next: iso(3),
-    },
-    {
-      title: 'הצעה ממתינה לחתימה - סופרמרקט', description: 'הלקוח צפה בהצעה, לא נחתם', project: projPricing,
-      client: cohen, sourceType: 'proposal', conditionKey: `proposal_followup:${projPricing.id}`,
-      url: '/Proposals', label: 'פתח הצעה', freq: 'daily', next: iso(1),
-    },
-    {
-      title: 'שלב בהמתנה לאישור - חדר נקי', description: 'שלב תכנון ממתין לאישור לקוח', project: projSigned,
-      client: techno, sourceType: 'work_stage', conditionKey: `work_stage_pending:${projSigned.id}`,
-      url: '/WorkStages', label: 'פתח שלבים', freq: 'daily', next: iso(2),
-    },
-    {
-      title: 'מעקב פנייה חדשה - בניין מגורים', description: 'פנייה הוגשה, ממתינה לטיפול', project: null,
-      client: null, sourceType: 'inquiry', conditionKey: 'inquiry_followup:demo', clientName: 'רונן גבאי',
-      url: '/Inquiries', label: 'פתח פניות', freq: 'daily', next: iso(1),
-    },
-  ];
-  for (const r of reminders) {
-    await prisma.reminder.create({
-      data: {
-        title: r.title, description: r.description,
-        clientName: r.client?.company ?? r.clientName ?? 'לקוח',
-        clientId: r.client?.id, projectName: r.project?.name, projectId: r.project?.id,
-        sourceType: r.sourceType, sourceId: r.project?.id ?? 'demo-inquiry',
-        conditionKey: r.conditionKey, actionUrl: r.url, actionLabel: r.label,
-        status: 'active', frequency: r.freq, defaultTime: '07:00', nextRemindAt: r.next, activeSince: iso(-2),
-      },
-    });
-  }
+  // Reminders are intentionally NOT seeded. They are generated automatically by
+  // the in-app reminder engine (P1/P2/collection/work-stage/invoice rules) from
+  // the demo entities above, so the system is self-sufficient without seed data.
 
   // --- Reminder settings for admin ---
   const admin = await prisma.user.findUnique({ where: { email: 'admin@local.test' } });

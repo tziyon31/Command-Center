@@ -1651,7 +1651,14 @@ export async function runReminderReconciliationNow(reason = 'manual') {
     const inquiriesById = cache.InquiryById;
     const proposalsById = cache.ProposalById;
     const signedProposalsById = cache.SignedProposalById;
+    const projectsById = cache.ProjectById;
+    const clientsById = cache.ClientById;
     cache.signedProposals = signedProposalsById ? [...signedProposalsById.values()] : [];
+    // Provide list-shaped views so the proposal/project rule runners reuse the
+    // already-loaded entities instead of refetching during reconciliation.
+    cache.proposals = proposalsById ? [...proposalsById.values()] : [];
+    cache.projects = projectsById ? [...projectsById.values()] : [];
+    cache.clients = clientsById ? [...clientsById.values()] : [];
     const remainingBeforeP1 = Math.max(RECONCILIATION_MAX_MUTATIONS_PER_RUN - result.mutationCount, 0);
 
     if (remainingBeforeP1 > 0 && inquiriesById && proposalsById) {
@@ -1661,12 +1668,27 @@ export async function runReminderReconciliationNow(reason = 'manual') {
       if (p1Summary.hasMore || p1Summary.rateLimited || result.mutationCount >= RECONCILIATION_MAX_MUTATIONS_PER_RUN) { result.hasMore = true; return result; }
     }
 
+    // P2: projects in pricing without a proposal need a "open proposal" reminder.
+    if (projectsById && result.mutationCount < RECONCILIATION_MAX_MUTATIONS_PER_RUN) {
+      const { runProposalReminderRulesForProject } = await import('@/lib/proposalReminderRules');
+      for (const project of projectsById.values()) {
+        if (result.mutationCount >= RECONCILIATION_MAX_MUTATIONS_PER_RUN) { result.hasMore = true; break; }
+        const verdict = await runProposalReminderRulesForProject(project, cache);
+        if (verdict?.action === 'created' || verdict?.action === 'updated' || verdict?.action === 'resolved') result.mutationCount += 1;
+      }
+    }
+
+    // Proposal-stage rules (P0 incomplete, P3 not sent, P4 not seen, SP1 needs signed).
     if (proposalsById && result.mutationCount < RECONCILIATION_MAX_MUTATIONS_PER_RUN) {
-      const { runSignedProposalNeedReminderRuleForProposal } = await import('@/lib/proposalReminderRules');
+      const { runProposalReminderRulesForProposal } = await import('@/lib/proposalReminderRules');
       for (const proposal of proposalsById.values()) {
         if (result.mutationCount >= RECONCILIATION_MAX_MUTATIONS_PER_RUN) { result.hasMore = true; break; }
-        const verdict = await runSignedProposalNeedReminderRuleForProposal(proposal, cache);
-        if (verdict?.action === 'created' || verdict?.action === 'updated' || verdict?.action === 'resolved') result.mutationCount += 1;
+        const verdict = await runProposalReminderRulesForProposal(proposal, cache);
+        for (const ruleResult of [verdict?.p0, verdict?.p3, verdict?.p4, verdict?.sp1, verdict?.p2]) {
+          if (ruleResult?.action === 'created' || ruleResult?.action === 'updated' || ruleResult?.action === 'resolved') {
+            result.mutationCount += 1;
+          }
+        }
       }
     }
 
