@@ -1,5 +1,5 @@
 /**
- * Reminder-policy exclusion layer (approved by Aharon).
+ * Reminder-policy exclusion layer (approved by management).
  *
  * Excluded projects must NOT receive workflow reminders:
  *   - project_needs_work_stages

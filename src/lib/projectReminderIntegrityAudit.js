@@ -181,7 +181,7 @@ function classifyProjectNeedsProposal(reminder, context) {
     return finalizeReminderRow(row, 'missing_target_or_orphan', {
       severity: 'error',
       reason: 'Reminder points to missing project',
-      recommended_action: 'Ask Aharon whether to close this reminder',
+      recommended_action: 'Ask management whether to close this reminder',
       projectContext,
     });
   }
@@ -212,7 +212,7 @@ function classifyProjectNeedsProposal(reminder, context) {
   return finalizeReminderRow(row, 'valid_project_reminder', {
     severity: 'info',
     reason: `Project status "${projectContext.project_status}" — no stale rule defined`,
-    recommended_action: 'Review with Aharon whether reminder is still needed',
+    recommended_action: 'Review manually whether reminder is still needed',
     projectContext,
   });
 }
@@ -237,12 +237,12 @@ function resolveSignedProposalProjectId(reminder, signedProposalId, context) {
   return '';
 }
 
-/** Active workflow reminder on a project excluded by Aharon → never valid. */
+/** Active workflow reminder on a project excluded by policy → never valid. */
 function classifyExcludedWorkflowReminder(row, projectContext) {
   return finalizeReminderRow(row, 'stale_project_reminder', {
     severity: 'warning',
-    reason: 'Project is excluded from workflow reminders by Aharon approval',
-    recommended_action: 'Close via P2G apply; no workflow reminder needed unless Aharon changes the decision',
+    reason: 'Project is excluded from workflow reminders by management approval',
+    recommended_action: 'Close via P2G apply; no workflow reminder needed unless management changes the policy',
     projectContext,
   });
 }
@@ -266,7 +266,7 @@ function classifySignedProposalNeedsWorkStages(reminder, context) {
     return finalizeReminderRow(row, 'missing_target_or_orphan', {
       severity: 'error',
       reason: 'Cannot resolve project or signed proposal target',
-      recommended_action: 'Ask Aharon whether to close this reminder',
+      recommended_action: 'Ask management whether to close this reminder',
       projectContext,
     });
   }
@@ -292,7 +292,7 @@ function classifySignedProposalNeedsWorkStages(reminder, context) {
       return finalizeReminderRow(row, 'stale_project_reminder', {
         severity: 'warning_high',
         reason: 'SignedProposal record not found; reminder workflow source is gone',
-        recommended_action: 'Ask Aharon whether to close this reminder',
+        recommended_action: 'Ask management whether to close this reminder',
         projectContext,
       });
     }
@@ -301,7 +301,7 @@ function classifySignedProposalNeedsWorkStages(reminder, context) {
       return finalizeReminderRow(row, 'stale_project_reminder', {
         severity: 'warning_high',
         reason: 'SignedProposal is cancelled or no longer valid',
-        recommended_action: 'Ask Aharon whether to close this reminder',
+        recommended_action: 'Ask management whether to close this reminder',
         projectContext,
       });
     }
@@ -331,7 +331,7 @@ function classifySignedProposalNeedsWorkStages(reminder, context) {
   return finalizeReminderRow(row, 'valid_project_reminder', {
     severity: 'warning',
     reason: `Cannot verify SignedProposal in this environment; project status is "${status}"`,
-    recommended_action: 'Review with Aharon whether reminder is still needed',
+    recommended_action: 'Review manually whether reminder is still needed',
     projectContext,
   });
 }
@@ -345,7 +345,7 @@ function classifyProjectWaitingFollowup(reminder, context) {
     return finalizeReminderRow(row, 'missing_target_or_orphan', {
       severity: 'error',
       reason: 'Reminder points to missing project',
-      recommended_action: 'Ask Aharon whether to close this reminder',
+      recommended_action: 'Ask management whether to close this reminder',
       projectContext,
     });
   }
@@ -362,7 +362,7 @@ function classifyProjectWaitingFollowup(reminder, context) {
     return finalizeReminderRow(row, 'stale_project_reminder', {
       severity: 'warning',
       reason: `Project status is "${status}" (not waiting); follow-up reminder is no longer relevant`,
-      recommended_action: 'Ask Aharon whether to close this reminder',
+      recommended_action: 'Ask management whether to close this reminder',
       projectContext,
     });
   }
@@ -393,7 +393,7 @@ function classifyProjectNeedsWorkStages(reminder, context) {
     return finalizeReminderRow(row, 'missing_target_or_orphan', {
       severity: 'error',
       reason: 'Reminder points to missing project',
-      recommended_action: 'Ask Aharon whether to close this reminder',
+      recommended_action: 'Ask management whether to close this reminder',
       projectContext,
     });
   }
@@ -429,7 +429,7 @@ function classifyProjectNeedsWorkStages(reminder, context) {
   return finalizeReminderRow(row, 'stale_project_reminder', {
     severity: 'warning',
     reason: `No submitted signed proposal and status "${status}" is not signed/execution; work-stage reminder has no workflow source`,
-    recommended_action: 'Ask Aharon whether to close this reminder',
+    recommended_action: 'Ask management whether to close this reminder',
     projectContext,
   });
 }
@@ -446,7 +446,7 @@ function classifyCollectionPaymentDue(reminder, context) {
     return finalizeReminderRow(row, 'missing_target_or_orphan', {
       severity: 'error',
       reason: 'Reminder points to missing collection due',
-      recommended_action: 'Ask Aharon whether to close this reminder',
+      recommended_action: 'Ask management whether to close this reminder',
     });
   }
 
@@ -457,7 +457,7 @@ function classifyCollectionPaymentDue(reminder, context) {
     return finalizeReminderRow(row, 'missing_target_or_orphan', {
       severity: 'error',
       reason: 'Collection due has no project_id',
-      recommended_action: 'Ask Aharon whether to close this reminder',
+      recommended_action: 'Ask management whether to close this reminder',
       projectContext,
     });
   }
@@ -485,7 +485,7 @@ function classifyCollectionPaymentDue(reminder, context) {
   return finalizeReminderRow(row, 'stale_project_reminder', {
     severity: 'warning',
     reason: `Collection due status "${collectionStatus}" may no longer need an active reminder`,
-    recommended_action: 'Review with Aharon whether to close this reminder',
+    recommended_action: 'Review manually whether to close this reminder',
     projectContext,
   });
 }
@@ -510,7 +510,7 @@ function classifyUnknownConditionKey(reminder, context) {
   return finalizeReminderRow(row, 'unknown_condition_key', {
     severity: 'warning',
     reason: 'Unknown or unhandled condition_key for integrity rules',
-    recommended_action: 'Review with Aharon whether this reminder is still valid',
+    recommended_action: 'Review manually whether this reminder is still valid',
     projectContext,
   });
 }
@@ -567,7 +567,7 @@ function buildMissingReminderCandidateRow(project, pipelineRow, activeRemindersC
     classification: 'missing_reminder_candidate',
     severity: 'warning',
     reason: statusReasons[status] || `${status} project has no active mapped reminder`,
-    recommended_action: 'Ask Aharon whether this project needs a reminder',
+    recommended_action: 'Ask management whether this project needs a reminder',
   };
 }
 
@@ -612,7 +612,7 @@ function buildRecommendations(groups, counts) {
     recommendations.push({
       type: 'stale_project_reminders',
       count: counts.staleProjectRemindersCount,
-      message: 'Review stale project reminders with Aharon before closing anything.',
+      message: 'Review stale project reminders manually before closing anything.',
     });
   }
 
@@ -771,7 +771,7 @@ export async function runProjectReminderIntegrityAudit({ entities = base44.entit
         project_status_label: getProjectWorkStatusLabel(project),
         classification: 'workflow_excluded_project',
         severity: 'info',
-        recommended_action: 'No workflow reminder needed unless Aharon changes the decision.',
+        recommended_action: 'No workflow reminder needed unless management changes the policy.',
       });
     }
 

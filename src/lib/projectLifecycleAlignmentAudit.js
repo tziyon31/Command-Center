@@ -277,7 +277,7 @@ function recommendWorkStatus(project, workStageInfo) {
       current_work_status_bucket: 'intermediate_planning',
       recommended_work_status_bucket: 'accepted',
       work_status_confidence: 'medium',
-      work_status_reason: 'Project.status planning exists but not directly mapped to Aharon\'s 3 main work statuses',
+      work_status_reason: 'Project.status planning exists but not directly mapped to the 3 main work statuses',
     };
   }
 
@@ -286,7 +286,7 @@ function recommendWorkStatus(project, workStageInfo) {
       current_work_status_bucket: 'intermediate_submission',
       recommended_work_status_bucket: 'in_work',
       work_status_confidence: 'medium',
-      work_status_reason: 'Project.status submission exists but not directly mapped to Aharon\'s 3 main work statuses',
+      work_status_reason: 'Project.status submission exists but not directly mapped to the 3 main work statuses',
     };
   }
 
@@ -329,17 +329,17 @@ function assessMigrationComplexity(project, workStageInfo, constructionAnalysis,
   const status = String(project?.status || '').trim();
   const reasons = [];
   let complexity = 'low';
-  let requiresAharonDecision = false;
+  let requiresManualDecision = false;
 
   if (duplicateFlags.length > 0) {
     complexity = 'high';
-    requiresAharonDecision = true;
+    requiresManualDecision = true;
     reasons.push('True duplicate or business mismatch detected');
   }
 
   if (status === 'execution' && !workStageInfo.has_work_stages) {
     complexity = complexity === 'high' ? 'high' : 'medium';
-    requiresAharonDecision = true;
+    requiresManualDecision = true;
     reasons.push('In-work project without defined WorkStages');
   }
 
@@ -350,19 +350,19 @@ function assessMigrationComplexity(project, workStageInfo, constructionAnalysis,
 
   if (status === 'completed' && constructionAnalysis.construction_status_requires_manual_update) {
     complexity = complexity === 'high' ? 'high' : 'medium';
-    requiresAharonDecision = true;
+    requiresManualDecision = true;
     reasons.push('Completed planning project may need manual construction status');
   }
 
   if (constructionAnalysis.matched_keywords?.length > 0) {
     complexity = complexity === 'low' ? 'medium' : complexity;
-    requiresAharonDecision = true;
+    requiresManualDecision = true;
     reasons.push('Construction status inferred from notes only');
   }
 
   if (!String(project?.name || '').trim() || !status) {
     complexity = 'high';
-    requiresAharonDecision = true;
+    requiresManualDecision = true;
     reasons.push('Missing critical project fields');
   }
 
@@ -382,7 +382,7 @@ function assessMigrationComplexity(project, workStageInfo, constructionAnalysis,
   return {
     migration_complexity: complexity,
     recommended_action: recommendedAction,
-    requires_aharon_decision: requiresAharonDecision,
+    requires_manual_decision: requiresManualDecision,
     reason: reasons.join('; ') || 'Clear mapping',
   };
 }
@@ -442,7 +442,7 @@ function buildProjectAuditRow(
     ...constructionAnalysis,
     migration_complexity: migration.migration_complexity,
     recommended_action: migration.recommended_action,
-    requires_aharon_decision: migration.requires_aharon_decision,
+    requires_manual_decision: migration.requires_manual_decision,
     migration_reason: migration.reason,
     duplicate_flags: duplicateFlags,
     is_delivered_facility_candidate: isDeliveredFacilityCandidate(project.notes, constructionAnalysis),
@@ -575,7 +575,7 @@ function classifyRelationshipCandidates(projects, proposals, quotes) {
           other_work_number: other.work_number || '',
           reason: 'Notes suggest merged/version/history relationship',
           severity: 'info',
-          requires_aharon_decision: false,
+          requires_manual_decision: false,
         });
         handledPairs.add(pairKey);
         continue;
@@ -596,7 +596,7 @@ function classifyRelationshipCandidates(projects, proposals, quotes) {
           other_work_number: other.work_number || '',
           reason: sameWorkNumber ? 'Same work_number on different projects' : 'Same bid_number on different projects',
           severity: 'error',
-          requires_aharon_decision: true,
+          requires_manual_decision: true,
         });
         addFlagsForProject(
           duplicateFlagsByProjectId,
@@ -627,7 +627,7 @@ function classifyRelationshipCandidates(projects, proposals, quotes) {
           other_status: other.status,
           reason: 'Similar project name with conflicting statuses',
           severity: 'error',
-          requires_aharon_decision: true,
+          requires_manual_decision: true,
         });
         addFlagsForProject(
           duplicateFlagsByProjectId,
@@ -644,7 +644,7 @@ function classifyRelationshipCandidates(projects, proposals, quotes) {
       }
 
       if (similarName) {
-        const requiresAharonDecision = hasRelatedNameBusinessConflict(project, other);
+        const requiresManualDecision = hasRelatedNameBusinessConflict(project, other);
         relatedNameCandidates.push({
           type: 'project_pair',
           project_id: project.id,
@@ -654,8 +654,8 @@ function classifyRelationshipCandidates(projects, proposals, quotes) {
           status: project.status,
           other_status: other.status,
           reason: 'Similar project name without true duplicate identifiers',
-          severity: requiresAharonDecision ? 'warning' : 'info',
-          requires_aharon_decision: requiresAharonDecision,
+          severity: requiresManualDecision ? 'warning' : 'info',
+          requires_manual_decision: requiresManualDecision,
         });
         handledPairs.add(pairKey);
       }
@@ -678,7 +678,7 @@ function classifyRelationshipCandidates(projects, proposals, quotes) {
           form_status: proposal.form_status,
           reason: 'Project signed but linked Proposal document still draft',
           severity: 'warning',
-          requires_aharon_decision: true,
+          requires_manual_decision: true,
         });
         addFlagsForProject(
           duplicateFlagsByProjectId,
@@ -699,7 +699,7 @@ function classifyRelationshipCandidates(projects, proposals, quotes) {
           quote_status: quote.status,
           reason: `Quote signed but Project.status=${project.status}`,
           severity: 'error',
-          requires_aharon_decision: true,
+          requires_manual_decision: true,
         });
         addFlagsForProject(
           duplicateFlagsByProjectId,
@@ -719,7 +719,7 @@ function classifyRelationshipCandidates(projects, proposals, quotes) {
         status: project.status,
         reason: 'Project notes suggest merged/version/history context',
         severity: 'info',
-        requires_aharon_decision: false,
+        requires_manual_decision: false,
       });
     }
   }
@@ -739,7 +739,7 @@ function classifyRelationshipCandidates(projects, proposals, quotes) {
         candidate_project_status: project.status,
         reason: 'Proposal without project_id but similar project name exists',
         severity: 'info',
-        requires_aharon_decision: false,
+        requires_manual_decision: false,
       });
     }
   }
@@ -871,7 +871,7 @@ function assignProjectToGroups(groups, row) {
 
 function buildRecommendations(groups, duplicates, dataQualityWarnings) {
   const safeStatusMigrationCandidates = [];
-  const requiresAharonDecision = [];
+  const requiresManualDecision = [];
   const doNotAutoMigrate = [];
 
   const allRows = [
@@ -889,15 +889,15 @@ function buildRecommendations(groups, duplicates, dataQualityWarnings) {
   ];
 
   for (const row of allRows) {
-    if (row.migration_complexity === 'low' && !row.requires_aharon_decision) {
+    if (row.migration_complexity === 'low' && !row.requires_manual_decision) {
       safeStatusMigrationCandidates.push({
         project_id: row.project_id,
         project_name: row.project_name,
         status: row.current_project_status,
         reason: row.migration_reason,
       });
-    } else if (row.requires_aharon_decision || row.migration_complexity === 'high') {
-      requiresAharonDecision.push({
+    } else if (row.requires_manual_decision || row.migration_complexity === 'high') {
+      requiresManualDecision.push({
         project_id: row.project_id,
         project_name: row.project_name,
         status: row.current_project_status,
@@ -929,7 +929,7 @@ function buildRecommendations(groups, duplicates, dataQualityWarnings) {
   }
 
   if (dataQualityWarnings.length > 0) {
-    requiresAharonDecision.push({
+    requiresManualDecision.push({
       type: 'data_quality_warnings',
       count: dataQualityWarnings.length,
       reason: 'Projects with missing bid/work_number/total_amount or name warnings',
@@ -938,9 +938,9 @@ function buildRecommendations(groups, duplicates, dataQualityWarnings) {
 
   return {
     safeStatusMigrationCandidates,
-    requiresAharonDecision,
+    requiresManualDecision,
     doNotAutoMigrate,
-    suggestedNextStep: 'Build pipeline page from Project.status buckets, add construction_status field in P1, and resolve high-complexity rows with Aharon before any migration.',
+    suggestedNextStep: 'Build pipeline page from Project.status buckets, add construction_status field in P1, and resolve high-complexity rows manually before any migration.',
   };
 }
 

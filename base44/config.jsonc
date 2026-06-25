@@ -1,5 +1,5 @@
 {
-  "name": "Aharon's Command Center",
+  "name": "ProFlow Engineering",
   "site": {
     "installCommand": "npm install",
     "buildCommand": "npm run build",

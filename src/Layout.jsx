@@ -74,7 +74,7 @@ export default function Layout({ children, currentPageName }) {
             <div className="flex items-center gap-8">
               <div>
                 <Link to={createPageUrl('Dashboard')} className="text-xl font-bold">
-                  ENG Aharon D
+                  ProFlow Engineering
                 </Link>
                 {currentUser && (
                   <p className="text-xs text-muted-foreground">

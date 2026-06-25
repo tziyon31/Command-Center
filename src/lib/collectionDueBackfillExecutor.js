@@ -2,7 +2,7 @@ import { api as base44 } from '@/api/apiClient';
 import { runCollectionDueBackfillPreview } from '@/lib/collectionDueBackfillPreview';
 import { isRateLimitError } from '@/lib/reminderEngine';
 
-export const BACKFILL_APPROVED_CONFIRM_TEXT = 'CREATE_COLLECTION_DUE_BACKFILL_APPROVED_BY_AHARON';
+export const BACKFILL_APPROVED_CONFIRM_TEXT = 'CREATE_COLLECTION_DUE_BACKFILL_APPROVED';
 
 const REAL_BACKFILL_APPROVAL_MESSAGE = (
   'Real backfill execution requires explicit business approval confirmation.'

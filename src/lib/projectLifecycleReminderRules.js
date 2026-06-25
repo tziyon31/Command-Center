@@ -739,7 +739,7 @@ export function planProjectLifecycleReminderActions(
   const openSignedProposalReminders = context
     .openSignedProposalWorkStageRemindersByProjectId.get(String(project.id)) || [];
 
-  // Reminder-policy exclusion (Aharon approval): no workflow reminders for
+  // Reminder-policy exclusion (management approval): no workflow reminders for
   // this project. Stale project_needs_proposal cleanup still applies, and any
   // open workflow reminder is planned for resolve in a dedicated bucket.
   if (isProjectExcludedFromWorkflowReminders(project)) {
@@ -749,7 +749,7 @@ export function planProjectLifecycleReminderActions(
       ...baseActionRow(project, 'workflowExcludedProjects', 'workflow_exclusion', ''),
       action: 'report_only',
       reason: exclusion.reason,
-      recommended_action: 'No workflow reminder needed unless Aharon changes the decision.',
+      recommended_action: 'No workflow reminder needed unless management changes the policy.',
     });
 
     // Runtime does not resolve proposal reminders on excluded projects via records;
@@ -775,7 +775,7 @@ export function planProjectLifecycleReminderActions(
         actions.push({
           ...baseActionRow(project, 'excludedWorkflowRemindersToResolve', kind, key),
           action: 'resolve',
-          reason: 'Project is excluded from workflow reminders by Aharon approval',
+          reason: 'Project is excluded from workflow reminders by management approval',
           ...existing,
         });
       }
@@ -790,7 +790,7 @@ export function planProjectLifecycleReminderActions(
           signedProposalReminder.condition_key,
         ),
         action: 'resolve',
-        reason: 'Project is excluded from workflow reminders by Aharon approval',
+        reason: 'Project is excluded from workflow reminders by management approval',
         reminder_id: signedProposalReminder.reminder_id,
         reminder_title: signedProposalReminder.reminder_title,
         reminder_status: signedProposalReminder.reminder_status,
